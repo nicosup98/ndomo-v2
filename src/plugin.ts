@@ -7,7 +7,7 @@
  *
  * Dependency: `@opencode-ai/plugin` lives in `.opencode/package.json`
  * per OpenCode plugin convention (installed alongside the user's
- * `.opencode/config.json`).
+ * `config/ndomo.config.json`).
  */
 
 import type { Database } from "bun:sqlite";

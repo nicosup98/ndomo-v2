@@ -4,7 +4,7 @@
 
 `~/.config/opencode/ndomo.json`
 
-The schema is defined in `.opencode/ndomo.schema.json` (JSON Schema draft-07) for editor validation.
+The schema is defined in `config/ndomo.schema.json` (JSON Schema draft-07) for editor validation.
 
 ## Presets
 
@@ -32,6 +32,41 @@ Two built-in presets control which models each agent uses.
 ### budget
 
 All agents use `opencode-go/deepseek-v4-flash` at their respective temperatures. Reduces API costs at the expense of specialist model quality for stack-smiths and advisors.
+
+## Provider Selection at Install Time
+
+The `install.sh` script includes a provider picker that modifies agent models before registration. This is not a runtime setting — it applies once during installation and is baked into each agent's frontmatter.
+
+### How it works
+
+1. When run without `--provider` and without `--no-provider-prompt`, the script fetches `https://models.dev/catalog.json` and caches it at `~/.cache/ndomo/models-catalog.json`.
+2. The top 20 providers are displayed as an interactive numbered list.
+3. You select a provider by entering its number or ID.
+4. The selected provider replaces the provider prefix in every agent's `model:` field in `agents/*.md`.
+
+### Example transformation
+
+If you select provider `opencode-go`, the agent models transform as follows:
+
+| Original | After provider selection |
+|---|---|
+| `minimax/MiniMax-M3` | `opencode-go/MiniMax-M3` |
+| `opencode-go/deepseek-v4-flash` | `opencode-go/deepseek-v4-flash` (unchanged) |
+| `xiaomi/mimo-v2.5-pro` | `opencode-go/mimo-v2.5-pro` |
+
+### Flags controlling provider selection
+
+| Flag | Behavior |
+|---|---|
+| `--provider=ID` | Non-interactive provider selection. Skips the catalog fetch and picker. |
+| `--no-provider-prompt` | Skips the interactive picker entirely. Each agent keeps its original `model:` value. |
+
+### Relevant files modified
+
+- `agents/*.md` — the `model:` field in each agent's frontmatter is sed-replaced during Step 5.5 of the install script.
+- `~/.cache/ndomo/models-catalog.json` — cached catalog (re-fetched weekly or on cache miss).
+
+The provider selection is a one-time install operation. To change providers after installation, either re-run `install.sh` with a different `--provider` flag, or manually edit the `model:` fields in `agents/*.md`.
 
 ## Agent Routing
 
@@ -146,7 +181,7 @@ To add a custom agent to the routing table:
    ---
    ```
 
-2. Add the agent to the foreman's `delegates_to` array in `.opencode/config.json`.
+2. Add the agent to the foreman's `delegates_to` array in `config/ndomo.config.json`.
 
 3. Add a routing rule in `src/orchestrator/scheduler.ts` or rely on the Foreman prompt routing table.
 

@@ -31,6 +31,19 @@ ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/op
 ## Quick Start
 
 ```bash
+# Quick install (interactive, will prompt for provider)
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+
+# Non-interactive with provider preset
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+
+# With budget preset + DCP
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+```
+
+Or from source:
+
+```bash
 git clone <repo-url> ndomo
 cd ndomo
 bun install
@@ -47,6 +60,21 @@ ping all agents
 
 **Prerequisites:** [bun](https://bun.sh) >= 1.1.0, OpenCode installed and configured with at least one authenticated provider.
 
+Install via curl (recommended):
+
+```bash
+# Interactive install (will prompt for provider)
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+
+# With provider preset (non-interactive)
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+
+# With budget preset + DCP
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+```
+
+Or from a local clone:
+
 ```bash
 git clone <repo-url> ndomo
 cd ndomo
@@ -56,6 +84,18 @@ cd ndomo
 ```
 
 See [docs/installation.md](docs/installation.md) for detailed steps.
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--provider=ID` | Set model provider for all agents (e.g., `opencode`, `anthropic`, `openai`). Interactive picker shows top 20 providers if omitted. |
+| `--no-provider-prompt` | Skip interactive provider picker. Use default provider from agent frontmatter. |
+| `--preset=default` | Use full models for all agents. |
+| `--preset=budget` | Use deepseek-v4-flash for all agents to reduce costs. |
+| `--with-dcp` | Install and configure the DCP plugin. |
+| `--repo=URL` | Override repository URL (for piped installs from a fork). |
+| `--branch=NAME` | Override repository branch (for piped installs from dev branches). |
 
 **Uninstall:** `./scripts/uninstall.sh [--keep-data]`
 

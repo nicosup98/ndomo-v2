@@ -123,7 +123,7 @@ Verify opencode-mem is running. Start it manually: `npx opencode-mem serve`. Def
 If `/dcp-compress` doesn't work:
 
 1. Verify DCP is installed: check `~/.config/opencode/node_modules/@tarquinen/opencode-dcp` exists.
-2. Verify DCP is registered as an optional plugin in `.opencode/config.json`: `"optionalPlugins": ["@tarquinen/opencode-dcp"]`.
+2. Verify DCP is registered as an optional plugin in `config/ndomo.config.json`: `"optionalPlugins": ["@tarquinen/opencode-dcp"]`.
 3. Restart OpenCode after installing.
 
 DCP is optional — ndomo functions without it, but long sessions may exhaust context without pruning.

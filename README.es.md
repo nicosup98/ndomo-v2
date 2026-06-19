@@ -31,6 +31,19 @@ ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.
 ## Inicio Rápido
 
 ```bash
+# Instalación rápida (interactivo, preguntará por provider)
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+
+# No interactivo con provider preestablecido
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+
+# Con preset budget + DCP
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+```
+
+O desde el código fuente:
+
+```bash
 git clone <repo-url> ndomo
 cd ndomo
 bun install
@@ -47,6 +60,21 @@ ping all agents
 
 **Requisitos:** [bun](https://bun.sh) >= 1.1.0, OpenCode instalado y configurado con al menos un proveedor autenticado.
 
+Instalación vía curl (recomendada):
+
+```bash
+# Instalación interactiva (preguntará por provider)
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+
+# Con provider preestablecido (no interactivo)
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+
+# Con preset budget + DCP
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+```
+
+O desde un clon local:
+
 ```bash
 git clone <repo-url> ndomo
 cd ndomo
@@ -56,6 +84,18 @@ cd ndomo
 ```
 
 Ver [docs/installation.md](docs/installation.md) para pasos detallados.
+
+**Flags:**
+
+| Flag | Descripción |
+|---|---|
+| `--provider=ID` | Define el proveedor de modelos para todos los agentes (ej. `opencode`, `anthropic`, `openai`). Si se omite, un selector interactivo muestra los top 20 providers. |
+| `--no-provider-prompt` | Omite el selector interactivo de provider. Usa el provider por defecto del frontmatter de cada agente. |
+| `--preset=default` | Usa modelos completos para todos los agentes. |
+| `--preset=budget` | Usa deepseek-v4-flash para todos los agentes para reducir costos. |
+| `--with-dcp` | Instala y configura el plugin DCP. |
+| `--repo=URL` | Sobrescribe la URL del repositorio (para instalaciones vía pipe desde un fork). |
+| `--branch=NAME` | Sobrescribe la rama del repositorio (para instalaciones vía pipe desde ramas dev). |
 
 **Desinstalación:** `./scripts/uninstall.sh [--keep-data]`
 

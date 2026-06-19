@@ -333,8 +333,8 @@ if [[ -n "$PROVIDER" && -d "$AGENT_DST" ]]; then
 fi
 
 # ── Step 6: Backup existing config + Copy new ones ───────────────────────────
-CONFIG_JSON="${PROJECT_ROOT}/.opencode/config.json"
-SCHEMA_JSON="${PROJECT_ROOT}/.opencode/ndomo.schema.json"
+CONFIG_JSON="${PROJECT_ROOT}/config/ndomo.config.json"
+SCHEMA_JSON="${PROJECT_ROOT}/config/ndomo.schema.json"
 
 if [[ -f "$CONFIG_JSON" ]]; then
   if [[ -f "${CONFIG_DIR}/ndomo.json" ]]; then
@@ -345,7 +345,7 @@ if [[ -f "$CONFIG_JSON" ]]; then
   cp "$CONFIG_JSON" "${CONFIG_DIR}/ndomo.json"
   ok "Copied config.json -> ndomo.json"
 else
-  warn "No .opencode/config.json found"
+  warn "No config/ndomo.config.json found"
 fi
 
 if [[ -f "$SCHEMA_JSON" ]]; then
@@ -357,7 +357,7 @@ if [[ -f "$SCHEMA_JSON" ]]; then
   cp "$SCHEMA_JSON" "${CONFIG_DIR}/ndomo.schema.json"
   ok "Copied ndomo.schema.json"
 else
-  warn "No .opencode/ndomo.schema.json found"
+  warn "No config/ndomo.schema.json found"
 fi
 
 # ── Step 6.5: Register ndomo plugins in opencode.json ──────────────────────
