@@ -10,6 +10,27 @@ import type { Database } from "bun:sqlite";
 import type { Session, SessionMetadata } from "./types.ts";
 import { sessionFromRow } from "./types.ts";
 
+/**
+ * Idempotent upsert: ensure a session row exists for FK integrity.
+ *
+ * Used by plan_create and plan transition functions so that the harness
+ * session ID (ctx.sessionID) always has a matching row in `sessions`.
+ * INSERT OR IGNORE is safe — if the row already exists, this is a no-op.
+ * Does NOT call `startSession` (which requires full Session shape).
+ */
+export function ensureSession(
+  db: Database,
+  sessionId: string,
+  fallbackGoal: string,
+  createdBy = "auto",
+): void {
+  const now = Date.now();
+  db.query(
+    `INSERT OR IGNORE INTO sessions (id, started_at, last_checkpoint, goal, state, agent_history, created_by)
+     VALUES (?, ?, ?, ?, '{}', '[]', ?)`,
+  ).run(sessionId, now, now, fallbackGoal, createdBy);
+}
+
 export function startSession(
   db: Database,
   session: {

@@ -4,8 +4,8 @@ mode: primary
 model: minimax/MiniMax-M3
 temperature: 0.3
 permission:
-  edit: deny
-  write: deny
+  edit: allow
+  write: allow
   bash:
     "*": ask
     "git status*": allow

@@ -7,6 +7,7 @@
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { escapeFtsQuery } from "./fts-escape.ts";
+import { ensureSession } from "./sessions.ts";
 import type { Plan, PlanCategory, PlanStatus } from "./types.ts";
 import { planFromRow } from "./types.ts";
 
@@ -101,10 +102,13 @@ export function searchPlans(
  * Update a plan's status. Optionally links a session and records who made the change.
  *
  * When transitioning to "executing" or "approved" with a sessionId provided,
- * the session is auto-linked to the plan (Fix #8). The sessionId is validated
- * against the sessions table before linking (Fix #1).
+ * the session is auto-linked to the plan (Fix #8). The sessionId is only
+ * validated/auto-created when it will actually be linked (executing/approved);
+ * terminal statuses (completed/failed/abandoned) skip FK check since sessionId
+ * is just metadata there (Fix #1 hybrid — scoped ensureSession).
  *
  * @see Plan.sessionId — foreign key constraint enforced at app level (Fix #1)
+ * @see ensureSession — idempotent auto-creation of session rows (hybrid fix)
  */
 export function updatePlanStatus(
   db: Database,
@@ -114,10 +118,9 @@ export function updatePlanStatus(
 ): Plan | null {
   const now = Date.now();
 
-  // Fix #1: validate sessionId exists if provided
-  if (opts.sessionId !== undefined) {
-    const exists = db.query("SELECT 1 FROM sessions WHERE id = ?").get(opts.sessionId);
-    if (!exists) throw new Error(`ndomo: session_id does not exist: ${opts.sessionId}`);
+  // Fix #1 (scoped): validate sessionId only when status will actually link it (Fix #8)
+  if (opts.sessionId !== undefined && (status === "executing" || status === "approved")) {
+    ensureSession(db, opts.sessionId, "auto-created for plan transition");
   }
 
   // Fix #8: auto-link session when entering executing or approved status
@@ -146,7 +149,11 @@ export function updatePlanStatus(
 /**
  * Approve a plan. Optionally links a session (Fix #8) and records who approved it.
  *
+ * The sessionId is validated/auto-created when linking (approve always links).
+ * Uses ensureSession for idempotent FK integrity (Fix #1 hybrid).
+ *
  * @see Plan.sessionId — foreign key constraint enforced at app level (Fix #1)
+ * @see ensureSession — idempotent auto-creation of session rows (hybrid fix)
  */
 export function approvePlan(
   db: Database,
@@ -155,10 +162,9 @@ export function approvePlan(
 ): Plan | null {
   const now = Date.now();
 
-  // Fix #1: validate sessionId exists if provided
+  // Fix #1 (scoped): validate sessionId when linking (Fix #8 — approve always links)
   if (opts.sessionId !== undefined) {
-    const exists = db.query("SELECT 1 FROM sessions WHERE id = ?").get(opts.sessionId);
-    if (!exists) throw new Error(`ndomo: session_id does not exist: ${opts.sessionId}`);
+    ensureSession(db, opts.sessionId, "auto-created for plan approval");
   }
 
   // Fix #8: auto-link session when approving
