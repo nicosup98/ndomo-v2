@@ -147,6 +147,11 @@ Agents without explicit overrides use DCP defaults. The foreman monitors context
 | `autoCaptureEnabled` | boolean | Automatically capture insights during sessions without explicit `memory({mode:"add"})` calls. |
 | `cavemanCompress` | boolean | Apply caveman regex compression to memories before storage. Saves tokens on retrieval. |
 
+> **Note:** `~/.ndomo/mem/` is the **opencode-mem** plugin's storage (USearch
+> vector DB for semantic memory). The **ndomo plugin's** database is at
+> `<project>/.ndomo/state.db` (SQLite) — see [docs/database.md](docs/database.md).
+> These are two separate systems; both can run simultaneously.
+
 ## Protected Tools
 
 Tools listed in `protectedTools` cannot be disabled, overridden, or pruned from context by any subagent:

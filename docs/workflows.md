@@ -18,6 +18,52 @@ User Request → Foreman → Memory Search → Routing → Dispatch → [Special
 8. **Validation** — foreman invokes `inspector` on the resulting diff.
 9. **Final report** — presented in caveman format with objective, routing decisions, task statuses, and notes.
 
+## Plan-Driven Workflow (ndomo DB)
+
+For multi-step work tracked across sessions, use the ndomo DB. The foreman
+creates a plan, dispatches tasks to agents, marks them done, and the plan
+auto-archives to markdown on completion.
+
+Example (from foreman perspective):
+
+```bash
+# 1. Create a plan
+plan_create id="p1" slug="add-user-auth" title="Add user authentication" \
+  priority=2 overview="JWT-based auth for /api/* endpoints" \
+  approach="1) schema migration 2) login route 3) middleware 4) tests" \
+  complexity=4
+
+# 2. Approve
+plan_approve id="p1"
+
+# 3. Add tasks
+task_create_batch planId="p1" tasks='[
+  {"agent":"go-smith","description":"design schema migration","complexity":3},
+  {"agent":"go-smith","description":"implement POST /login route","complexity":4,"dependencies":[0]},
+  {"agent":"go-smith","description":"add JWT middleware","complexity":3,"dependencies":[1]},
+  {"agent":"inspector","description":"audit auth code for OWASP top 10","complexity":2,"dependencies":[1,2]}
+]'
+
+# 4. Start a session
+session_start id="s1" planId="p1" goal="implement user auth"
+
+# 5. Dispatch loop (foreman does this)
+# ... agents execute, mark tasks done/failed via task_update_status ...
+
+# 6. Checkpoint at milestones
+session_checkpoint id="s1" state='{"phase":"middleware","completedTasks":2}' \
+  keyDecisions="chose JWT over session cookies for stateless API"
+
+# 7. Close
+plan_update_status id="p1" status="completed"
+# → auto-archives to ~/.ndomo/mem/plans/add-user-auth-2026-06-19.md
+
+session_end id="s1"
+```
+
+See [docs/database.md](docs/database.md) for full tool reference and
+[agents/foreman.md](../agents/foreman.md) for the complete 10-step lifecycle.
+
 ## Deepwork
 
 **When to use:** Multi-file refactors (> 5 files), risky architecture changes (database schema, auth flow, API contracts), phased features with inter-step dependencies, cross-stack work.

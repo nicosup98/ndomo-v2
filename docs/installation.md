@@ -136,6 +136,16 @@ Expected output: each of the 14 agents responds with a status confirmation.
 
 Should show `foreman` as the active agent.
 
+4. Verify the ndomo DB was created:
+
+   ```bash
+   ls -la .ndomo/state.db
+   ```
+
+   The plugin creates this SQLite database automatically on first load. It
+   stores plans, tasks, and sessions. See [docs/database.md](docs/database.md)
+   for details.
+
 ## Uninstall
 
 ```bash

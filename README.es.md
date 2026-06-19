@@ -99,6 +99,20 @@ Ver [docs/installation.md](docs/installation.md) para pasos detallados.
 
 **Desinstalación:** `./scripts/uninstall.sh [--keep-data]`
 
+## Base de Datos de Planes y Tareas
+
+ndomo persiste planes, tareas y sesiones en una base de datos SQLite local al proyecto
+(`<project>/.ndomo/state.db`) con búsqueda FTS5, trazabilidad de auditoría y
+archivado automático a markdown al completarse. 14 herramientas expuestas vía OpenCode:
+`plan_create`, `plan_get`, `plan_list`, `plan_search`, `plan_approve`,
+`plan_update_status`, `task_create_batch`, `task_list`, `task_update_status`,
+`task_search`, `task_next_for_agent`, `session_start`, `session_checkpoint`,
+`session_end`.
+
+El foreman las usa para rastrear trabajo a través de despachos de agentes. Ver
+[docs/database.md](docs/database.md) para esquema, herramientas, ciclo de vida y
+comportamiento de archivado automático.
+
 ## Configuración
 
 Archivo de configuración: `~/.config/opencode/ndomo.json`
