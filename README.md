@@ -41,6 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/
 curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
 ```
 
+By default the install applies `presets.default` from `config/ndomo.config.json`. Use `--preset=budget` for cheaper models, `--provider=ID` to override the provider prefix.
+
 Or from source:
 
 ```bash
@@ -89,10 +91,9 @@ See [docs/installation.md](docs/installation.md) for detailed steps.
 
 | Flag | Description |
 |---|---|
-| `--provider=ID` | Set model provider for all agents (e.g., `opencode`, `anthropic`, `openai`). Interactive picker shows top 20 providers if omitted. |
-| `--no-provider-prompt` | Skip interactive provider picker. Use default provider from agent frontmatter. |
-| `--preset=default` | Use full models for all agents. |
-| `--preset=budget` | Use deepseek-v4-flash for all agents to reduce costs. |
+| `--provider=ID` | Override the provider prefix for all agents. The model ID is taken from the active preset; only the `provider/` segment of the `model:` field is swapped. Example: preset gives `opencode-go/minimax-m2.7`, `--provider=opencode` rewrites to `opencode/minimax-m2.7`. |
+| `--no-provider-prompt` | Skip the interactive provider prompt. The preset is still applied; no provider prefix override is performed. |
+| `--preset=NAME` | Select preset from `config/ndomo.config.json::presets[NAME]`. The preset is the source of truth for agent models at install time. (default: `default`, options: `default`, `budget`) |
 | `--with-dcp` | Install and configure the DCP plugin. |
 | `--repo=URL` | Override repository URL (for piped installs from a fork). |
 | `--branch=NAME` | Override repository branch (for piped installs from dev branches). |
@@ -129,7 +130,7 @@ Config file: `~/.config/opencode/ndomo.json`
 }
 ```
 
-See [docs/configuration.md](docs/configuration.md) for full reference.
+See [docs/configuration.md](docs/configuration.md) for full reference. Agent presets support an optional `reasoning_effort` field (`low`/`medium`/`high`/`xhigh`) for reasoning-capable models.
 
 ## Skills
 

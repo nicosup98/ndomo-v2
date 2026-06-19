@@ -1,62 +1,230 @@
 {
   "$schema": "./ndomo.schema.json",
-  "plugins": ["ndomo", "opencode-mem"],
-  "optionalPlugins": ["@tarquinen/opencode-dcp"],
+  "plugins": [
+    "ndomo",
+    "opencode-mem"
+  ],
+  "optionalPlugins": [
+    "@tarquinen/opencode-dcp"
+  ],
   "agentRouting": {
     "foreman": {
       "description": "Master orchestrator and scheduler",
       "mode": "primary",
-      "delegates_to": ["scout", "scribe", "painter", "smith", "sage", "guild", "go-smith", "js-smith", "python-smith", "vue-smith", "zig-smith", "rust-smith", "chronicler", "inspector"]
+      "delegates_to": [
+        "scout",
+        "scribe",
+        "painter",
+        "smith",
+        "sage",
+        "guild",
+        "go-smith",
+        "js-smith",
+        "python-smith",
+        "vue-smith",
+        "zig-smith",
+        "rust-smith",
+        "chronicler",
+        "inspector"
+      ]
     }
   },
-  "protectedTools": ["memory", "compress", "task", "todowrite", "skill"],
+  "protectedTools": [
+    "memory",
+    "compress",
+    "task",
+    "todowrite",
+    "skill"
+  ],
   "caveman": {
     "intensity": "full",
     "autoClarity": true
   },
   "presets": {
     "default": {
-      "foreman": { "model": "minimax/MiniMax-M3", "temperature": 0.3 },
-      "scout": { "model": "opencode/mimo-v2.5-free", "temperature": 0.3 },
-      "scribe": { "model": "opencode/mimo-v2.5-free", "temperature": 0.3 },
-      "painter": { "model": "opencode-go/kimi-k2.6", "temperature": 0.2 },
-      "smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "sage": { "model": "opencode-go/deepseek-v4-pro", "temperature": 0.2 },
-      "guild": { "model": "opencode-go/deepseek-v4-pro", "temperature": 0.3 },
-      "go-smith": { "model": "xiaomi/mimo-v2.5-pro", "temperature": 0.1 },
-      "js-smith": { "model": "xiaomi/mimo-v2.5-pro", "temperature": 0.1 },
-      "python-smith": { "model": "xiaomi/mimo-v2.5-pro", "temperature": 0.1 },
-      "vue-smith": { "model": "xiaomi/mimo-v2.5-pro", "temperature": 0.1 },
-      "zig-smith": { "model": "xiaomi/mimo-v2.5-pro", "temperature": 0.1 },
-      "rust-smith": { "model": "opencode-go/mimo-v2.5-pro", "temperature": 0.1 },
-      "chronicler": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.2 },
-      "inspector": { "model": "opencode-go/deepseek-v4-pro", "temperature": 0.2 }
+      "foreman": {
+        "model": "minimax/MiniMax-M3",
+        "temperature": 0.3,
+        "reasoning_effort": "high"
+      },
+      "scout": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3
+      },
+      "scribe": {
+        "model": "opencode/mimo-v2.5-free",
+        "temperature": 0.3
+      },
+      "painter": {
+        "model": "opencode-go/qwen3.7-plus",
+        "temperature": 0.2,
+        "reasoning_effort": "high"
+      },
+      "smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "sage": {
+        "model": "opencode-go/kimi-k2.7-code",
+        "temperature": 0.2,
+        "reasoning_effort": "high"
+      },
+      "guild": {
+        "model": "minimax/MiniMax-M3",
+        "temperature": 0.3,
+        "reasoning_effort": "high"
+      },
+      "go-smith": {
+        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "js-smith": {
+        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "python-smith": {
+        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+
+      },
+      "vue-smith": {
+        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+
+      },
+      "zig-smith": {
+        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+
+      },
+      "rust-smith": {
+        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+
+      },
+      "chronicler": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "high"
+
+      },
+      "inspector": {
+        "model": "opencode-go/kimi-k2.7-code",
+        "temperature": 0.2,
+        "reasoning_effort": "high"
+
+      }
     },
     "budget": {
-      "foreman": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.3 },
-      "scout": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.3 },
-      "scribe": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.3 },
-      "painter": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.2 },
-      "smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "sage": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.2 },
-      "guild": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.3 },
-      "go-smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "js-smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "python-smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "vue-smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "zig-smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "rust-smith": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.1 },
-      "chronicler": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.2 },
-      "inspector": { "model": "opencode-go/deepseek-v4-flash", "temperature": 0.2 }
+      "foreman": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
+        "reasoning_effort": "low"
+      },
+      "scout": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
+        "reasoning_effort": "low"
+      },
+      "scribe": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
+        "reasoning_effort": "low"
+      },
+      "painter": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "low"
+      },
+      "smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "sage": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "low"
+      },
+      "guild": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
+        "reasoning_effort": "low"
+      },
+      "go-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "js-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "python-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "vue-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "zig-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "rust-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "chronicler": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "low"
+      },
+      "inspector": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "low"
+      }
     }
   },
   "dcp_overrides": {
-    "scout": { "minContextLimit": 30000, "maxContextLimit": 80000 },
-    "scribe": { "minContextLimit": 30000, "maxContextLimit": 80000 },
-    "foreman": { "minContextLimit": 50000, "maxContextLimit": 100000 },
-    "sage": { "minContextLimit": 50000, "maxContextLimit": 100000 },
-    "guild": { "minContextLimit": 50000, "maxContextLimit": 100000 },
-    "inspector": { "minContextLimit": 40000, "maxContextLimit": 90000 }
+    "scout": {
+      "minContextLimit": 30000,
+      "maxContextLimit": 80000
+    },
+    "scribe": {
+      "minContextLimit": 30000,
+      "maxContextLimit": 80000
+    },
+    "foreman": {
+      "minContextLimit": 50000,
+      "maxContextLimit": 100000
+    },
+    "sage": {
+      "minContextLimit": 50000,
+      "maxContextLimit": 100000
+    },
+    "guild": {
+      "minContextLimit": 50000,
+      "maxContextLimit": 100000
+    },
+    "inspector": {
+      "minContextLimit": 40000,
+      "maxContextLimit": 90000
+    }
   },
   "mem": {
     "storagePath": "~/.ndomo/mem",

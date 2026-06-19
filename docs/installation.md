@@ -55,19 +55,25 @@ The install script:
 1. Copies the configuration to `~/.config/opencode/ndomo.json`
 2. Registers the plugin with OpenCode
 3. Verifies all agent definitions in `agents/` are valid
-4. Links the bundled skills to the OpenCode skills directory
+4. Links the bundled skills (bash-scripting, caveman, grill-me, and 20+ others from `skills/`) to the OpenCode skills directory
+5. Applies the active preset (`presets[PRESET]` from `ndomo.config.json`) to every agent's `model:` and `temperature:` frontmatter.
+6. Registers `ndomo` as a local `file:` dependency in `~/.config/opencode/package.json` and installs it to `~/.config/opencode/node_modules/ndomo/` via `bun install`. This is what allows OpenCode to resolve the plugin from `plugin: ["ndomo", ...]` and register its tools. See [OpenCode plugin docs](https://opencode.ai/docs/es/plugins/) and [custom tools docs](https://opencode.ai/docs/es/custom-tools/).
+7. Symlinks the bundled custom tools (14 DB access tools: `plan_*`, `task_*`, `session_*`) from `tools/` to `~/.config/opencode/tools/`. See [OpenCode custom tools docs](https://opencode.ai/docs/es/custom-tools/).
+
+**Note:** The `reasoning_effort` field (optional, `low`|`medium`|`high`|`xhigh`) is supported for reasoning-capable models (DeepSeek, MiMo, OpenAI). Omit it for non-reasoning models.
 
 ## Install Flags
 
 | Flag | Description |
 |---|---|
-| `--provider=ID` | Set the model provider for all agents (e.g., `opencode`, `anthropic`, `openai`). Without this flag, the interactive provider picker shows the top 20 providers from models.dev. |
-| `--no-provider-prompt` | Skip the interactive provider picker. Use the default provider (whatever each agent has in its frontmatter). |
+| `--provider=ID` | Override the provider prefix for all agents. The model ID is taken from the active preset; only the `provider/` segment of the `model:` field is swapped. Example: preset gives `opencode-go/minimax-m2.7`, `--provider=opencode` rewrites to `opencode/minimax-m2.7`. |
+| `--no-provider-prompt` | Skip the interactive provider prompt. The preset is still applied; no provider prefix override is performed. |
 | `--with-dcp` | Install and configure the DCP plugin (opencode-dynamic-context-pruning) as an optional peer dependency |
-| `--preset=default` | Use full models for all agents (minimax/MiniMax-M3 foreman, opencode-go models, xiaomi stack-smiths) |
-| `--preset=budget` | Use deepseek-v4-flash for all agents to reduce API costs |
+| `--preset=NAME` | Select preset from `config/ndomo.config.json::presets[NAME]`. The preset is the source of truth for agent models at install time. (default: `default`, options: `default`, `budget`) |
 | `--repo=URL` | Override the repository URL (for piped installs from a fork or mirror). Ignored in local clones. |
 | `--branch=NAME` | Override the repository branch (for piped installs from `dev`/`feature/*` branches). Ignored in local clones. |
+
+**Environment variable:** `NDOMO_SKIP_PACKAGE_INSTALL=1` — skip the package installation step (`bun install` in `~/.config/opencode/`). Useful if you manage the OpenCode plugin directory manually or if the install step is causing conflicts.
 
 Example with all flags:
 
@@ -83,30 +89,31 @@ curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/
   --no-provider-prompt
 ```
 
-## Provider Selection
+## Provider Override
 
-When `install.sh` runs without `--provider` and without `--no-provider-prompt`, it enters interactive provider selection mode:
+When `install.sh` runs without `--provider` and without `--no-provider-prompt`, it shows the active preset and asks for confirmation. The active preset is the single source of truth for agent models; `--provider=ID` only changes the provider prefix.
 
-1. The script fetches `https://models.dev/catalog.json` and caches it at `~/.cache/ndomo/models-catalog.json`.
-2. It displays the top 20 providers from the catalog as a numbered list.
-3. You select a provider by entering its number or ID.
-4. **Step 5.5** of the install script applies the selected provider to all agent definitions by replacing the `model:` field in each agent's frontmatter (`agents/*.md`) with `<selected-provider>/<existing-model-id>`.
+TTY flow:
 
-This means every agent retains its original model ID but uses the selected provider as the prefix. For example, selecting `opencode` transforms `minimax/MiniMax-M3` into `opencode/MiniMax-M3` for all agents.
+1. The script prints a table of `(agent, preset model, current provider prefix)` derived from `config/ndomo.config.json`.
+2. It asks: `Apply preset '$PRESET' as configured? [Y/n/override]`
+3. `Y` (or Enter) applies the preset, no prefix override.
+4. `n` skips preset application (warn).
+5. `override` enters the interactive provider picker from models.dev and applies a prefix override to every agent's `model:` field. The model ID comes from the preset; only the `provider/` segment is swapped.
 
-To skip provider selection and keep each agent's original `model:` value, pass `--no-provider-prompt`:
+To skip the prompt and apply the preset silently:
 
 ```bash
 ./scripts/install.sh --no-provider-prompt
 ```
 
-To set a specific provider non-interactively:
+To override the provider prefix non-interactively (e.g., use `opencode` instead of `opencode-go` for all agents):
 
 ```bash
-./scripts/install.sh --provider=anthropic
+./scripts/install.sh --provider=opencode
 ```
 
-The provider selection also works in piped mode:
+The provider override works in piped mode:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
@@ -201,5 +208,6 @@ chmod +x scripts/install.sh scripts/uninstall.sh
 If OpenCode doesn't detect ndomo as a plugin:
 
 1. Ensure `ndomo` is listed in `config/ndomo.config.json` under `plugins`
-2. Verify the plugin entry point (`src/index.ts`) compiles without errors: `bun run build`
-3. Check that the node_modules were installed: `ls node_modules/ndomo` (or the symlink target)
+2. Check that the package is installed: `ls ~/.config/opencode/node_modules/ndomo/` — if missing, re-run `./scripts/install.sh` or symlink manually: `ln -sfn $(pwd) ~/.config/opencode/node_modules/ndomo`
+3. Verify the plugin entry point (`src/index.ts`) compiles without errors: `bun run build`
+4. Check that the local node_modules were installed: `ls node_modules/ndomo` (or the symlink target)

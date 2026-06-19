@@ -63,6 +63,7 @@ AGENTS=(
 # ── Skill directories to remove ───────────────────────────────────────────────
 SKILLS=(
   "caveman"
+  "bash-scripting"
   "cavecrew"
   "deepwork"
   "reflect"
@@ -173,6 +174,31 @@ else
   else
     info "No data directories found to clean"
   fi
+fi
+
+# ── Step 5: Remove ndomo package from node_modules/ ─────────────────────────
+info "Removing ndomo package from OpenCode config..."
+if [[ -L "$CONFIG_DIR/node_modules/ndomo" ]] || [[ -e "$CONFIG_DIR/node_modules/ndomo" ]]; then
+  rm -rf "$CONFIG_DIR/node_modules/ndomo"
+  ok "Removed ndomo from $CONFIG_DIR/node_modules/"
+else
+  info "No ndomo in $CONFIG_DIR/node_modules/ found"
+fi
+
+if [[ -f "$CONFIG_DIR/package.json" ]] && command -v jq &>/dev/null; then
+  jq 'del(.dependencies.ndomo)' "$CONFIG_DIR/package.json" > "$CONFIG_DIR/package.json.tmp" && mv "$CONFIG_DIR/package.json.tmp" "$CONFIG_DIR/package.json"
+  ok "Removed ndomo entry from $CONFIG_DIR/package.json"
+fi
+
+# ── Step 6: Remove custom tools symlink ─────────────────────────────────────
+TOOLS_DIR="${CONFIG_DIR}/tools"
+if [[ -L "$TOOLS_DIR" ]]; then
+  rm "$TOOLS_DIR"
+  ok "Removed custom tools symlink"
+elif [[ -d "$TOOLS_DIR" ]]; then
+  info "Custom tools directory at $TOOLS_DIR is not a symlink — skipping"
+else
+  info "No custom tools symlink at $TOOLS_DIR"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────

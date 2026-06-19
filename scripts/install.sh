@@ -53,6 +53,13 @@ warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 err()   { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
 die()   { err "$*"; exit 1; }
 
+# Escape characters that have special meaning in sed replacement strings.
+# Usage: sed_escape <value>
+sed_escape() {
+  # Order matters: escape backslashes first, then & and the delimiter.
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/|/\\|/g' -e 's/&/\\&/g'
+}
+
 # ── Provider selection ─────────────────────────────────────────────────────────
 select_provider() {
   local catalog_url="https://models.dev/catalog.json"
@@ -72,7 +79,7 @@ select_provider() {
   # No catalog at all: skip with warning
   if [[ -z "$catalog" ]]; then
     warn "Could not fetch models.dev catalog (no network or curl missing)"
-    warn "Skipping provider selection — agents will keep default models"
+    warn "Skipping provider selection — agents will use preset models"
     return 1
   fi
 
@@ -113,9 +120,196 @@ select_provider() {
   ok "Provider set to: $PROVIDER"
 }
 
+# ── Preset application ───────────────────────────────────────────────────────
+# Apply preset models/temperature from ndomo.config.json to agent .md files
+apply_preset() {
+  local preset="$1"
+  local config_json="$2"
+  local agent_dst="$3"
+  local updated=0
+  local skipped=0
+  local f base name model temp effort
+
+  for f in "${agent_dst}"/*.md; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    name="${base%.md}"
+
+    # Prevent path traversal: reject names with slashes, dots, or special chars
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+      warn "Skipping invalid agent name in filename: '$name'"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    model=$(jq -r --arg preset "$preset" --arg name "$name" \
+      '.presets[$preset][$name].model // empty' "$config_json" 2>/dev/null || true)
+    temp=$(jq -r --arg preset "$preset" --arg name "$name" \
+      '.presets[$preset][$name].temperature // empty' "$config_json" 2>/dev/null || true)
+    effort=$(jq -r --arg preset "$preset" --arg name "$name" \
+      '.presets[$preset][$name].reasoning_effort // empty' "$config_json" 2>/dev/null || true)
+
+    if [[ -z "$model" ]]; then
+      warn "Agent '${name}' has no entry in preset '${preset}', skipping"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    local esc_model esc_temp esc_effort
+    esc_model=$(sed_escape "$model")
+    esc_temp=$(sed_escape "$temp")
+    esc_effort=$(sed_escape "$effort")
+    sed -i.bak -E "0,/^model:/{s|^model:.*|model: ${esc_model}|}" "$f"
+    if [[ -n "$temp" ]]; then
+      sed -i.bak -E "0,/^temperature:/{s|^temperature:.*|temperature: ${esc_temp}|}" "$f"
+    fi
+    # reasoning_effort: snake_case in ndomo config -> camelCase reasoningEffort in agent frontmatter
+    if [[ -n "$effort" ]]; then
+      if grep -qE '^reasoningEffort:[[:space:]]' "$f"; then
+        sed -i.bak -E "0,/^reasoningEffort:[[:space:]].*\$/{s|^reasoningEffort:[[:space:]].*\$|reasoningEffort: ${esc_effort}|;}" "$f" && rm -f "${f}.bak"
+      else
+        if grep -qE '^temperature:[[:space:]]' "$f"; then
+          sed -i.bak -E "0,/^temperature:[[:space:]].*\$/{s|(^temperature:[[:space:]].*\$)|\1\nreasoningEffort: ${esc_effort}|;}" "$f" && rm -f "${f}.bak"
+        elif grep -qE '^model:[[:space:]]' "$f"; then
+          sed -i.bak -E "0,/^model:[[:space:]].*\$/{s|(^model:[[:space:]].*\$)|\1\nreasoningEffort: ${esc_effort}|;}" "$f" && rm -f "${f}.bak"
+        else
+          sed -i.bak -E "0,/^---\$/{s|(^---\$)|\1\nreasoningEffort: ${esc_effort}|;}" "$f" && rm -f "${f}.bak"
+        fi
+      fi
+    fi
+    rm -f "${f}.bak"
+    updated=$((updated + 1))
+  done
+
+  echo "$updated $skipped"
+}
+
+# Swap only the provider/ prefix on model: lines — preserves model ID from preset
+apply_provider_prefix() {
+  local provider="$1"
+  local agent_dst="$2"
+  local updated=0
+  local f
+
+  for f in "${agent_dst}"/*.md; do
+    [[ -f "$f" ]] || continue
+    local esc_provider
+    esc_provider=$(sed_escape "$provider")
+    if sed -i.bak -E "0,/^model:/{s|^model: [^/]+/|model: ${esc_provider}/|}" "$f" 2>/dev/null; then
+      rm -f "${f}.bak"
+      updated=$((updated + 1))
+    fi
+  done
+
+  echo "$updated"
+}
+
+# Print a table: agent | preset model | current provider prefix (for TTY flow)
+show_preset_table() {
+  local preset="$1"
+  local config_json="$2"
+  local agent_dst="$3"
+  local name preset_model current_prefix sep
+
+  sep="$(printf '%.0s─' {1..20})"
+  printf "\n${BOLD}Preset '${preset}' — agent model overview:${NC}\n"
+  printf "  ${BOLD}%-20s %-35s %s${NC}\n" "Agent" "Preset Model" "Current Prefix"
+  printf "  %-20s %-35s %s\n" "$sep" "$(printf '%.0s─' {1..35})" "$(printf '%.0s─' {1..20})"
+
+  for f in "${agent_dst}"/*.md; do
+    [[ -f "$f" ]] || continue
+    name="$(basename "$f" .md)"
+    preset_model=$(jq -r --arg preset "$preset" --arg name "$name" \
+      '.presets[$preset][$name].model // empty' "$config_json" 2>/dev/null || true)
+    current_prefix=$(sed -n 's/^model: *\([^/]*\)\/.*/\1/p' "$f" 2>/dev/null || echo "none")
+    [[ -n "$preset_model" ]] && printf "  %-20s %-35s %s\n" "$name" "$preset_model" "${current_prefix:-none}"
+  done
+}
+
+# Install ndomo package into ~/.config/opencode/node_modules/ via file: dep or symlink
+install_ndomo_package() {
+  local project_root="$1"
+  local config_dir="$2"
+  local pkg_json="$config_dir/package.json"
+
+  # Skip if already linked/installed
+  if [[ -e "$config_dir/node_modules/ndomo" ]]; then
+    info "ndomo already installed at $config_dir/node_modules/ndomo"
+    return 0
+  fi
+
+  # Skip if user opted out
+  if [[ "${NDOMO_SKIP_PACKAGE_INSTALL:-0}" == "1" ]]; then
+    info "skipping ndomo package install (NDOMO_SKIP_PACKAGE_INSTALL=1)"
+    return 0
+  fi
+
+  # Need package.json in config dir
+  if [[ ! -f "$pkg_json" ]]; then
+    warn "$pkg_json not found, falling back to symlink"
+    ln -sfn "$project_root" "$config_dir/node_modules/ndomo"
+    return 0
+  fi
+
+  # Strategy 1: add file: dep + bun install
+  if command -v bun >/dev/null 2>&1; then
+    info "adding ndomo file: dep to $pkg_json"
+    if jq --arg path "$project_root" '.dependencies.ndomo = ("file://" + $path)' "$pkg_json" > "$pkg_json.tmp" && mv "$pkg_json.tmp" "$pkg_json"; then
+      if (cd "$config_dir" && bun install --no-frozen-lockfile 2>&1); then
+        if [[ -e "$config_dir/node_modules/ndomo" ]]; then
+          ok "ndomo installed via bun (file: dep)"
+          return 0
+        fi
+      fi
+      warn "bun install did not materialize ndomo, falling back to symlink"
+    else
+      warn "jq update of $pkg_json failed, falling back to symlink"
+    fi
+  else
+    warn "bun not found in PATH, using symlink fallback"
+  fi
+
+  # Strategy 2: manual symlink (no package.json update)
+  info "creating symlink: $config_dir/node_modules/ndomo -> $project_root"
+  mkdir -p "$config_dir/node_modules"
+  if ln -sfn "$project_root" "$config_dir/node_modules/ndomo"; then
+    ok "ndomo symlinked at $config_dir/node_modules/ndomo"
+  else
+    die "failed to install ndomo package"
+  fi
+}
+
+# Symlink project tools/ -> ~/.config/opencode/tools/ for OpenCode custom tools
+install_custom_tools_symlink() {
+  local project_root="$1"
+  local config_dir="$2"
+  local src="$project_root/tools"
+  local dst="$config_dir/tools"
+
+  if [[ ! -d "$src" ]]; then
+    warn "No tools/ directory found at $src — skipping"
+    return 0
+  fi
+
+  if [[ -e "$dst" ]]; then
+    if [[ -L "$dst" ]] && [[ "$(readlink "$dst")" == "$src" ]]; then
+      ok "Custom tools symlink already in place: $dst -> $src"
+      return 0
+    fi
+    if [[ -d "$dst" ]] && [[ ! -L "$dst" ]]; then
+      warn "Custom tools directory already exists at $dst (not a symlink) — skipping"
+      return 0
+    fi
+  fi
+
+  mkdir -p "$config_dir"
+  ln -sfn "$src" "$dst"
+  ok "Symlinked custom tools: $dst -> $src"
+}
+
 usage() {
   cat <<EOF
-${BOLD}ndomo installer${NC}
+${BOLD}ndomo installer — agent preset & provider tool${NC}
 
 ${BOLD}Usage:${NC}
   ./install.sh [OPTIONS]
@@ -123,18 +317,22 @@ ${BOLD}Usage:${NC}
 
 ${BOLD}Options:${NC}
   --with-dcp            Also install @tarquinen/opencode-dcp (AGPL-3.0 peer)
-  --preset=NAME         Use preset (default: "default", options: "default", "budget")
-  --provider=ID         Set model provider for all agents (e.g., opencode, anthropic, openai)
-  --no-provider-prompt  Skip interactive provider/model selection
+  --preset=NAME         Use preset from ndomo.config.json (default: "default", options: "default", "budget")
+  --provider=ID         Override provider prefix on preset models (e.g., opencode, anthropic, openai)
+  --no-provider-prompt  Skip interactive provider override prompt
   --repo=URL            Override repository URL (for piped installs)
   --branch=NAME         Override repository branch (for piped installs)
   --uninstall           Run uninstaller instead
   --help                Show this help
 
+${BOLD}Environment:${NC}
+  NDOMO_SKIP_PACKAGE_INSTALL=1  Skip automatic ndomo package installation into
+                                ~/.config/opencode/ (advanced users only)
+
 ${BOLD}Examples:${NC}
-  ./install.sh                          # default install
-  ./install.sh --preset=budget          # budget models
-  ./install.sh --provider=opencode --no-provider-prompt  # use opencode models
+  ./install.sh                          # apply presets.default from ndomo.config.json
+  ./install.sh --preset=budget          # apply presets.budget
+  ./install.sh --provider=opencode      # apply preset, swap provider prefix to opencode/
   ./install.sh --with-dcp               # include DCP plugin
   ./install.sh --uninstall              # remove ndomo
   curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
@@ -161,11 +359,6 @@ for arg in "$@"; do
     *)                   die "Unknown option: $arg (try --help)" ;;
   esac
 done
-
-# ── Provider selection (interactive picker) ──────────────────────────────────
-if [[ -z "$PROVIDER" && -t 0 && "${PIPED:-false}" != "true" && "$PROVIDER_PROMPT" == true ]]; then
-  select_provider || true
-fi
 
 # ── Uninstall shortcut ────────────────────────────────────────────────────────
 if [[ "$RUN_UNINSTALL" == true ]]; then
@@ -277,58 +470,61 @@ else
   warn "No skills/ directory found in project root"
 fi
 
-# ── Step 5.5: Apply provider to agent models ─────────────────────────────────
-if [[ -n "$PROVIDER" && -d "$AGENT_DST" ]]; then
-  cache="${HOME}/.cache/ndomo/models-catalog.json"
-
-  # Fetch model list for chosen provider
-  local_model=$(jq -r --arg p "$PROVIDER" '.providers[$p].models | to_entries | sort_by(.key) | .[0].key // empty' "$cache" 2>/dev/null) || true
-
-  if [[ -z "$local_model" ]]; then
-    local_model="default"
-  fi
-
-  if [[ "$PROVIDER_PROMPT" == true && -t 0 && -f "$cache" ]]; then
-    # Interactive model selection
-    printf "${BOLD}Select a model from ${PROVIDER}:${NC}\n"
-    jq -r --arg p "$PROVIDER" '.providers[$p].models | to_entries | .[] | "\(.key)\t\(.value.name)"' "$cache" 2>/dev/null | \
-      head -15 | nl -ba | while read -r num id _name; do
-        printf "  %-4s %s\n" "$num" "$id"
-      done
-
-    read -rp "$(printf "${BOLD}Model [1-15, or type id, or Enter for first]: ${NC}")" model_choice
-
-    if [[ -z "$model_choice" ]]; then
-      chosen_model="$local_model"
-    elif [[ "$model_choice" =~ ^[0-9]+$ ]]; then
-      chosen_model=$(jq -r --arg p "$PROVIDER" --argjson n "$model_choice" \
-        '.providers[$p].models | to_entries | .[($n - 1)].key // empty' "$cache" 2>/dev/null)
-    else
-      chosen_model="$model_choice"
-    fi
+# ── Step 5.5: Apply preset + optional provider prefix override ──────────────
+# Always apply preset models/temperature from ndomo.config.json
+CONFIG_JSON="${PROJECT_ROOT}/config/ndomo.config.json"
+if [[ -d "$AGENT_DST" ]]; then
+  if ! command -v jq &>/dev/null; then
+    warn "jq not found, skipping preset application"
   else
-    # Non-interactive: use first model
-    chosen_model="$local_model"
-    if [[ "$PROVIDER_PROMPT" == true && -t 0 && ! -f "$cache" ]]; then
-      warn "No catalog cache available, using default model"
+    should_apply_preset=true
+    provider_prefix=""
+
+    if [[ -n "$PROVIDER" ]]; then
+      # --provider=ID: apply preset + prefix override
+      info "Provider prefix '${PROVIDER}' specified via --provider"
+      provider_prefix="$PROVIDER"
+    elif [[ -t 0 && "$PROVIDER_PROMPT" == true && "${PIPED:-false}" != "true" ]]; then
+      # TTY interactive: show table and ask
+      show_preset_table "$PRESET" "$CONFIG_JSON" "$AGENT_DST"
+      echo ""
+      read -rp "$(printf "${BOLD}Apply preset '${PRESET}' as configured? [Y/n/override]: ${NC}")" user_choice
+
+      case "${user_choice,,}" in
+        n|no)
+          warn "Preset application skipped by user"
+          should_apply_preset=false
+          ;;
+        override|o)
+          info "Opening provider selector for prefix override..."
+          select_provider || true
+          if [[ -n "${PROVIDER:-}" ]]; then
+            provider_prefix="$PROVIDER"
+          else
+            warn "Provider selection failed — applying preset without prefix override"
+          fi
+          ;;
+        *) # Y/yes/enter → apply preset, no prefix override
+          ;;
+      esac
     fi
-  fi
 
-  if [[ -z "${chosen_model:-}" ]]; then
-    warn "Could not resolve model, skipping provider update"
-  else
-    full_ref="${PROVIDER}/${chosen_model}"
-    info "Setting all agents to: ${full_ref}"
-
-    updated=0
-    for f in "${AGENT_DST}"/*.md; do
-      [[ -f "$f" ]] || continue
-      if sed -i.bak -E "0,/^model:/{s|^model:.*|model: ${full_ref}|}" "$f"; then
-        rm -f "${f}.bak"
-        updated=$((updated + 1))
+    if [[ "$should_apply_preset" == true ]]; then
+      # Apply preset models + temperatures
+      result=$(apply_preset "$PRESET" "$CONFIG_JSON" "$AGENT_DST")
+      updated="${result%% *}"
+      skipped="${result##* }"
+      ok "Applied preset '${PRESET}' — ${updated} agent(s) updated"
+      if [[ "$skipped" -gt 0 ]]; then
+        warn "${skipped} agent(s) skipped (no entry in preset '${PRESET}')"
       fi
-    done
-    ok "Updated ${updated} agent(s) to use ${full_ref}"
+
+      # Apply provider prefix override if requested
+      if [[ -n "$provider_prefix" ]]; then
+        updated_p=$(apply_provider_prefix "$provider_prefix" "$AGENT_DST")
+        ok "Provider prefix override '${provider_prefix}/' applied to ${updated_p} agent(s)"
+      fi
+    fi
   fi
 fi
 
@@ -404,20 +600,23 @@ else
   warn "jq not found, skipping opencode.json plugin registration"
 fi
 
-# ── Step 7: Apply preset ─────────────────────────────────────────────────────
-if [[ "$PRESET" == "budget" ]]; then
-  NDOMO_JSON="${CONFIG_DIR}/ndomo.json"
-  if [[ -f "$NDOMO_JSON" ]]; then
-    # Inject "preset": "budget" into the top-level object
-    if command -v jq &>/dev/null; then
-      jq --arg p "$PRESET" '. + {preset: $p}' "$NDOMO_JSON" > "${NDOMO_JSON}.tmp" \
-        && mv "${NDOMO_JSON}.tmp" "$NDOMO_JSON"
-    else
-      # Fallback: insert after the opening brace
-      sed -i 's/^{/{\n  "preset": "budget",/' "$NDOMO_JSON"
-    fi
-    ok "Preset set to '${PRESET}'"
+# ── Step 6.6: Install ndomo package in ~/.config/opencode/ ──────────────────
+install_ndomo_package "$PROJECT_ROOT" "$CONFIG_DIR"
+
+# ── Step 6.7: Symlink custom tools ──────────────────────────────────────────
+install_custom_tools_symlink "$PROJECT_ROOT" "$CONFIG_DIR"
+
+# ── Step 7: Inject preset name into ndomo.json ──────────────────────────────
+NDOMO_JSON="${CONFIG_DIR}/ndomo.json"
+if [[ -f "$NDOMO_JSON" ]]; then
+  if command -v jq &>/dev/null; then
+    jq --arg p "$PRESET" '. + {preset: $p}' "$NDOMO_JSON" > "${NDOMO_JSON}.tmp" \
+      && mv "${NDOMO_JSON}.tmp" "$NDOMO_JSON"
+  else
+    # Fallback: insert after the opening brace
+    sed -i "s/^{/{\n  \"preset\": \"${PRESET}\",/" "$NDOMO_JSON"
   fi
+  ok "Preset '${PRESET}' written to ndomo.json"
 fi
 
 # ── Step 8: Optional DCP install ─────────────────────────────────────────────

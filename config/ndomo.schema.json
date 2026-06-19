@@ -84,7 +84,7 @@
       "patternProperties": {
         "^[a-z][a-z0-9-]*$": {
           "type": "object",
-          "description": "Preset containing per-agent model and temperature overrides.",
+          "description": "Preset containing per-agent model, temperature, and optional reasoning_effort overrides.",
           "additionalProperties": false,
           "patternProperties": {
             "^[a-z][a-z0-9-]*$": {
@@ -101,6 +101,11 @@
                   "minimum": 0,
                   "maximum": 1,
                   "description": "Sampling temperature (0 = deterministic, 1 = creative)."
+                },
+                "reasoning_effort": {
+                  "type": "string",
+                  "enum": ["low", "medium", "high", "xhigh", ""],
+                  "description": "Reasoning effort level for reasoning-capable models (DeepSeek, MiMo, OpenAI). Translated to camelCase 'reasoningEffort' in agent .md frontmatter. Omit for non-reasoning models."
                 }
               }
             }

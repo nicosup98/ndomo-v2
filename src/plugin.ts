@@ -11,9 +11,9 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { openDb } from "./db/client.ts";
@@ -76,7 +76,7 @@ export type NdomoConfig = {
   >;
   protectedTools: string[];
   caveman: { intensity: "lite" | "full" | "ultra"; autoClarity: boolean };
-  presets: Record<string, Record<string, { model: string; temperature: number }>>;
+  presets: Record<string, Record<string, { model: string; temperature: number; reasoning_effort?: string }>>;
   dcp_overrides?: Record<string, { minContextLimit: number; maxContextLimit: number }> | undefined;
   mem: {
     storagePath: string;
@@ -121,7 +121,118 @@ export function loadNdomoConfig(configPath?: string): NdomoConfig | null {
 function getMemDir(config: NdomoConfig | null): string {
   const rawPath = config?.mem?.storagePath ?? "~/.ndomo/mem";
   const expanded = rawPath.replace(/^~/, homedir());
-  return join(expanded, "plans");
+  const resolved = resolve(expanded);
+  const home = homedir();
+  if (resolved !== home && !resolved.startsWith(home + sep)) {
+    throw new Error(
+      `[ndomo] mem.storagePath resolves outside $HOME — refusing to use: ${resolved} (raw: ${rawPath})`,
+    );
+  }
+  return join(resolved, "plans");
+}
+
+/**
+ * Validate an agent name to prevent path traversal via malicious preset keys.
+ * Rejects names containing path separators, "..", or other unsafe characters.
+ */
+function validateAgentName(name: string): void {
+  if (typeof name !== "string" || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new Error(
+      `[ndomo] invalid agent name "${name}" — must match [a-zA-Z0-9_-]+`,
+    );
+  }
+}
+
+/**
+ * Sync agent `.md` frontmatter (model, temperature) from ndomo config presets.
+ * Allows hot-swapping agent models by editing `ndomo.json::presets[preset][agent].model`
+ * so the next OpenCode session picks up the new values via rewrite of
+ * `~/.config/opencode/agent/<agent>.md` frontmatter.
+ *
+ * Opt out via env `NDOMO_SKIP_FRONTMATTER_SYNC=1`.
+ * Also syncs reasoningEffort: (camelCase) when spec.reasoning_effort (snake_case) is set.
+ */
+export function syncAgentFrontmatter(
+  ndomoConfig: NdomoConfig,
+  effectivePreset: string,
+  agentsDir?: string,
+): { synced: number; skipped: number; errors: number } {
+  let synced = 0;
+  let skipped = 0;
+  let errors = 0;
+  if (process.env.NDOMO_SKIP_FRONTMATTER_SYNC === "1") {
+    console.log("[ndomo] frontmatter sync skipped (NDOMO_SKIP_FRONTMATTER_SYNC=1)");
+    return { synced, skipped, errors };
+  }
+  const dir = agentsDir ?? join(homedir(), ".config", "opencode", "agent");
+  const preset = ndomoConfig?.presets?.[effectivePreset];
+  if (!preset || typeof preset !== "object") {
+    console.warn(`[ndomo] frontmatter sync: preset '${effectivePreset}' not found in config`);
+    return { synced, skipped, errors };
+  }
+  for (const [agentName, spec] of Object.entries(preset)) {
+    try {
+      validateAgentName(agentName);
+    } catch (err) {
+      console.warn(err instanceof Error ? err.message : String(err));
+      skipped++;
+      continue;
+    }
+    const agentPath = join(dir, `${agentName}.md`);
+    if (!existsSync(agentPath)) {
+      console.warn(`[ndomo] frontmatter sync: agent file not found ${agentPath}`);
+      errors++;
+      continue;
+    }
+    try {
+      const original = readFileSync(agentPath, "utf-8");
+      let updated = original;
+      if (spec?.model != null) {
+        const newModelLine = `model: ${spec.model}`;
+        const cur = original.match(/^model:.*$/m)?.[0];
+        if (cur !== newModelLine) {
+          updated = updated.replace(/^model:.*$/m, newModelLine);
+        }
+      }
+      if (spec?.temperature != null) {
+        const newTempLine = `temperature: ${spec.temperature}`;
+        const cur = original.match(/^temperature:.*$/m)?.[0];
+        if (cur !== newTempLine) {
+          updated = updated.replace(/^temperature:.*$/m, newTempLine);
+        }
+      }
+      if (spec?.reasoning_effort != null && spec.reasoning_effort !== "") {
+        const newEffortLine = `reasoningEffort: ${spec.reasoning_effort}`;
+        const cur = original.match(/^reasoningEffort:.*$/m)?.[0];
+        if (cur === newEffortLine) {
+          // already in sync, no-op
+        } else if (cur != null) {
+          // line exists with a different value → update in place
+          updated = updated.replace(/^reasoningEffort:.*$/m, newEffortLine);
+        } else {
+          // line missing → insert after temperature: line (or after model: if no temperature, or after the opening --- as last resort)
+          if (updated.match(/^temperature:.*$/m)) {
+            updated = updated.replace(/^(temperature:.*)$/m, `$1\n${newEffortLine}`);
+          } else if (updated.match(/^model:.*$/m)) {
+            updated = updated.replace(/^(model:.*)$/m, `$1\n${newEffortLine}`);
+          } else {
+            updated = updated.replace(/^(---.*)$/m, `$1\n${newEffortLine}`);
+          }
+        }
+      }
+      if (updated === original) {
+        skipped++;
+      } else {
+        writeFileSync(agentPath, updated, "utf-8");
+        synced++;
+      }
+    } catch (err) {
+      console.warn(`[ndomo] frontmatter sync: failed to sync ${agentName}: ${err instanceof Error ? err.message : String(err)}`);
+      errors++;
+    }
+  }
+  console.log(`[ndomo] frontmatter sync: preset=${effectivePreset} synced=${synced} skipped=${skipped} errors=${errors}`);
+  return { synced, skipped, errors };
 }
 
 // ─── Plugin entry ────────────────────────────────────────────────────────────
@@ -140,6 +251,9 @@ export const NdomoPlugin: Plugin = async (
     console.log(
       `[ndomo] loaded config: preset=${effectivePreset} agents=${Object.keys(ndomoConfig.agentRouting).length} plugins=${ndomoConfig.plugins.length}`,
     );
+  }
+  if (ndomoConfig) {
+    syncAgentFrontmatter(ndomoConfig, effectivePreset);
   }
 
   // Shared state — lives for the lifetime of the plugin instance
@@ -750,3 +864,4 @@ export const NdomoPlugin: Plugin = async (
 
   return hooks;
 };
+export default NdomoPlugin;

@@ -41,6 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/
 curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
 ```
 
+Por defecto la instalación aplica `presets.default` de `config/ndomo.config.json`. Usa `--preset=budget` para modelos más económicos, `--provider=ID` para sobrescribir el prefijo de provider.
+
 O desde el código fuente:
 
 ```bash
@@ -89,10 +91,9 @@ Ver [docs/installation.md](docs/installation.md) para pasos detallados.
 
 | Flag | Descripción |
 |---|---|
-| `--provider=ID` | Define el proveedor de modelos para todos los agentes (ej. `opencode`, `anthropic`, `openai`). Si se omite, un selector interactivo muestra los top 20 providers. |
-| `--no-provider-prompt` | Omite el selector interactivo de provider. Usa el provider por defecto del frontmatter de cada agente. |
-| `--preset=default` | Usa modelos completos para todos los agentes. |
-| `--preset=budget` | Usa deepseek-v4-flash para todos los agentes para reducir costos. |
+| `--provider=ID` | Sobrescribe el prefijo de provider para todos los agentes. El model ID se toma del preset activo; solo se intercambia el segmento `provider/` del campo `model:`. Ejemplo: el preset da `opencode-go/minimax-m2.7`, `--provider=opencode` reescribe a `opencode/minimax-m2.7`. |
+| `--no-provider-prompt` | Omite el prompt interactivo de provider. El preset se aplica igualmente; no se realiza ninguna sobrescritura de prefijo de provider. |
+| `--preset=NAME` | Selecciona un preset de `config/ndomo.config.json::presets[NAME]`. El preset es la fuente de verdad para los modelos de agentes al instalar. (default: `default`, opciones: `default`, `budget`) |
 | `--with-dcp` | Instala y configura el plugin DCP. |
 | `--repo=URL` | Sobrescribe la URL del repositorio (para instalaciones vía pipe desde un fork). |
 | `--branch=NAME` | Sobrescribe la rama del repositorio (para instalaciones vía pipe desde ramas dev). |
@@ -130,7 +131,7 @@ Archivo de configuración: `~/.config/opencode/ndomo.json`
 }
 ```
 
-Ver [docs/configuration.md](docs/configuration.md) para referencia completa.
+Ver [docs/configuration.md](docs/configuration.md) para referencia completa. Los presets de agente soportan el campo opcional `reasoning_effort` (`low`/`medium`/`high`/`xhigh`) para modelos con capacidad de razonamiento.
 
 ## Skills
 
