@@ -22,7 +22,7 @@ Survives OpenCode restarts. Indexed with FTS5 for full-text search.
   for semantic memory, configured via `ndomo.json` `mem.storagePath`)
 - `docs/plans/<slug>.md` is the **opencode-planning-toolkit** markdown storage
   (different system, simpler, git-friendly)
-- The ndomo DB archive output goes to `~/.ndomo/mem/plans/` (markdown snapshots)
+- The ndomo DB archive output goes to `<project>/.ndomo/archives/plans/` (markdown snapshots)
 
 ## Schema
 
@@ -162,9 +162,9 @@ because SQLite 3.45 lacks `IF NOT EXISTS` for `ALTER TABLE ADD COLUMN` (`src/db/
 | `plan_approve` | `id` | `Plan \| null` (JSON) |
 | `plan_update_status` | `id`, `status` (enum: `draft`/`approved`/`executing`/`completed`/`failed`/`abandoned`) | `{plan, archived, archiveError}` (JSON) |
 
-- `plan_create` generates a UUID v4 internally via `crypto.randomUUID()` (`src/plugin.ts:457`).
+- `plan_create` generates a UUID v4 internally via `crypto.randomUUID()` (`src/plugin.ts:581`).
 - `plan_update_status` auto-archives when status is `completed`, `failed`, or `abandoned`
-  (`src/plugin.ts:564-575`). Archive errors are non-blocking (logged as warning).
+  (`src/plugin.ts:688-697`). Archive errors are non-blocking (logged as warning).
 
 ### Tasks (5)
 
@@ -205,6 +205,9 @@ because SQLite 3.45 lacks `IF NOT EXISTS` for `ALTER TABLE ADD COLUMN` (`src/db/
 User → foreman
   |  1. Receive user request (clarify if ambiguous)
   |  2. plan_create("draft") — UUID, slug, priority, overview, approach
+  |     → auto-creates a session row in `sessions` (ensureSession) for FK integrity,
+  |       keyed by ctx.sessionID with `goal = "Plan: <title>"`. If `session_start` is needed (step 5) for explicit dispatch tracking, use a different session id — calling it with the same `ctx.sessionID` would collide with the auto-row (PK violation).
+  |       ensureSession is idempotent.
   |  3. plan_approve — seal approved_at, transition to "approved"
   |  4. task_create_batch — one task per agent with dependencies
   |  5. session_start — link to planId
@@ -221,8 +224,8 @@ Done
 ### Auto-archive
 
 - **Trigger**: `plan_update_status` when `status` ∈ `{completed, failed, abandoned}`
-  (`src/plugin.ts:564-568`).
-- **Output**: Markdown file at `~/.ndomo/mem/plans/<slug>-YYYY-MM-DD.md` with:
+  (`src/plugin.ts:688-694`).
+- **Output**: Markdown file at `<project>/.ndomo/archives/plans/<slug>-YYYY-MM-DD.md` with:
   - Title, slug, status, priority, complexity, plan ID
   - Overview and approach sections
   - Task list with checkboxes (`[x]` for done), agent, complexity, status, result, error
@@ -232,7 +235,7 @@ Done
 - **Transactional**: DB update wrapped in `db.transaction()`. Markdown file deleted on
   DB failure (rollback, `src/db/plan-archive.ts:222-229`).
 - **Non-blocking**: Archive errors are caught and logged as warnings; status update
-  succeeds regardless (`src/plugin.ts:571-574`).
+  succeeds regardless (`src/plugin.ts:692-697`).
 - **DB effect**: Sets `archived_at` on plan, all its tasks, and linked sessions via
   cascade UPDATE (`src/db/plan-archive.ts:196-219`).
 - **Filters**: Archived records are excluded by default. Pass `includeArchived: true`
@@ -244,10 +247,12 @@ Done
 | System | Storage | Purpose |
 |---|---|---|
 | ndomo plugin DB | `<project>/.ndomo/state.db` (SQLite) | Structured plans with FTS5 search, audit trail, tag taxonomy, cascade archive |
+| ndomo plan archive | `<project>/.ndomo/archives/plans/<slug>-YYYY-MM-DD.md` (markdown) | Auto-generated snapshot on plan completion/failure; not configurable via `mem.storagePath` |
 | opencode-planning-toolkit | `docs/plans/<slug>.md` (markdown) | Lightweight plan notes, git-committable, human-readable |
-| opencode-mem | `~/.ndomo/mem/` (USearch vector DB) | Semantic memory for cross-session recall, not plans |
+| opencode-mem | `~/.ndomo/mem/` (USearch vector DB) | Semantic memory for cross-session recall only — path controlled by `mem.storagePath`, does NOT affect plan archive |
 
 These are complementary. Use ndomo DB for orchestration (plans → tasks → sessions);
+use the plan archive for auto-generated markdown snapshots per project;
 use planning-toolkit for plan-as-document; use opencode-mem for semantic recall.
 
 ## Inspection
@@ -275,7 +280,7 @@ The DB is project-local at `<project>/.ndomo/state.db`. To backup:
 cp .ndomo/state.db ~/.ndomo/backups/state-$(date +%Y%m%d).db
 ```
 
-Archived plans live at `~/.ndomo/mem/plans/<slug>-YYYY-MM-DD.md` — these are
+Archived plans live at `<project>/.ndomo/archives/plans/<slug>-YYYY-MM-DD.md` — these are
 git-friendly and survive DB deletion.
 
 Migrations are applied automatically by `runMigrations(db)` on plugin startup.

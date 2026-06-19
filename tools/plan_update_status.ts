@@ -10,40 +10,8 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { archivePlan, closeDb, openDb, runMigrations, updatePlanStatus } from "ndomo/db";
+import { archivePlan, closeDb, openDb, resolveArchiveDir, runMigrations, updatePlanStatus } from "ndomo/db";
 import type { ArchiveResult, PlanStatus } from "ndomo/db";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
-
-/** Reimplementation of the plugin's internal getMemDir, hardened against path traversal. */
-function getMemDir(): string {
-  const configPath = join(homedir(), ".config", "opencode", "ndomo.json");
-  try {
-    if (existsSync(configPath)) {
-      const raw = readFileSync(configPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      const storagePath = parsed?.mem?.storagePath;
-      if (storagePath && typeof storagePath === "string") {
-        const expanded = storagePath.replace(/^~/, homedir());
-        const resolved = resolve(expanded);
-        const home = homedir();
-        if (resolved !== home && !resolved.startsWith(home + sep)) {
-          throw new Error(
-            `[ndomo] mem.storagePath resolves outside $HOME — refusing to use: ${resolved} (raw: ${storagePath})`,
-          );
-        }
-        return join(resolved, "plans");
-      }
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("refusing to use")) {
-      throw error; // rethrow path-traversal rejection
-    }
-    // fall through to default for parse/read errors
-  }
-  return join(homedir(), ".ndomo", "mem", "plans");
-}
 
 export default tool({
   description:
@@ -76,7 +44,7 @@ export default tool({
 
       if (updated && TERMINAL_STATUSES.has(args.status)) {
         try {
-          archiveResult = archivePlan(db, updated.id, { memDir: getMemDir() });
+          archiveResult = archivePlan(db, updated.id, { memDir: resolveArchiveDir(projectDir) });
         } catch (err) {
           archiveError = err instanceof Error ? err.message : String(err);
           console.warn(`[ndomo] auto-archive failed for plan ${updated.id}: ${archiveError}`);

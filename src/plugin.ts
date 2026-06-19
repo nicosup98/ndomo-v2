@@ -13,16 +13,16 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { openDb } from "./db/client.ts";
 import { runMigrations } from "./db/migrations.ts";
 import type { ArchiveResult } from "./db/plan-archive.ts";
-import { archivePlan } from "./db/plan-archive.ts";
+import { archivePlan, resolveArchiveDir } from "./db/plan-archive.ts";
+import { planCreateExecutor } from "./db/plan-create.ts";
 import {
   approvePlan,
-  createPlan,
   getPlan,
   getPlanBySlug,
   listPlans,
@@ -38,13 +38,7 @@ import {
   searchTasks,
   updateTaskStatus,
 } from "./db/tasks.ts";
-import type {
-  PlanMetadata,
-  PlanStatus,
-  SessionMetadata,
-  TaskMetadata,
-  TaskStatus,
-} from "./db/types.ts";
+import type { PlanStatus, SessionMetadata, TaskMetadata, TaskStatus } from "./db/types.ts";
 import {
   BackgroundDispatcher,
   canRunParallel,
@@ -76,7 +70,10 @@ export type NdomoConfig = {
   >;
   protectedTools: string[];
   caveman: { intensity: "lite" | "full" | "ultra"; autoClarity: boolean };
-  presets: Record<string, Record<string, { model: string; temperature: number; reasoning_effort?: string }>>;
+  presets: Record<
+    string,
+    Record<string, { model: string; temperature: number; reasoning_effort?: string }>
+  >;
   dcp_overrides?: Record<string, { minContextLimit: number; maxContextLimit: number }> | undefined;
   mem: {
     storagePath: string;
@@ -114,32 +111,12 @@ export function loadNdomoConfig(configPath?: string): NdomoConfig | null {
 }
 
 /**
- * Resolve the memory storage path for plan archives.
- * Reads from ndomoConfig.mem.storagePath, expands ~ via os.homedir(),
- * and appends /plans/.
- */
-function getMemDir(config: NdomoConfig | null): string {
-  const rawPath = config?.mem?.storagePath ?? "~/.ndomo/mem";
-  const expanded = rawPath.replace(/^~/, homedir());
-  const resolved = resolve(expanded);
-  const home = homedir();
-  if (resolved !== home && !resolved.startsWith(home + sep)) {
-    throw new Error(
-      `[ndomo] mem.storagePath resolves outside $HOME — refusing to use: ${resolved} (raw: ${rawPath})`,
-    );
-  }
-  return join(resolved, "plans");
-}
-
-/**
  * Validate an agent name to prevent path traversal via malicious preset keys.
  * Rejects names containing path separators, "..", or other unsafe characters.
  */
 function validateAgentName(name: string): void {
   if (typeof name !== "string" || !/^[a-zA-Z0-9_-]+$/.test(name)) {
-    throw new Error(
-      `[ndomo] invalid agent name "${name}" — must match [a-zA-Z0-9_-]+`,
-    );
+    throw new Error(`[ndomo] invalid agent name "${name}" — must match [a-zA-Z0-9_-]+`);
   }
 }
 
@@ -227,11 +204,15 @@ export function syncAgentFrontmatter(
         synced++;
       }
     } catch (err) {
-      console.warn(`[ndomo] frontmatter sync: failed to sync ${agentName}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(
+        `[ndomo] frontmatter sync: failed to sync ${agentName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
       errors++;
     }
   }
-  console.log(`[ndomo] frontmatter sync: preset=${effectivePreset} synced=${synced} skipped=${skipped} errors=${errors}`);
+  console.log(
+    `[ndomo] frontmatter sync: preset=${effectivePreset} synced=${synced} skipped=${skipped} errors=${errors}`,
+  );
   return { synced, skipped, errors };
 }
 
@@ -566,28 +547,7 @@ export const NdomoPlugin: Plugin = async (
           metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
         },
         execute: async (args, ctx) => {
-          const typedMeta = (args.metadata ?? {}) as PlanMetadata;
-          const plan = createPlan(db, {
-            id: crypto.randomUUID(),
-            slug: args.slug,
-            title: args.title,
-            status: "draft" as const,
-            priority: args.priority ?? 0,
-            approvedAt: null,
-            completedAt: null,
-            sessionId: args.sessionId ?? null,
-            overview: args.overview,
-            approach: args.approach ?? null,
-            complexity: args.complexity ?? 3,
-            createdBy: ctx.agent ?? "unknown",
-            updatedBy: ctx.agent ?? "unknown",
-            sourceSessionId: ctx.sessionID,
-            sourceMessageId: ctx.messageID,
-            category: typedMeta.category ?? null,
-            metadata: typedMeta,
-            archivedAt: null,
-          });
-          return JSON.stringify(plan);
+          return JSON.stringify(planCreateExecutor(db, args, ctx));
         },
       }),
 
@@ -681,7 +641,7 @@ export const NdomoPlugin: Plugin = async (
 
           if (updated && TERMINAL_STATUSES.has(args.status)) {
             try {
-              archiveResult = archivePlan(db, updated.id, { memDir: getMemDir(ndomoConfig) });
+              archiveResult = archivePlan(db, updated.id, { memDir: resolveArchiveDir(worktree || directory) });
             } catch (err) {
               archiveError = err instanceof Error ? err.message : String(err);
               console.warn(`[ndomo] auto-archive failed for plan ${updated.id}: ${archiveError}`);

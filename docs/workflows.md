@@ -56,7 +56,7 @@ session_checkpoint id="s1" state='{"phase":"middleware","completedTasks":2}' \
 
 # 7. Close
 plan_update_status id="p1" status="completed"
-# → auto-archives to ~/.ndomo/mem/plans/add-user-auth-2026-06-19.md
+# → auto-archives to .ndomo/archives/plans/add-user-auth-2026-06-19.md
 
 session_end id="s1"
 ```

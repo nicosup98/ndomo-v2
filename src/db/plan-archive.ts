@@ -2,8 +2,9 @@
  * ndomo DB — Plan archive (serialize to markdown + soft delete).
  *
  * When a plan reaches a terminal status (completed/failed/abandoned),
- * this module serializes it to a markdown file in ~/.ndomo/mem/plans/
- * and sets archived_at on the plan, its tasks, and its sessions.
+ * this module serializes it to a markdown file in <projectDir>/.ndomo/archives/plans/
+ * (resolved by the caller via resolveArchiveDir) and sets archived_at on the
+ * plan, its tasks, and its sessions.
  *
  * The archive is transactional: if the DB updates fail, the markdown
  * file is rolled back (deleted) to maintain consistency.
@@ -11,7 +12,6 @@
 
 import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { getPlan } from "./plans.ts";
 import { listSessions } from "./sessions.ts";
@@ -134,6 +134,20 @@ export function buildArchiveFilename(plan: Plan, archivedAt: number): string {
 }
 
 /**
+ * Resolve the per-project plan archive directory.
+ * Path: <projectDir>/.ndomo/archives/plans/
+ * Creates the directory if it does not exist.
+ *
+ * @param projectDir - Absolute path to the project root.
+ * @returns Absolute path to the archive directory.
+ */
+export function resolveArchiveDir(projectDir: string): string {
+  const dir = join(projectDir, ".ndomo", "archives", "plans");
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
  * Archive a plan: serialize to markdown + soft delete in DB.
  *
  * Steps:
@@ -148,12 +162,14 @@ export function buildArchiveFilename(plan: Plan, archivedAt: number): string {
  *
  * @param db - Database instance
  * @param planId - Plan ID to archive
- * @param opts.memDir - Override mem directory (default: ~/.ndomo/mem/plans/)
+ * @param opts - Archive options.
+ * @param opts.memDir - Absolute path to the archive directory (required).
+ *   Typically resolved via {@link resolveArchiveDir}.
  */
 export function archivePlan(
   db: Database,
   planId: string,
-  opts?: { memDir?: string },
+  opts: { memDir: string },
 ): ArchiveResult {
   // 1. Load plan
   const plan = getPlan(db, planId);
@@ -169,7 +185,7 @@ export function archivePlan(
   const sessions = listSessions(db, { planId, includeArchived: true, limit: 1000 });
 
   // 3. Resolve mem directory
-  const memDir = opts?.memDir ?? join(homedir(), ".ndomo", "mem", "plans");
+  const memDir = opts.memDir;
   mkdirSync(memDir, { recursive: true });
 
   // 4. Serialize

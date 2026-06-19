@@ -202,7 +202,7 @@ Agents without explicit overrides use DCP defaults. The foreman monitors context
 
 | Field | Type | Description |
 |---|---|---|
-| `storagePath` | string | Directory for memory storage. Supports `~` expansion. |
+| `storagePath` | string | Directory for opencode-mem storage only. Does NOT control plan archive location. Supports `~` expansion. |
 | `defaultScope` | string | `"project"` — search only current project memories; `"all-projects"` — search across all projects. |
 | `autoCaptureEnabled` | boolean | Automatically capture insights during sessions without explicit `memory({mode:"add"})` calls. |
 | `cavemanCompress` | boolean | Apply caveman regex compression to memories before storage. Saves tokens on retrieval. |
@@ -211,6 +211,11 @@ Agents without explicit overrides use DCP defaults. The foreman monitors context
 > vector DB for semantic memory). The **ndomo plugin's** database is at
 > `<project>/.ndomo/state.db` (SQLite) — see [docs/database.md](docs/database.md).
 > These are two separate systems; both can run simultaneously.
+>
+> **Plan archive path:** The ndomo plugin auto-archives completed/failed plans
+> to `<project>/.ndomo/archives/plans/<slug>-YYYY-MM-DD.md` (markdown snapshots).
+> This path is **not configurable** via `ndomo.json` — it always lives under
+> `<project>/.ndomo/archives/plans/`. See [docs/database.md#auto-archive](docs/database.md#auto-archive).
 
 ## Protected Tools
 

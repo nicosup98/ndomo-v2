@@ -30,7 +30,7 @@ export {
 export type { PlanProgress } from "./plans.ts";
 
 // ─── Plan Archive ────────────────────────────────────────────────────────────
-export { archivePlan } from "./plan-archive.ts";
+export { archivePlan, resolveArchiveDir } from "./plan-archive.ts";
 export type { ArchiveResult } from "./plan-archive.ts";
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
