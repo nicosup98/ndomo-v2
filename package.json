@@ -1,0 +1,54 @@
+{
+  "name": "ndomo",
+  "version": "0.1.0",
+  "description": "OpenCode multi-agent plugin. Taller de artesanos: foreman + specialists (scout, scribe, painter, smith, sage, guild, inspector, chronicler) + stack-smiths. Caveman-native. opencode-mem integrated. DCP peer optional.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plugin": "./src/plugin.ts"
+  },
+  "private": true,
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "bun run --watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "bun test",
+    "clean": "rm -rf dist .slim/worktrees"
+  },
+  "dependencies": {
+    "opencode-mem": "^2.17.1"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "^1.17.7"
+  },
+  "peerDependenciesMeta": {
+    "@tarquinen/opencode-dcp": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "multi-agent",
+    "caveman",
+    "taller-de-artesanos"
+  ],
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}

@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ndomo-config",
+  "title": "Ndomo OpenCode Plugin Configuration",
+  "description": "Configuration schema for the ndomo multi-agent orchestration plugin.",
+  "type": "object",
+  "required": ["$schema", "plugins", "agentRouting", "protectedTools", "caveman", "presets"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this schema file for editor validation."
+    },
+    "preset": {
+      "type": "string",
+      "enum": ["default", "budget"],
+      "description": "Active preset name. Set by install script --preset flag."
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Required plugins to load.",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "optionalPlugins": {
+      "type": "array",
+      "description": "Plugins to load if available; failures are ignored.",
+      "items": { "type": "string" }
+    },
+    "agentRouting": {
+      "type": "object",
+      "description": "Agent definitions and delegation graph.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "type": "object",
+          "required": ["description", "mode", "delegates_to"],
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Human-readable agent purpose."
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["primary", "subagent", "all"],
+              "description": "Agent execution mode."
+            },
+            "delegates_to": {
+              "type": "array",
+              "description": "List of agent names this agent can delegate tasks to.",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "protectedTools": {
+      "type": "array",
+      "description": "Tool names that cannot be disabled or overridden by subagents.",
+      "items": { "type": "string" }
+    },
+    "caveman": {
+      "type": "object",
+      "description": "Caveman communication mode settings.",
+      "required": ["intensity", "autoClarity"],
+      "additionalProperties": false,
+      "properties": {
+        "intensity": {
+          "type": "string",
+          "enum": ["lite", "full", "ultra"],
+          "description": "Compression intensity level."
+        },
+        "autoClarity": {
+          "type": "boolean",
+          "description": "Automatically switch to full verbosity when clarity is needed."
+        }
+      }
+    },
+    "presets": {
+      "type": "object",
+      "description": "Named model presets for agent configurations.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "type": "object",
+          "description": "Preset containing per-agent model and temperature overrides.",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z][a-z0-9-]*$": {
+              "type": "object",
+              "required": ["model", "temperature"],
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "description": "Model identifier in provider/model-id format."
+                },
+                "temperature": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Sampling temperature (0 = deterministic, 1 = creative)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "dcp_overrides": {
+      "type": "object",
+      "description": "Dynamic context partition limits per agent.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": {
+          "type": "object",
+          "required": ["minContextLimit", "maxContextLimit"],
+          "additionalProperties": false,
+          "properties": {
+            "minContextLimit": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Minimum context window tokens for this agent."
+            },
+            "maxContextLimit": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum context window tokens for this agent."
+            }
+          }
+        }
+      }
+    },
+    "mem": {
+      "type": "object",
+      "description": "Memory persistence and capture settings.",
+      "required": ["storagePath", "defaultScope", "autoCaptureEnabled", "cavemanCompress"],
+      "additionalProperties": false,
+      "properties": {
+        "storagePath": {
+          "type": "string",
+          "description": "Path to memory storage directory (supports ~ expansion)."
+        },
+        "defaultScope": {
+          "type": "string",
+          "enum": ["project", "all-projects"],
+          "description": "Default memory retrieval scope."
+        },
+        "autoCaptureEnabled": {
+          "type": "boolean",
+          "description": "Automatically capture insights during sessions."
+        },
+        "cavemanCompress": {
+          "type": "boolean",
+          "description": "Apply caveman compression to stored memories."
+        }
+      }
+    }
+  }
+}

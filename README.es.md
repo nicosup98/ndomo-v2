@@ -1,0 +1,114 @@
+# ndomo
+
+Plugin multi-agente para OpenCode. Taller de artesanos: 15 especialistas bajo un Foreman. Nativo en caveman. opencode-mem integrado. DCP peer opcional.
+
+## Qué es ndomo
+
+ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.com/opencode-ai). Enruta tareas de desarrollo a 15 agentes especializados (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler) coordinados por un único Foreman. Todos los agentes usan el protocolo de salida Caveman para comunicación eficiente en tokens. La persistencia de memoria entre sesiones la gestiona opencode-mem. El plugin opcional DCP proporciona poda de contexto adicional para sesiones largas.
+
+## Agentes
+
+| Agente | Rol | Modelo (preset default) | Tipo |
+|---|---|---|---|
+| **foreman** | Orquestador y scheduler maestro | minimax/MiniMax-M3 | primary |
+| **scout** | Reconocimiento de codebase | opencode-go/minimax-m2.7 | subagent |
+| **scribe** | Recuperación de conocimiento externo | opencode-go/minimax-m2.7 | subagent |
+| **painter** | Diseño UI/UX y composición visual | opencode-go/kimi-k2.6 | subagent |
+| **smith** | Implementación genérica rápida | opencode-go/deepseek-v4-flash | subagent |
+| **go-smith** | Especialista en Go | xiaomi/mimo-v2.5-pro | subagent |
+| **js-smith** | Especialista en JS/TS | xiaomi/mimo-v2.5-pro | subagent |
+| **python-smith** | Especialista en Python | xiaomi/mimo-v2.5-pro | subagent |
+| **vue-smith** | Especialista en Vue 3 / Pinia | xiaomi/mimo-v2.5-pro | subagent |
+| **zig-smith** | Especialista en Zig 0.16 | xiaomi/mimo-v2.5-pro | subagent |
+| **rust-smith** | Especialista en Rust | opencode-go/mimo-v2.5-pro | subagent |
+| **sage** | Asesor de arquitectura y debugging | opencode-go/deepseek-v4-pro | subagent |
+| **guild** | Consenso multi-LLM y debate | opencode-go/deepseek-v4-pro | subagent |
+| **inspector** | Auditor de calidad y seguridad | opencode-go/deepseek-v4-pro | subagent |
+| **chronicler** | Redactor de documentación técnica | opencode-go/deepseek-v4-flash | subagent |
+
+**Grupos:** Orquestador (foreman), Exploradores (scout, scribe), Constructores (painter, smith, go-smith, js-smith, python-smith, vue-smith, zig-smith, rust-smith), Asesores (sage, guild), Calidad (inspector, chronicler).
+
+## Inicio Rápido
+
+```bash
+git clone <repo-url> ndomo
+cd ndomo
+bun install
+opencode
+```
+
+Dentro de OpenCode, verifica que todos los agentes respondan:
+
+```
+ping all agents
+```
+
+## Instalación
+
+**Requisitos:** [bun](https://bun.sh) >= 1.1.0, OpenCode instalado y configurado con al menos un proveedor autenticado.
+
+```bash
+git clone <repo-url> ndomo
+cd ndomo
+./scripts/install.sh                 # con preset default
+./scripts/install.sh --preset=budget # con modelos budget
+./scripts/install.sh --with-dcp      # incluye plugin DCP
+```
+
+Ver [docs/installation.md](docs/installation.md) para pasos detallados.
+
+**Desinstalación:** `./scripts/uninstall.sh [--keep-data]`
+
+## Configuración
+
+Archivo de configuración: `~/.config/opencode/ndomo.json`
+
+```json
+{
+  "preset": "default",
+  "caveman": { "intensity": "full", "autoClarity": true },
+  "mem": {
+    "storagePath": "~/.ndomo/mem",
+    "defaultScope": "project",
+    "autoCaptureEnabled": true,
+    "cavemanCompress": true
+  }
+}
+```
+
+Ver [docs/configuration.md](docs/configuration.md) para referencia completa.
+
+## Skills
+
+ndomo incluye 7 skills en `skills/`:
+
+| Skill | Descripción |
+|---|---|
+| `caveman` | Modo de comunicación ultracomprimido (~75% reducción de tokens) |
+| `cavecrew` | Subagentes estilo caveman (investigator, builder, reviewer) |
+| `deepwork` | Flujo estructurado para trabajo pesado con plan files y review gates |
+| `reflect` | Análisis de fricción en el flujo de trabajo y extracción de patrones |
+| `worktrees` | Gestión de git worktrees para carriles aislados de desarrollo |
+| `dcp-integration` | Guía de integración de Dynamic Context Pruning |
+| `mem-recall` | Uso de herramientas opencode-mem y patrones de recuperación |
+
+## Integraciones
+
+- **opencode-mem** (requerido) — memoria persistente con SQLite + USearch vector DB. Interfaz web en `:4747`. Todos los agentes comprimen recuerdos antes de almacenar usando compresión caveman vía regex (0 tokens de LLM).
+- **DCP** (opcional) — `@tarquinen/opencode-dcp` para poda dinámica de contexto. Licencia AGPL-3.0. Se instala con flag `--with-dcp`.
+
+Ver [docs/integrations.md](docs/integrations.md) para detalles.
+
+## Ahorro de Tokens
+
+El protocolo de salida Caveman reduce el uso de tokens ~60-75% vs prosa estándar eliminando artículos, palabras de relleno, conjunciones y cortesías, preservando todo el contenido técnico. El plugin DCP añade poda adicional eliminando salidas de herramientas de bajo valor del historial de conversación.
+
+## Licencia
+
+MIT
+
+## Enlaces
+
+- Repositorio: `<repo-url>`
+- OpenCode: [https://github.com/opencode-ai](https://github.com/opencode-ai)
+- opencode-mem: [https://github.com/opencode-ai/opencode-mem](https://github.com/opencode-ai/opencode-mem)

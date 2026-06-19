@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+.yarn/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Bun
+bun.lockb
+
+# OpenCode runtime state
+.slim/
+.worktrees/
+
+# opencode-mem data
+.opencode-mem/
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+
+# DCP data
+.dcp/
+dcp-prompts/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Misc
+*.tgz
+.cache/
+
+# ndomo state (project-level DB + scratch)
+.ndomo/
