@@ -45,7 +45,27 @@ export function runMigrations(db: Database): void {
           addColumnIfMissing(db, "sessions", "archived_at", "INTEGER");
         }
 
-        db.exec(m.sql);
+        // v6: write-once audit trail — original_plan_data on plans + plan_tasks
+        if (m.version === 6) {
+          addColumnIfMissing(db, "plans", "original_plan_data", "TEXT");
+          addColumnIfMissing(db, "plan_tasks", "original_plan_data", "TEXT");
+        }
+
+        // v8: agent execution tracking on plans
+        if (m.version === 8) {
+          addColumnIfMissing(db, "plans", "created_by_agent", "TEXT");
+          addColumnIfMissing(db, "plans", "executed_by_agent", "TEXT");
+          addColumnIfMissing(db, "plans", "executed_by_session", "TEXT");
+        }
+
+        // Execute SQL only if it contains actual statements (not just comments)
+        const hasStatements = m.sql.split("\n").some((line) => {
+          const trimmed = line.trim();
+          return trimmed.length > 0 && !trimmed.startsWith("--");
+        });
+        if (hasStatements) {
+          db.exec(m.sql);
+        }
 
         db.query(
           "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)",

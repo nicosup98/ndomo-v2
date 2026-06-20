@@ -61,6 +61,16 @@ export interface Plan {
   metadata: PlanMetadata;
   /** v5: soft delete timestamp (null = active, number = archived epoch ms) */
   archivedAt: number | null;
+  /** v6: write-once — JSON snapshot of plan data at creation time */
+  originalPlanData?: string | null;
+  /** v8: agent that created this plan (distinct from createdBy which is audit user) */
+  createdByAgent?: string | null;
+  /** v8: agent that last executed work on this plan */
+  executedByAgent?: string | null;
+  /** v8: session that last executed work on this plan (FK sessions, app-level) */
+  executedBySession?: string | null;
+  /** v7: files associated with this plan (from plan_files join table) */
+  files?: Array<{ filePath: string; role: string }>;
 }
 
 export interface PlanTask {
@@ -88,6 +98,8 @@ export interface PlanTask {
   metadata: TaskMetadata;
   /** v5: soft delete timestamp (null = active, number = archived epoch ms) */
   archivedAt: number | null;
+  /** v6: write-once — JSON snapshot of task data at creation time */
+  originalPlanData?: string | null;
 }
 
 export interface Session {
@@ -137,6 +149,10 @@ interface PlanRow {
   source_message_id: string | null;
   category: string | null;
   archived_at: number | null;
+  original_plan_data: string | null;
+  created_by_agent: string | null;
+  executed_by_agent: string | null;
+  executed_by_session: string | null;
 }
 
 interface TaskRow {
@@ -163,6 +179,7 @@ interface TaskRow {
   duration_ms: number | null;
   artifacts: string;
   archived_at: number | null;
+  original_plan_data: string | null;
 }
 
 interface SessionRow {
@@ -206,7 +223,25 @@ export function planFromRow(row: unknown): Plan {
     category: (r.category ?? null) as PlanCategory | null,
     metadata: (r.metadata != null ? JSON.parse(r.metadata) : {}) as PlanMetadata,
     archivedAt: r.archived_at ?? null,
+    originalPlanData: r.original_plan_data ?? null,
+    createdByAgent: r.created_by_agent ?? null,
+    executedByAgent: r.executed_by_agent ?? null,
+    executedBySession: r.executed_by_session ?? null,
   };
+}
+
+interface PlanFileRow {
+  file_path: string;
+  role: string;
+}
+
+export function planWithFilesFromRow(planRow: unknown, fileRows: unknown[]): Plan {
+  const plan = planFromRow(planRow);
+  const files = (fileRows as PlanFileRow[]).map((f) => ({
+    filePath: f.file_path,
+    role: f.role,
+  }));
+  return { ...plan, files };
 }
 
 export function taskFromRow(row: unknown): PlanTask {
@@ -235,6 +270,7 @@ export function taskFromRow(row: unknown): PlanTask {
     artifacts: (JSON.parse(r.artifacts) as string[]) ?? [],
     metadata: (r.metadata != null ? JSON.parse(r.metadata) : {}) as TaskMetadata,
     archivedAt: r.archived_at ?? null,
+    originalPlanData: r.original_plan_data ?? null,
   };
 }
 

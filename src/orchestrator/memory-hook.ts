@@ -28,7 +28,8 @@ const COMPRESSION_PATTERNS = [
 
   // Drop filler adverbs anywhere in the sentence
   {
-    pattern: /\b(?:just|really|basically|actually|simply|literally|honestly|seriously|obviously|definitely|probably|certainly|essentially|fundamentally|effectively)\b\s*/gi,
+    pattern:
+      /\b(?:just|really|basically|actually|simply|literally|honestly|seriously|obviously|definitely|probably|certainly|essentially|fundamentally|effectively)\b\s*/gi,
     replacement: "",
   },
 
@@ -40,7 +41,8 @@ const COMPRESSION_PATTERNS = [
 
   // Drop filler phrases
   {
-    pattern: /\b(?:in order to|due to the fact that|it is important to note that|it should be noted that|as a matter of fact|at the end of the day|for what it's worth|the thing is|what I mean is)\b\s*/gi,
+    pattern:
+      /\b(?:in order to|due to the fact that|it is important to note that|it should be noted that|as a matter of fact|at the end of the day|for what it's worth|the thing is|what I mean is)\b\s*/gi,
     replacement: "",
   },
 
@@ -100,13 +102,12 @@ export function cavemanCompress(text: string): string {
   // Extract URLs (skip those inside code blocks)
   for (const match of text.matchAll(URL_PATTERN)) {
     if (match.index !== undefined) {
-      const isInsideCodeBlock = protectedRegions.some(
-        (r) => match.index! >= r.start && match.index! < r.end,
-      );
+      const idx = match.index;
+      const isInsideCodeBlock = protectedRegions.some((r) => idx >= r.start && idx < r.end);
       if (!isInsideCodeBlock) {
         protectedRegions.push({
-          start: match.index,
-          end: match.index + match[0].length,
+          start: idx,
+          end: idx + match[0].length,
           text: match[0],
         });
       }
@@ -123,10 +124,7 @@ export function cavemanCompress(text: string): string {
   for (const region of protectedRegions) {
     const placeholder = `\x00PROTECTED_${placeholders.length}\x00`;
     placeholders.push(region.text);
-    workingText =
-      workingText.slice(0, region.start) +
-      placeholder +
-      workingText.slice(region.end);
+    workingText = workingText.slice(0, region.start) + placeholder + workingText.slice(region.end);
   }
 
   // Step 3: Apply compression patterns
@@ -135,8 +133,8 @@ export function cavemanCompress(text: string): string {
   }
 
   // Step 4: Restore protected regions
-  for (let i = 0; i < placeholders.length; i++) {
-    workingText = workingText.replace(`\x00PROTECTED_${i}\x00`, placeholders[i]!);
+  for (const [i, region] of placeholders.entries()) {
+    workingText = workingText.replace(`\x00PROTECTED_${i}\x00`, region);
   }
 
   // Step 5: Final trim

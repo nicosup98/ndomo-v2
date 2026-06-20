@@ -7,8 +7,8 @@
  * @module worktrees/state
  */
 
-import { existsSync } from "node:fs";
 import { exec as execCb } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import type { Worktree, WorktreeState } from "./manager.js";
 import { loadState } from "./manager.js";

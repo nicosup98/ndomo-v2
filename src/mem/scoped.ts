@@ -3,7 +3,7 @@
  * Provides convenience functions for tag resolution and memory operations.
  */
 
-import { getProjectTagInfo, getUserTagInfo, getTags } from "opencode-mem/tags";
+import { getProjectTagInfo, getTags, getUserTagInfo } from "opencode-mem/tags";
 
 /**
  * Get the project tag for the current (or specified) working directory.
@@ -41,10 +41,7 @@ export function getAllTags(cwd?: string) {
  * @param scope - Search scope: "project" (default) or "all-projects".
  * @returns Options object for the opencode-mem search API.
  */
-export function memorySearchOptions(
-  query: string,
-  scope: "project" | "all-projects" = "project",
-) {
+export function memorySearchOptions(query: string, scope: "project" | "all-projects" = "project") {
   return {
     mode: "search" as const,
     query,

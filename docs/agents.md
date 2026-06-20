@@ -2,26 +2,68 @@
 
 ## Overview
 
-ndomo defines 15 agents grouped by function. All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
+ndomo defines 16 agents grouped by function (2 primaries + 14 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
 
-## Orchestrator
+## Primaries
+
+Two primary agents operate independently. The user switches between them manually via TUI.
 
 ### foreman
 
-The master orchestrator. Only agent with `mode: primary`. Delegates all substantive work to subagents. Never writes business logic directly.
+**Planner puro.** Analiza, explora, planifica y persiste planes en DB. No implementa. Solo planifica; la ejecución es del craftsman.
 
 - **Model:** minimax/MiniMax-M3 (default), deepseek-v4-flash (budget)
 - **Temperature:** 0.3
 - **Permissions:** edit (ask), write (ask), bash (ask), question (allow)
-- **Delegates to:** all 14 subagents
+- **Delegates to:** scout, scribe, sage, guild (exploración y análisis únicamente)
 - **File:** `agents/foreman.md`
 
-Rules:
-1. Trivium threshold — direct edits only for <= 5 lines, 1 file, no new functions/exports, no behavior changes
-2. Always searches memory before planning
-3. Monitors context size and triggers DCP compression near limits
-4. Background dispatch with task ID tracking, parallel when no file conflicts
-5. Always reconciles results before reporting
+Flow (4 pasos):
+1. **Aclaración** — identifica intención, pregunta si ambigüo, sugiere craftsman si ≤5 archivos
+2. **Exploración** — memory search + scout/scribe/sage/guild según necesidad
+3. **Plan Atómico** — desglosa en ≤5 steps con archivos esperados y dependencias
+4. **Persistir** — `plan_create` + `task_create_batch` en DB
+
+### craftsman
+
+**Implementador artesano.** Primary agent para bugs, features pequeñas y refactors acotados. Opera en 4 estados según alcance.
+
+- **Model:** opencode-go/deepseek-v4-flash
+- **Temperature:** 0.1
+- **Permissions:** edit (allow), write (allow), bash (ask con permit list), question (allow)
+- **Delegates to:** smiths, painter, chronicler, inspector, scout, scribe (por routing interno)
+- **File:** `agents/craftsman.md`
+
+**Cuándo usar:**
+- **Ad-hoc (cambio directo):** Tareas ≤5 archivos, bien definidas — cambiar a craftsman en TUI sin pasar por foreman
+- **Plan formal:** Foreman creó un plan con tasks asignadas a `craftsman` — craftsman lee `plan_get`/`task_next_for_agent` y ejecuta
+- **Diferencia con foreman:** Foreman planifica (solo DB writes), craftsman implementa (code + DB writes). Foreman NO delega a smiths; craftsman sí.
+
+**Threshold 2/5/1:**
+| Estado | Archivos | Comportamiento |
+|--------|----------|----------------|
+| 1 — Trivial | ≤2 | Implementación directa, sin `plan_db` |
+| 2 — Multi-archivo acotado | 3-5 | Crea `plan_create` + `task_create_batch` propio |
+| 3 — Plan formal | — | Lee plan existente del foreman y ejecuta |
+| 4 — Fuera de dominio | >5 | **Rechaza** — "fuera de mi dominio" → cambiar a foreman |
+
+**Routing interno (por extensión de archivo):**
+| Extensión / Contexto | Sub-agente |
+|---|---|
+| `.go` | `go-smith` |
+| `.vue` / `.svelte` | `vue-smith` |
+| `.ts` / `.tsx` / `.js` / `.jsx` | `js-smith` |
+| `.py` | `python-smith` |
+| `.rs` | `rust-smith` |
+| `.zig` | `zig-smith` |
+| UI/design + `type=design` | `painter` (solo vía craftsman) |
+| Documentación / markdown | `chronicler` |
+| Auditoría / seguridad | `inspector` |
+| Sin match | `smith` (genérico) |
+
+`task.metadata.stack` actúa como override explícito sobre la extensión. Si no hay match, usa `smith`.
+
+**Painter solo craftsman:** El agente UI/UX `painter` solo es invocable desde craftsman, no desde foreman. Craftsman decide: painter si `stack="vue"` y `type="design"`, o vue-smith para implementación lógica.
 
 ## Explorers
 
@@ -166,7 +208,7 @@ Code quality and security auditor. Reviews diffs for bugs, anti-patterns, securi
 - **Permissions:** edit (deny), bash (allow), question (allow)
 - **File:** `agents/inspector.md`
 - **Use when:** "review this diff", "audit this PR", "check for security issues"
-- **Auto-triggered:** foreman invokes inspector on the resulting diff before closing any task
+- **Auto-triggered:** craftsman invokes inspector on the resulting diff before closing any task
 
 ### chronicler
 
@@ -178,25 +220,41 @@ Technical documentation writer. Analyzes code and generates Markdown documentati
 - **File:** `agents/chronicler.md`
 - **Use when:** "document this API", "generate README", "write migration guide"
 
-## Routing Table
+## Routing Tables
 
-The scheduler (`src/orchestrator/scheduler.ts`) applies this priority order:
+Routing is split across two tiers: foreman (planner) and craftsman (implementer). The old centralized scheduler in `src/orchestrator/scheduler.ts` is deprecated.
 
-```
-1. explore         → scout
-2. research        → scribe
-3. design + vue    → painter
-4. audit           → inspector
-5. document        → chronicler
-6. debate          → guild (manual only)
-7. debug + high    → sage
-8. implement + known stack → stack-smith
-9. implement + generic     → smith
-10. high risk implement → stack-smith + sage advisory
-11. default fallback → smith
-```
+### Foreman Routing (planning only)
 
-Tasks with `high` risk and `implement` type return a dependency on `sage-review` — the stack-smith runs in parallel but the foreman must run sage review before merge.
+Foreman delegates exclusively to exploration/analysis agents:
+
+| Petición | Delegar a |
+|----------|-----------|
+| Localizar código / mapear repo / detectar stack | `scout` |
+| Research docs / APIs / libraries / versiones | `scribe` |
+| Arquitectura / debugging difícil / trade-offs | `sage` |
+| Consenso multi-modelo / debate arquitectónico | `guild` (solo manual) |
+
+**NO delegar a:** smiths, painter, chronicler, inspector — esos van al craftsman.
+
+### Craftsman Routing (implementation)
+
+Craftsman selecciona sub-agente por extensión de archivo (`task.files`) con `task.metadata.stack` como override:
+
+| Extensión | Sub-agente |
+|-----------|------------|
+| `.go` | `go-smith` |
+| `.vue` / `.svelte` | `vue-smith` |
+| `.ts` / `.tsx` / `.js` / `.jsx` | `js-smith` |
+| `.py` | `python-smith` |
+| `.rs` | `rust-smith` |
+| `.zig` | `zig-smith` |
+| UI/design + `type=design` | `painter` |
+| Documentación / markdown | `chronicler` |
+| Auditoría / diff review | `inspector` |
+| Sin match | `smith` (genérico) |
+
+Si no hay match por extensión ni stack, usa `smith` como fallback genérico.
 
 ## Custom Agents
 

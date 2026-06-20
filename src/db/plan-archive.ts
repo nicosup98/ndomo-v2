@@ -95,6 +95,27 @@ export function serializePlanToMarkdown(
     plan.overview,
   ];
 
+  // v8: agent execution tracking
+  if (plan.createdByAgent || plan.executedByAgent) {
+    sections.push("", "## Agent Trail", "");
+    if (plan.createdByAgent) {
+      sections.push(`- **Created by agent:** ${plan.createdByAgent}`);
+    }
+    if (plan.executedByAgent) {
+      sections.push(`- **Executed by agent:** ${plan.executedByAgent}`);
+    }
+    if (plan.executedBySession) {
+      sections.push(`- **Executed by session:** ${plan.executedBySession}`);
+    }
+  }
+
+  // v6: write-once audit trail — original plan data snapshot
+  // HIGH 6: sanitize triple backticks inside JSON to prevent markdown breakage
+  if (plan.originalPlanData) {
+    const safeJson = plan.originalPlanData.replace(/```/g, "\\`\\`\\`");
+    sections.push("", "## Original Plan Data (write-once)", "", "```json", safeJson, "```");
+  }
+
   if (plan.approach) {
     sections.push("", "## Approach", "", plan.approach);
   }
@@ -166,11 +187,7 @@ export function resolveArchiveDir(projectDir: string): string {
  * @param opts.memDir - Absolute path to the archive directory (required).
  *   Typically resolved via {@link resolveArchiveDir}.
  */
-export function archivePlan(
-  db: Database,
-  planId: string,
-  opts: { memDir: string },
-): ArchiveResult {
+export function archivePlan(db: Database, planId: string, opts: { memDir: string }): ArchiveResult {
   // 1. Load plan
   const plan = getPlan(db, planId);
   if (!plan) {

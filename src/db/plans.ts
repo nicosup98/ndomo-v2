@@ -9,13 +9,28 @@ import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { ensureSession } from "./sessions.ts";
 import type { Plan, PlanCategory, PlanStatus } from "./types.ts";
-import { planFromRow } from "./types.ts";
+import { planFromRow, planWithFilesFromRow } from "./types.ts";
 
 export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updatedAt">): Plan {
   const now = Date.now();
+  // v6: build original_plan_data snapshot (write-once)
+  const originalPlanData = JSON.stringify({
+    id: plan.id,
+    slug: plan.slug,
+    title: plan.title,
+    overview: plan.overview,
+    approach: plan.approach,
+    priority: plan.priority,
+    complexity: plan.complexity,
+    category: plan.category,
+    createdBy: plan.createdBy,
+    sourceSessionId: plan.sourceSessionId,
+    sourceMessageId: plan.sourceMessageId,
+    createdAt: now,
+  });
   db.query(
-    `INSERT INTO plans (id, slug, title, status, priority, created_at, updated_at, approved_at, completed_at, session_id, overview, approach, complexity, metadata, created_by, updated_by, source_session_id, source_message_id, category)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (id, slug, title, status, priority, created_at, updated_at, approved_at, completed_at, session_id, overview, approach, complexity, metadata, created_by, updated_by, source_session_id, source_message_id, category, original_plan_data, created_by_agent, executed_by_agent, executed_by_session)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     plan.id,
     plan.slug,
@@ -36,18 +51,32 @@ export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updated
     plan.sourceSessionId ?? null,
     plan.sourceMessageId ?? null,
     plan.category ?? null,
+    originalPlanData,
+    plan.createdByAgent ?? null,
+    plan.executedByAgent ?? null,
+    plan.executedBySession ?? null,
   );
-  return { ...plan, createdAt: now, updatedAt: now };
+  return { ...plan, createdAt: now, updatedAt: now, originalPlanData };
 }
 
 export function getPlan(db: Database, id: string): Plan | null {
   const row = db.query("SELECT * FROM plans WHERE id = ?").get(id);
-  return row != null ? planFromRow(row) : null;
+  if (row == null) return null;
+  const fileRows = db
+    .query("SELECT file_path, role FROM plan_files WHERE plan_id = ? ORDER BY file_path")
+    .all(id);
+  return planWithFilesFromRow(row, fileRows);
 }
 
 export function getPlanBySlug(db: Database, slug: string): Plan | null {
   const row = db.query("SELECT * FROM plans WHERE slug = ?").get(slug);
-  return row != null ? planFromRow(row) : null;
+  if (row == null) return null;
+  // Need to get the plan id to query plan_files
+  const planId = (row as { id: string }).id;
+  const fileRows = db
+    .query("SELECT file_path, role FROM plan_files WHERE plan_id = ? ORDER BY file_path")
+    .all(planId);
+  return planWithFilesFromRow(row, fileRows);
 }
 
 export function listPlans(
@@ -75,7 +104,34 @@ export function listPlans(
   const rows = db
     .query(`SELECT * FROM plans ${where} ORDER BY created_at DESC LIMIT ?`)
     .all(...params, limit);
-  return (rows as unknown[]).map(planFromRow);
+
+  if (rows.length === 0) return [];
+
+  // Get all plan IDs
+  const planIds = (rows as Array<{ id: string }>).map((r) => r.id);
+
+  // Fetch all files for these plans in one query
+  const placeholders = planIds.map(() => "?").join(",");
+  const fileRows = db
+    .query(
+      `SELECT plan_id, file_path, role FROM plan_files WHERE plan_id IN (${placeholders}) ORDER BY plan_id, file_path`,
+    )
+    .all(...planIds) as Array<{ plan_id: string; file_path: string; role: string }>;
+
+  // Group files by plan_id
+  const filesByPlanId = new Map<string, Array<{ file_path: string; role: string }>>();
+  for (const f of fileRows) {
+    const existing = filesByPlanId.get(f.plan_id) ?? [];
+    existing.push({ file_path: f.file_path, role: f.role });
+    filesByPlanId.set(f.plan_id, existing);
+  }
+
+  // Map plans with their files
+  return (rows as unknown[]).map((row) => {
+    const planId = (row as { id: string }).id;
+    const planFiles = filesByPlanId.get(planId) ?? [];
+    return planWithFilesFromRow(row, planFiles);
+  });
 }
 
 export function searchPlans(
@@ -114,7 +170,12 @@ export function updatePlanStatus(
   db: Database,
   id: string,
   status: PlanStatus,
-  opts: { updatedBy?: string; sessionId?: string } = {},
+  opts: {
+    updatedBy?: string;
+    sessionId?: string;
+    executedByAgent?: string;
+    executedBySession?: string;
+  } = {},
 ): Plan | null {
   const now = Date.now();
 
@@ -127,21 +188,54 @@ export function updatePlanStatus(
   const linkSession =
     (status === "executing" || status === "approved") && opts.sessionId !== undefined;
 
+  // v8: write-once executed_by_agent/session — only set on first executing transition
+  const setExecutedBy = status === "executing" && opts.executedByAgent !== undefined;
+  // Guaranteed non-undefined inside setExecutedBy branches (see guard above)
+  const executedAgent = opts.executedByAgent ?? null;
+  const executedSession = opts.executedBySession ?? null;
+
   if (linkSession) {
     // opts.sessionId is guaranteed non-undefined here (linkSession check above)
     const sid = opts.sessionId as string;
-    db.query(
-      "UPDATE plans SET status = ?, updated_at = ?, updated_by = ?, session_id = ? WHERE id = ?",
-    ).run(status, now, opts.updatedBy ?? "unknown", sid, id);
+    if (setExecutedBy) {
+      db.query(
+        `UPDATE plans SET status = ?, updated_at = ?, updated_by = ?, session_id = ?,
+         executed_by_agent = COALESCE(executed_by_agent, ?),
+         executed_by_session = COALESCE(executed_by_session, ?)
+         WHERE id = ?`,
+      ).run(status, now, opts.updatedBy ?? "unknown", sid, executedAgent, executedSession, id);
+    } else {
+      db.query(
+        "UPDATE plans SET status = ?, updated_at = ?, updated_by = ?, session_id = ? WHERE id = ?",
+      ).run(status, now, opts.updatedBy ?? "unknown", sid, id);
+    }
   } else if (opts.updatedBy !== undefined) {
-    db.query("UPDATE plans SET status = ?, updated_at = ?, updated_by = ? WHERE id = ?").run(
-      status,
-      now,
-      opts.updatedBy,
-      id,
-    );
+    if (setExecutedBy) {
+      db.query(
+        `UPDATE plans SET status = ?, updated_at = ?, updated_by = ?,
+         executed_by_agent = COALESCE(executed_by_agent, ?),
+         executed_by_session = COALESCE(executed_by_session, ?)
+         WHERE id = ?`,
+      ).run(status, now, opts.updatedBy, executedAgent, executedSession, id);
+    } else {
+      db.query("UPDATE plans SET status = ?, updated_at = ?, updated_by = ? WHERE id = ?").run(
+        status,
+        now,
+        opts.updatedBy,
+        id,
+      );
+    }
   } else {
-    db.query("UPDATE plans SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
+    if (setExecutedBy) {
+      db.query(
+        `UPDATE plans SET status = ?, updated_at = ?,
+         executed_by_agent = COALESCE(executed_by_agent, ?),
+         executed_by_session = COALESCE(executed_by_session, ?)
+         WHERE id = ?`,
+      ).run(status, now, executedAgent, executedSession, id);
+    } else {
+      db.query("UPDATE plans SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
+    }
   }
   return getPlan(db, id);
 }
@@ -182,6 +276,117 @@ export function approvePlan(
     ).run(now, now, id);
   }
   return getPlan(db, id);
+}
+
+// ─── Plan deletion ──────────────────────────────────────────────────────────
+
+export interface DeletePlanOpts {
+  /** Required confirmation flag — must be true to proceed */
+  confirm: boolean;
+}
+
+export interface DeletePlanResult {
+  planId: string;
+  slug: string;
+  tasksDeleted: number;
+  sessionsUnlinked: number;
+  filesDeleted: number;
+}
+
+/**
+ * Delete a plan and all associated data (CASCADE).
+ *
+ * Guards:
+ * - Requires confirm: true
+ * - Rejects if plan.status === 'draft' (use abandonPlan instead)
+ * - Rejects if any tasks are 'pending' or 'running'
+ *
+ * The actual deletion relies on ON DELETE CASCADE in the schema:
+ * - plan_tasks (FK plan_id)
+ * - plan_files (FK plan_id)
+ * - plan_tags (FK plan_id)
+ * - sessions.plan_id (SET NULL)
+ */
+export function deletePlan(db: Database, planId: string, opts: DeletePlanOpts): DeletePlanResult {
+  if (!opts.confirm) {
+    throw new Error("ndomo: deletePlan requires confirm: true");
+  }
+
+  const plan = getPlan(db, planId);
+  if (!plan) {
+    throw new Error(`ndomo: plan not found: ${planId}`);
+  }
+
+  if (plan.status === "draft") {
+    throw new Error("ndomo: cannot delete a draft plan — use abandonPlan or approve first");
+  }
+
+  // Check for active tasks
+  const activeTasks = db
+    .query<{ count: number }, [string]>(
+      "SELECT COUNT(*) as count FROM plan_tasks WHERE plan_id = ? AND status IN ('pending', 'running') AND archived_at IS NULL",
+    )
+    .get(planId);
+
+  if (activeTasks && activeTasks.count > 0) {
+    throw new Error(
+      `ndomo: cannot delete plan with ${activeTasks.count} active task(s) — complete or fail them first`,
+    );
+  }
+
+  // Count related records before deletion
+  const tasksCount =
+    db
+      .query<{ count: number }, [string]>(
+        "SELECT COUNT(*) as count FROM plan_tasks WHERE plan_id = ?",
+      )
+      .get(planId)?.count ?? 0;
+
+  const sessionsCount =
+    db
+      .query<{ count: number }, [string]>(
+        "SELECT COUNT(*) as count FROM sessions WHERE plan_id = ?",
+      )
+      .get(planId)?.count ?? 0;
+
+  const filesCount =
+    db
+      .query<{ count: number }, [string]>(
+        "SELECT COUNT(*) as count FROM plan_files WHERE plan_id = ?",
+      )
+      .get(planId)?.count ?? 0;
+
+  // Delete — CASCADE handles plan_tasks, plan_files, plan_tags
+  // sessions.plan_id is SET NULL per schema
+  db.query("DELETE FROM plans WHERE id = ?").run(planId);
+
+  return {
+    planId,
+    slug: plan.slug,
+    tasksDeleted: tasksCount,
+    sessionsUnlinked: sessionsCount,
+    filesDeleted: filesCount,
+  };
+}
+
+// ─── Write-once executed_by helpers ──────────────────────────────────────────
+
+/**
+ * Write-once: set executed_by_agent and executed_by_session on a plan.
+ * Uses COALESCE so the first write wins — subsequent calls are no-ops.
+ */
+export function setExecutedByOnce(
+  db: Database,
+  planId: string,
+  agent: string,
+  sessionId?: string | null,
+): void {
+  db.query(
+    `UPDATE plans SET
+       executed_by_agent = COALESCE(executed_by_agent, ?),
+       executed_by_session = COALESCE(executed_by_session, ?)
+     WHERE id = ? AND archived_at IS NULL`,
+  ).run(agent, sessionId ?? null, planId);
 }
 
 // ─── Tag helpers ─────────────────────────────────────────────────────────────

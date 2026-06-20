@@ -14,6 +14,7 @@ let db: Database;
 
 beforeEach(() => {
   db = new Database(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
 });
 

@@ -7,10 +7,10 @@
  * @module worktrees/manager
  */
 
-import { join } from "node:path";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { exec as execCb } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execCb);
@@ -52,7 +52,7 @@ function assertSafeName(value: string, label: string): void {
   }
   if (!SAFE_NAME_RE.test(value)) {
     throw new Error(
-      `${label} contains invalid characters: "${value}". Only alphanumeric, hyphens, underscores, and slashes allowed.`
+      `${label} contains invalid characters: "${value}". Only alphanumeric, hyphens, underscores, and slashes allowed.`,
     );
   }
   if (value.startsWith("-")) {
@@ -112,7 +112,7 @@ export async function createWorktree(
   slug: string,
   branch: string,
   agent?: string,
-  description?: string
+  description?: string,
 ): Promise<string> {
   assertSafeName(slug, "slug");
   assertSafeName(branch, "branch");
@@ -163,7 +163,7 @@ export async function createWorktree(
 export async function removeWorktree(
   rootDir: string,
   slug: string,
-  abandon: boolean = false
+  abandon = false,
 ): Promise<void> {
   assertSafeName(slug, "slug");
 
@@ -212,7 +212,7 @@ export async function getWorktree(rootDir: string, slug: string): Promise<Worktr
  */
 export async function cleanup(
   rootDir: string,
-  maxAge: number = 7 * 24 * 60 * 60 * 1000
+  maxAge: number = 7 * 24 * 60 * 60 * 1000,
 ): Promise<string[]> {
   const state = await loadState(rootDir);
   const now = Date.now();
