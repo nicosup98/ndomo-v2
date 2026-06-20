@@ -104,18 +104,20 @@ export function listPlans(
   const rows = db
     .query(`SELECT * FROM plans ${where} ORDER BY created_at DESC LIMIT ?`)
     .all(...params, limit);
-  
+
   if (rows.length === 0) return [];
-  
+
   // Get all plan IDs
   const planIds = (rows as Array<{ id: string }>).map((r) => r.id);
-  
+
   // Fetch all files for these plans in one query
   const placeholders = planIds.map(() => "?").join(",");
   const fileRows = db
-    .query(`SELECT plan_id, file_path, role FROM plan_files WHERE plan_id IN (${placeholders}) ORDER BY plan_id, file_path`)
+    .query(
+      `SELECT plan_id, file_path, role FROM plan_files WHERE plan_id IN (${placeholders}) ORDER BY plan_id, file_path`,
+    )
     .all(...planIds) as Array<{ plan_id: string; file_path: string; role: string }>;
-  
+
   // Group files by plan_id
   const filesByPlanId = new Map<string, Array<{ file_path: string; role: string }>>();
   for (const f of fileRows) {
@@ -123,7 +125,7 @@ export function listPlans(
     existing.push({ file_path: f.file_path, role: f.role });
     filesByPlanId.set(f.plan_id, existing);
   }
-  
+
   // Map plans with their files
   return (rows as unknown[]).map((row) => {
     const planId = (row as { id: string }).id;

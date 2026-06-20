@@ -235,10 +235,7 @@ interface PlanFileRow {
   role: string;
 }
 
-export function planWithFilesFromRow(
-  planRow: unknown,
-  fileRows: unknown[],
-): Plan {
+export function planWithFilesFromRow(planRow: unknown, fileRows: unknown[]): Plan {
   const plan = planFromRow(planRow);
   const files = (fileRows as PlanFileRow[]).map((f) => ({
     filePath: f.file_path,
