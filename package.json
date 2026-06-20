@@ -22,7 +22,10 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "bun test",
-    "clean": "rm -rf dist .slim/worktrees"
+    "test:smoke": "bash scripts/smoke.sh",
+    "status:plans": "bun run src/cli/status.ts --plans",
+    "clean": "rm -rf dist .slim/worktrees",
+    "prepare": "husky"
   },
   "dependencies": {
     "opencode-mem": "^2.17.1"
@@ -37,7 +40,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
     "@types/bun": "latest",
+    "husky": "^9.0.0",
     "typescript": "^5.6.0"
   },
   "keywords": [

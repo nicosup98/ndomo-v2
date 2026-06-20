@@ -1,0 +1,27 @@
+# Copyright 2026 — ndomo-v2 contributors
+# SPDX-License-Identifier: MIT
+#
+# Release-please workflow — automated versioning + GitHub Releases
+# Pinned to v5.0.0 commit SHA (audit MISSING-007 principle).
+# See: https://github.com/googleapis/release-please-action
+
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          release-type: node
+          package-name: ndomo
+          config-file: release-please-config.json
