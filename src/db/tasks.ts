@@ -12,6 +12,62 @@ import { ensureSession } from "./sessions.ts";
 import type { PlanTask, TaskMetadata, TaskStatus } from "./types.ts";
 import { taskFromRow } from "./types.ts";
 
+// ─── M7: Cross-stack file splitting ─────────────────────────────────────────
+
+/** Map file extension → stack key. Unrecognized extensions → 'other'. */
+const STACK_MAP: Record<string, string> = {
+  ".go": "go",
+  ".vue": "vue",
+  ".ts": "js",
+  ".tsx": "js",
+  ".js": "js",
+  ".jsx": "js",
+  ".py": "python",
+  ".rs": "rust",
+  ".zig": "zig",
+};
+
+/** Map stack key → default agent for that stack. */
+const STACK_AGENT_MAP: Record<string, string> = {
+  go: "go-smith",
+  vue: "js-smith",
+  js: "js-smith",
+  python: "python-smith",
+  rust: "rust-smith",
+  zig: "zig-smith",
+  other: "smith",
+};
+
+/**
+ * Group files by their stack (determined by extension).
+ * Returns a record of stackKey → file paths.
+ *
+ * @example splitFilesByStack(["main.go", "app.ts"]) → { go: ["main.go"], js: ["app.ts"] }
+ */
+export function splitFilesByStack(files: string[]): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const f of files) {
+    const dotIdx = f.lastIndexOf(".");
+    const ext = dotIdx >= 0 ? f.slice(dotIdx).toLowerCase() : "";
+    const stack = STACK_MAP[ext] ?? "other";
+    if (!result[stack]) result[stack] = [];
+    result[stack].push(f);
+  }
+  return result;
+}
+
+// ─── M6: Truncation types ───────────────────────────────────────────────────
+
+/** Metadata returned when result/error is truncated to 16 KB. */
+export interface TaskTruncationInfo {
+  truncated: boolean;
+  originalLength?: number;
+  truncatedLength?: number;
+}
+
+/** Return type for updateTaskStatus — includes truncation metadata. */
+export type TaskUpdateResult = (PlanTask & { truncation: TaskTruncationInfo }) | null;
+
 export function createTasksBatch(
   db: Database,
   planId: string,
@@ -50,83 +106,118 @@ export function createTasksBatch(
   const results: PlanTask[] = [];
   const txn = db.transaction(() => {
     for (const t of tasks) {
-      // Skip if task with same (agent, description) already exists for this plan
-      const sig = `${t.agent}::${t.description}`;
-      if (existingSignatures.has(sig)) {
-        continue;
-      }
-      const i = results.length;
-      const id = crypto.randomUUID();
-      const orderIndex = t.orderIndex ?? i;
-      // v6: write-once snapshot of task data
-      const originalPlanData = JSON.stringify({
-        description: t.description,
-        agent: t.agent,
-        files: t.files ?? [],
-        complexity: t.complexity,
-        dependencies: t.dependencies ?? [],
-        orderIndex,
-        createdBy: t.createdBy,
-      });
-      db.query(
-        `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        id,
-        planId,
-        orderIndex,
-        t.description,
-        t.agent,
-        JSON.stringify(t.files ?? []),
-        t.complexity,
-        JSON.stringify(t.dependencies ?? []),
-        JSON.stringify(t.metadata ?? {}),
-        t.createdBy,
-        t.updatedBy ?? t.createdBy,
-        t.sourceSessionId ?? null,
-        t.sourceMessageId ?? null,
-        t.reviewedBy ?? null,
-        t.tokensUsed ?? null,
-        t.durationMs ?? null,
-        JSON.stringify(t.artifacts ?? []),
-        originalPlanData,
-      );
-      results.push({
-        id,
-        planId,
-        orderIndex,
-        description: t.description,
-        agent: t.agent,
-        files: t.files ?? [],
-        complexity: t.complexity,
-        status: "pending",
-        startedAt: null,
-        completedAt: null,
-        result: null,
-        error: null,
-        dependencies: t.dependencies ?? [],
-        createdBy: t.createdBy,
-        updatedBy: t.updatedBy ?? t.createdBy ?? "unknown",
-        sourceSessionId: t.sourceSessionId ?? null,
-        sourceMessageId: t.sourceMessageId ?? null,
-        reviewedBy: t.reviewedBy ?? null,
-        tokensUsed: t.tokensUsed ?? null,
-        durationMs: t.durationMs ?? null,
-        artifacts: t.artifacts ?? [],
-        metadata: t.metadata ?? ({} as TaskMetadata),
-        archivedAt: null,
-        originalPlanData,
-      });
+      // M7: split cross-stack files into sub-tasks
+      const filesByStack = t.files && t.files.length > 1 ? splitFilesByStack(t.files) : null;
+      const stackKeys = filesByStack ? Object.keys(filesByStack) : [];
+      const needsSplit = filesByStack !== null && stackKeys.length > 1;
 
-      // Track signature to prevent in-batch duplicates
-      existingSignatures.add(sig);
+      // Generate sub-tasks: either the original or split children
+      const subTasks = needsSplit
+        ? stackKeys.map((stack, stackIdx) => ({
+            ...t,
+            description: t.description,
+            agent: STACK_AGENT_MAP[stack] ?? "smith",
+            files: filesByStack[stack] ?? [],
+            orderIndex: (t.orderIndex ?? results.length) + stackIdx * 0.1,
+            metadata: {
+              ...t.metadata,
+              splitFrom: null as string | null, // filled after first insert
+              splitReason: "cross-stack" as const,
+            },
+          }))
+        : [t];
 
-      // Issue 4: insert task files into plan_files with role='modified' (spec v2 §7.2)
-      if (t.files && t.files.length > 0) {
-        for (const filePath of t.files) {
-          db.query(
-            "INSERT OR IGNORE INTO plan_files (plan_id, file_path, role) VALUES (?, ?, 'modified')",
-          ).run(planId, filePath);
+      let firstSubTaskId: string | null = null;
+
+      for (const effectiveTask of subTasks) {
+        // Skip if task with same (agent, description) already exists for this plan
+        const sig = `${effectiveTask.agent}::${effectiveTask.description}`;
+        if (existingSignatures.has(sig)) {
+          continue;
+        }
+        const i = results.length;
+        const id = crypto.randomUUID();
+
+        // Wire splitFrom to first sub-task id
+        if (needsSplit && firstSubTaskId === null) {
+          firstSubTaskId = id;
+        }
+        const taskMetadata = needsSplit
+          ? { ...effectiveTask.metadata, splitFrom: firstSubTaskId }
+          : (effectiveTask.metadata ?? {});
+
+        const orderIndex = effectiveTask.orderIndex ?? i;
+        // v6: write-once snapshot of task data (M5: added metadata)
+        const originalPlanData = JSON.stringify({
+          description: effectiveTask.description,
+          agent: effectiveTask.agent,
+          files: effectiveTask.files ?? [],
+          complexity: effectiveTask.complexity,
+          dependencies: effectiveTask.dependencies ?? [],
+          metadata: taskMetadata,
+          orderIndex,
+          createdBy: effectiveTask.createdBy,
+        });
+        db.query(
+          `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          id,
+          planId,
+          orderIndex,
+          effectiveTask.description,
+          effectiveTask.agent,
+          JSON.stringify(effectiveTask.files ?? []),
+          effectiveTask.complexity,
+          JSON.stringify(effectiveTask.dependencies ?? []),
+          JSON.stringify(taskMetadata),
+          effectiveTask.createdBy,
+          effectiveTask.updatedBy ?? effectiveTask.createdBy,
+          effectiveTask.sourceSessionId ?? null,
+          effectiveTask.sourceMessageId ?? null,
+          effectiveTask.reviewedBy ?? null,
+          effectiveTask.tokensUsed ?? null,
+          effectiveTask.durationMs ?? null,
+          JSON.stringify(effectiveTask.artifacts ?? []),
+          originalPlanData,
+        );
+        results.push({
+          id,
+          planId,
+          orderIndex,
+          description: effectiveTask.description,
+          agent: effectiveTask.agent,
+          files: effectiveTask.files ?? [],
+          complexity: effectiveTask.complexity,
+          status: "pending",
+          startedAt: null,
+          completedAt: null,
+          result: null,
+          error: null,
+          dependencies: effectiveTask.dependencies ?? [],
+          createdBy: effectiveTask.createdBy,
+          updatedBy: effectiveTask.updatedBy ?? effectiveTask.createdBy ?? "unknown",
+          sourceSessionId: effectiveTask.sourceSessionId ?? null,
+          sourceMessageId: effectiveTask.sourceMessageId ?? null,
+          reviewedBy: effectiveTask.reviewedBy ?? null,
+          tokensUsed: effectiveTask.tokensUsed ?? null,
+          durationMs: effectiveTask.durationMs ?? null,
+          artifacts: effectiveTask.artifacts ?? [],
+          metadata: taskMetadata as TaskMetadata,
+          archivedAt: null,
+          originalPlanData,
+        });
+
+        // Track signature to prevent in-batch duplicates
+        existingSignatures.add(sig);
+
+        // Issue 4: insert task files into plan_files with role='modified' (spec v2 §7.2)
+        if (effectiveTask.files && effectiveTask.files.length > 0) {
+          for (const filePath of effectiveTask.files) {
+            db.query(
+              "INSERT OR IGNORE INTO plan_files (plan_id, file_path, role) VALUES (?, ?, 'modified')",
+            ).run(planId, filePath);
+          }
         }
       }
     }
@@ -165,15 +256,17 @@ export function listTasksByPlan(
 const MAX_RESULT_BYTES = 16 * 1024;
 const TRUNC_SUFFIX = "…[truncated]";
 
-/** Truncate strings exceeding 16 KB to prevent unbounded storage growth. */
-function trunc(s: string): string;
-function trunc(s: undefined): undefined;
-function trunc(s: string | undefined): string | undefined;
-function trunc(s?: string): string | undefined {
-  if (s === undefined) return undefined;
-  return s.length > MAX_RESULT_BYTES
-    ? `${s.slice(0, MAX_RESULT_BYTES - TRUNC_SUFFIX.length)}${TRUNC_SUFFIX}`
-    : s;
+/**
+ * Truncate strings exceeding 16 KB to prevent unbounded storage growth.
+ * Returns [truncated, wasTruncated] tuple for metadata tracking.
+ */
+function truncWithInfo(s: string | undefined): [string | undefined, boolean, number | undefined] {
+  if (s === undefined) return [undefined, false, undefined];
+  if (s.length > MAX_RESULT_BYTES) {
+    const truncated = `${s.slice(0, MAX_RESULT_BYTES - TRUNC_SUFFIX.length)}${TRUNC_SUFFIX}`;
+    return [truncated, true, s.length];
+  }
+  return [s, false, undefined];
 }
 
 export function updateTaskStatus(
@@ -183,7 +276,7 @@ export function updateTaskStatus(
   fields?: { result?: string; error?: string },
   updatedBy?: string,
   ctx?: { agent?: string; sessionId?: string },
-): PlanTask | null {
+): TaskUpdateResult {
   const now = Date.now();
   const setClauses: string[] = ["status = ?"];
   const params: SQLQueryBindings[] = [status];
@@ -211,15 +304,25 @@ export function updateTaskStatus(
     params.push(now);
   }
 
-  // Fix 5: truncate result/error to 16 KB max
+  // M6: truncate result/error to 16 KB max with warning + metadata
+  const truncationInfo: TaskTruncationInfo = { truncated: false };
   const fieldDefs: Array<[string, string | undefined]> = [
     ["result", fields?.result],
     ["error", fields?.error],
   ];
   for (const [col, val] of fieldDefs) {
     if (val !== undefined) {
+      const [truncated, wasTruncated, originalLength] = truncWithInfo(val);
+      if (wasTruncated) {
+        truncationInfo.truncated = true;
+        if (originalLength !== undefined) truncationInfo.originalLength = originalLength;
+        truncationInfo.truncatedLength = MAX_RESULT_BYTES;
+        console.warn(
+          `ndomo: task_update_status ${id} — ${col} truncated from ${originalLength} to ${MAX_RESULT_BYTES} bytes`,
+        );
+      }
       setClauses.push(`${col} = ?`);
-      params.push(trunc(val) as SQLQueryBindings);
+      params.push(truncated as SQLQueryBindings);
     }
   }
 
@@ -230,7 +333,9 @@ export function updateTaskStatus(
 
   params.push(id);
   db.query(`UPDATE plan_tasks SET ${setClauses.join(", ")} WHERE id = ?`).run(...params);
-  return getTask(db, id);
+  const task = getTask(db, id);
+  if (!task) return null;
+  return { ...task, truncation: truncationInfo };
 }
 
 export function searchTasks(

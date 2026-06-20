@@ -13,7 +13,7 @@ import { planFromRow, planWithFilesFromRow } from "./types.ts";
 
 export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updatedAt">): Plan {
   const now = Date.now();
-  // v6: build original_plan_data snapshot (write-once)
+  // v6: build original_plan_data snapshot (write-once) — M5: added files + metadata
   const originalPlanData = JSON.stringify({
     id: plan.id,
     slug: plan.slug,
@@ -26,6 +26,8 @@ export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updated
     createdBy: plan.createdBy,
     sourceSessionId: plan.sourceSessionId,
     sourceMessageId: plan.sourceMessageId,
+    files: plan.files ?? [],
+    metadata: plan.metadata ?? {},
     createdAt: now,
   });
   db.query(

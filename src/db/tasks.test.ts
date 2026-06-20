@@ -10,7 +10,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "./migrations.ts";
 import { createPlan, getPlan } from "./plans.ts";
 import { getSession } from "./sessions.ts";
-import { createTasksBatch, nextTaskForAgent, updateTaskStatus } from "./tasks.ts";
+import {
+  createTasksBatch,
+  nextTaskForAgent,
+  splitFilesByStack,
+  updateTaskStatus,
+} from "./tasks.ts";
 import type { Plan } from "./types.ts";
 
 let db: Database;
@@ -355,5 +360,213 @@ describe("createTasksBatch — no-overlap pre-dispatch", () => {
       makeTask({ agent: "js-smith", description: "build auth module", orderIndex: 1 }),
     ]);
     expect(second).toHaveLength(1);
+  });
+});
+
+// ─── M5: original_plan_data snapshot completeness ───────────────────────────
+
+describe("createTasksBatch — original_plan_data snapshot (M5)", () => {
+  test("snapshot includes files", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask({ files: ["src/a.ts", "src/b.ts"] })]);
+    const snapshot = JSON.parse(tasks[0]?.originalPlanData ?? "{}");
+
+    expect(snapshot.files).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  test("snapshot includes metadata", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { reviewedBy: "chronicler", tokensUsed: 1500 } }),
+    ]);
+    const snapshot = JSON.parse(tasks[0]?.originalPlanData ?? "{}");
+
+    expect(snapshot.metadata).toEqual({ reviewedBy: "chronicler", tokensUsed: 1500 });
+  });
+
+  test("snapshot includes dependencies", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask({ dependencies: ["dep-1", "dep-2"] })]);
+    const snapshot = JSON.parse(tasks[0]?.originalPlanData ?? "{}");
+
+    expect(snapshot.dependencies).toEqual(["dep-1", "dep-2"]);
+  });
+
+  test("snapshot includes empty arrays/objects when fields omitted", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const snapshot = JSON.parse(tasks[0]?.originalPlanData ?? "{}");
+
+    expect(snapshot.files).toEqual([]);
+    expect(snapshot.dependencies).toEqual([]);
+    expect(snapshot.metadata).toEqual({});
+  });
+});
+
+// ─── M6: truncation warning + return metadata ───────────────────────────────
+
+describe("updateTaskStatus — truncation metadata (M6)", () => {
+  test("result > 16KB → truncated:true with correct lengths", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+    const bigResult = "x".repeat(17 * 1024); // 17 KB
+
+    const originalWarn = console.warn;
+    const warnCalls: unknown[][] = [];
+    console.warn = (...args: unknown[]) => warnCalls.push(args);
+
+    const result = updateTaskStatus(db, taskId, "done", { result: bigResult }, "test");
+
+    expect(result?.truncation.truncated).toBe(true);
+    expect(result?.truncation.originalLength).toBe(17 * 1024);
+    expect(result?.truncation.truncatedLength).toBe(16 * 1024);
+    expect(result?.result).toContain("…[truncated]");
+    expect(warnCalls.length).toBeGreaterThan(0);
+    expect(String(warnCalls[0]?.[0])).toContain(`task_update_status ${taskId}`);
+
+    console.warn = originalWarn;
+  });
+
+  test("result exactly 16KB → truncated:false", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+    const exactResult = "y".repeat(16 * 1024); // exactly 16 KB
+
+    const result = updateTaskStatus(db, taskId, "done", { result: exactResult }, "test");
+
+    expect(result?.truncation.truncated).toBe(false);
+    expect(result?.truncation.originalLength).toBeUndefined();
+    expect(result?.result).toBe(exactResult);
+  });
+
+  test("error field also truncated with same behavior", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+    const bigError = "e".repeat(20 * 1024); // 20 KB
+
+    const originalWarn = console.warn;
+    console.warn = () => {};
+
+    const result = updateTaskStatus(db, taskId, "failed", { error: bigError }, "test");
+
+    expect(result?.truncation.truncated).toBe(true);
+    expect(result?.truncation.originalLength).toBe(20 * 1024);
+    expect(result?.truncation.truncatedLength).toBe(16 * 1024);
+    expect(result?.error).toContain("…[truncated]");
+
+    console.warn = originalWarn;
+  });
+});
+
+// ─── M7: cross-stack file splitting ─────────────────────────────────────────
+
+describe("splitFilesByStack (M7)", () => {
+  test("groups files by extension stack", () => {
+    const result = splitFilesByStack(["main.go", "app.ts", "style.vue"]);
+
+    expect(Object.keys(result)).toHaveLength(3);
+    expect(result.go).toEqual(["main.go"]);
+    expect(result.js).toEqual(["app.ts"]);
+    expect(result.vue).toEqual(["style.vue"]);
+  });
+
+  test("unknown extension → 'other'", () => {
+    const result = splitFilesByStack(["file.xyz", "main.go"]);
+
+    expect(result.other).toEqual(["file.xyz"]);
+    expect(result.go).toEqual(["main.go"]);
+  });
+
+  test("single file → single stack", () => {
+    const result = splitFilesByStack(["main.go"]);
+
+    expect(Object.keys(result)).toHaveLength(1);
+    expect(result.go).toEqual(["main.go"]);
+  });
+
+  test("same extension → no split (one stack)", () => {
+    const result = splitFilesByStack(["a.go", "b.go"]);
+
+    expect(Object.keys(result)).toHaveLength(1);
+    expect(result.go).toEqual(["a.go", "b.go"]);
+  });
+
+  test("tsx/jsx/ts/js all map to 'js'", () => {
+    const result = splitFilesByStack(["a.ts", "b.tsx", "c.js", "d.jsx"]);
+
+    expect(Object.keys(result)).toHaveLength(1);
+    expect(result.js).toEqual(["a.ts", "b.tsx", "c.js", "d.jsx"]);
+  });
+});
+
+describe("createTasksBatch — cross-stack split (M7)", () => {
+  test("task with main.go + app.ts → 2 tasks (go-smith, js-smith)", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["main.go", "app.ts"], description: "build feature" }),
+    ]);
+
+    expect(tasks).toHaveLength(2);
+
+    const goTask = tasks.find((t) => t.agent === "go-smith");
+    const jsTask = tasks.find((t) => t.agent === "js-smith");
+
+    expect(goTask).toBeDefined();
+    expect(jsTask).toBeDefined();
+    expect(goTask?.files).toEqual(["main.go"]);
+    expect(jsTask?.files).toEqual(["app.ts"]);
+  });
+
+  test("task with main.go + main.go → no split (same stack, dedup files)", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["main.go", "main.go"], description: "build backend" }),
+    ]);
+
+    // Same stack → no split, original task used as-is
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.agent).toBe("js-smith"); // original agent preserved
+  });
+
+  test("task with single file → 1 task, no split", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["main.go"], description: "build backend" }),
+    ]);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.agent).toBe("js-smith"); // original agent preserved
+  });
+
+  test("task with file.unknown + main.go → 2 tasks (other + go)", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["README.xyz", "main.go"], description: "build docs" }),
+    ]);
+
+    expect(tasks).toHaveLength(2);
+
+    const otherTask = tasks.find((t) => t.agent === "smith");
+    const goTask = tasks.find((t) => t.agent === "go-smith");
+
+    expect(otherTask).toBeDefined();
+    expect(goTask).toBeDefined();
+    expect(otherTask?.files).toEqual(["README.xyz"]);
+    expect(goTask?.files).toEqual(["main.go"]);
+  });
+
+  test("splitReason='cross-stack' in metadata of sub-tasks", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["main.go", "app.ts"], description: "build feature" }),
+    ]);
+
+    expect(tasks).toHaveLength(2);
+    for (const task of tasks) {
+      expect((task.metadata as Record<string, unknown>).splitReason).toBe("cross-stack");
+    }
   });
 });

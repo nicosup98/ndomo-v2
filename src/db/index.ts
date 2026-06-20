@@ -44,7 +44,9 @@ export {
   addTaskTag,
   removeTaskTag,
   getTaskTags,
+  splitFilesByStack,
 } from "./tasks.ts";
+export type { TaskUpdateResult, TaskTruncationInfo } from "./tasks.ts";
 
 // ─── Sessions ────────────────────────────────────────────────────────────────
 export {

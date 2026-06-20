@@ -39,7 +39,13 @@ import {
   searchTasks,
   updateTaskStatus,
 } from "./db/tasks.ts";
-import type { PlanStatus, SessionMetadata, TaskMetadata, TaskStatus } from "./db/types.ts";
+import type {
+  PlanMetadata,
+  PlanStatus,
+  SessionMetadata,
+  TaskMetadata,
+  TaskStatus,
+} from "./db/types.ts";
 import {
   BackgroundDispatcher,
   canRunParallel,
@@ -66,6 +72,117 @@ function extractFilePath(args: unknown): string | undefined {
   const record = args as Record<string, unknown>;
   const fp = record.filePath ?? record.filepath;
   return typeof fp === "string" ? fp : undefined;
+}
+
+// ─── Escalation helper (M2) ──────────────────────────────────────────────────
+
+/**
+ * Escalate a task from craftsman to foreman by creating a stub plan
+ * and optionally a foreman task, then checkpointing the session.
+ *
+ * Pure function taking `db` — testable via in-memory SQLite.
+ */
+export function escalateToForeman(
+  db: Database,
+  ctx: { agent?: string; sessionID?: string; messageID?: string },
+  args: {
+    sourcePlanId?: string;
+    sourceTaskId?: string;
+    reason: string;
+    suggestedApproach?: string;
+  },
+): { escalationPlanId: string; notificationSent: boolean } {
+  const escalationId = crypto.randomUUID();
+  const slug = `escalation-${escalationId.slice(0, 8)}`;
+
+  // 1. Create stub plan with escalation metadata
+  const plan = planCreateExecutor(
+    db,
+    {
+      slug,
+      title: `Escalation: ${args.reason.slice(0, 80)}`,
+      overview: args.reason,
+      priority: 3, // mid-priority for escalation stubs
+      ...(args.suggestedApproach !== undefined && { approach: args.suggestedApproach }),
+      metadata: {
+        escalatedFrom: args.sourcePlanId ?? null,
+        escalatedBy: "craftsman",
+        reason: args.reason,
+      } as PlanMetadata & Record<string, unknown>,
+    },
+    ctx,
+  );
+
+  // 2. If sourceTaskId, create a foreman task in the escalation plan
+  if (args.sourceTaskId) {
+    createTasksBatch(db, plan.id, [
+      {
+        orderIndex: 0,
+        description: args.reason,
+        agent: "foreman",
+        files: [],
+        complexity: 3,
+        dependencies: [],
+        createdBy: ctx.agent ?? "unknown",
+        updatedBy: ctx.agent ?? "unknown",
+        sourceSessionId: ctx.sessionID ?? null,
+        sourceMessageId: ctx.messageID ?? null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
+    ]);
+  }
+
+  // 3. Session checkpoint with escalation note
+  if (ctx.sessionID) {
+    checkpointSession(
+      db,
+      ctx.sessionID,
+      { escalated: true, escalationPlanId: plan.id },
+      `escalated by craftsman: ${args.reason}`,
+    );
+  }
+
+  return { escalationPlanId: plan.id, notificationSent: true };
+}
+
+// ─── Reconcile helper (M3) ───────────────────────────────────────────────────
+
+/**
+ * Reconcile plans that were left in 'executing' or 'approved' status
+ * when a session ends. Marks them as 'abandoned' with metadata reason.
+ *
+ * Pure function taking `db` — testable via in-memory SQLite.
+ */
+export function reconcileAbandonedPlans(db: Database, sessionId: string, endedBy: string): number {
+  // Find plans in non-terminal statuses belonging to this session
+  const rows = db
+    .query(
+      `SELECT id, metadata FROM plans
+       WHERE session_id = ? AND status IN ('executing', 'approved') AND archived_at IS NULL`,
+    )
+    .all(sessionId) as Array<{ id: string; metadata: string | null }>;
+
+  const now = Date.now();
+  for (const row of rows) {
+    // Merge reason into existing metadata
+    const existingMeta = row.metadata ? JSON.parse(row.metadata) : {};
+    const updatedMeta = {
+      ...existingMeta,
+      reason: "session_ended",
+      endedBy,
+    };
+
+    db.query(
+      `UPDATE plans SET status = 'abandoned', updated_at = ?, updated_by = ?, metadata = ?
+       WHERE id = ?`,
+    ).run(now, endedBy, JSON.stringify(updatedMeta), row.id);
+  }
+
+  return rows.length;
 }
 
 // ─── Public types ────────────────────────────────────────────────────────────
@@ -618,6 +735,11 @@ export const NdomoPlugin: Plugin = async (
         },
       }),
 
+      /**
+       * LEGACY: El flujo v2 de foreman (4 pasos) skip este tool.
+       * Solo invocado manualmente si quieres gating explícito antes de ejecutar.
+       * v2 flow: plan_create (draft) → task_create_batch (dispatch directo).
+       */
       plan_approve: tool({
         description: "Mark a plan as approved. Sets approved_at to the current timestamp.",
         args: { id: tool.schema.string() },
@@ -816,6 +938,30 @@ export const NdomoPlugin: Plugin = async (
         },
       }),
 
+      task_escalate: tool({
+        description:
+          "Escalar tarea compleja al foreman. Crea un plan stub (foreman) con metadata.escalatedFrom=<planId_or_null> + metadata.escalatedBy='craftsman' y notifica via session_checkpoint. NO ejecuta código.",
+        args: {
+          sourcePlanId: tool.schema.string().optional(),
+          sourceTaskId: tool.schema.string().optional(),
+          reason: tool.schema.string(),
+          suggestedApproach: tool.schema.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          if (!args.reason || args.reason.trim().length === 0) {
+            throw new Error("ndomo: task_escalate requires a non-empty reason");
+          }
+          const escalateArgs: Parameters<typeof escalateToForeman>[2] = {
+            reason: args.reason,
+          };
+          if (args.sourcePlanId !== undefined) escalateArgs.sourcePlanId = args.sourcePlanId;
+          if (args.sourceTaskId !== undefined) escalateArgs.sourceTaskId = args.sourceTaskId;
+          if (args.suggestedApproach !== undefined)
+            escalateArgs.suggestedApproach = args.suggestedApproach;
+          return JSON.stringify(escalateToForeman(db, ctx, escalateArgs));
+        },
+      }),
+
       // ── Sessions ───────────────────────────────────────────────────
 
       session_start: tool({
@@ -856,10 +1002,17 @@ export const NdomoPlugin: Plugin = async (
       }),
 
       session_end: tool({
-        description: "Mark a session as ended. Sets ended_at to the current timestamp.",
+        description:
+          "Mark a session as ended. Sets ended_at. Reconciliación: planes con status='executing' o 'approved' sin cerrar en esta session → 'abandoned' con metadata.reason='session_ended'.",
         args: { id: tool.schema.string() },
-        execute: async (args) => {
-          return JSON.stringify(endSession(db, args.id));
+        execute: async (args, ctx) => {
+          const plansAbandoned = reconcileAbandonedPlans(db, args.id, ctx.agent ?? "unknown");
+          const session = endSession(db, args.id);
+          return JSON.stringify({
+            session,
+            plansAbandoned,
+            sessionEnded: session !== null,
+          });
         },
       }),
     },

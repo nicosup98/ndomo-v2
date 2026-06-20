@@ -66,6 +66,9 @@ usaras esta skill para implemetar y revisar test
 ### 3. api-security-best-practices
 usaras esta skill para implementar APIs seguras con autenticación, autorización, rate limiting y validación de entrada siguiendo OWASP Top 10.
 
+### 4. bun
+usaras esta skill cuando el proyecto use bun como runtime, package manager, test runner o bundler. Especialmente relevante para `bun test`, `bun:sqlite` (DB API), `bun build`, y comandos `bun run`. Carga esta skill via la herramienta `skill` con nombre `bun` antes de tocar `package.json`, `bunfig.toml`, scripts de test o cualquier archivo que use APIs específicas de bun (e.g. `Bun.serve`, `Bun.file`, `bun:sqlite`). No asumir comportamiento de Node.js — verificar con skill cargada.
+
 ## Formato de Respuesta Esperado
 1. **Auditoría del Plan:** Evaluación inicial rápida (Ej. "Plan validado" o "Advertencia: Se detectó alto acoplamiento").
 2. **Implementación de Código:** Lógica principal limpia. Si es complejo, incluye JSDoc explicando el *por qué* de la solución.

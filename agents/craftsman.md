@@ -94,6 +94,10 @@ Caveman nivel full SIEMPRE. Cero saludos, cero justificaciones, cero prosa. Viñ
 | ❌ Fallo parcial | 1+ tasks fallaron irrecuperable | `task_update_status("failed", error)` en cada una + `plan_update_status("failed")` + reporte |
 | ⛔ Bloqueo | depende de plan externo o recurso humano | `task_update_status("blocked", error)` + notificar qué falta |
 
+**Parallel retry policy** (default: retry-1-then-isolate):
+- 1/N smiths paralelos falla → retry 1 vez; si reintento falla → `task_update_status("failed")` + continue-isolated (resto sigue)
+- ≥2/N smiths paralelos fallan → fail-fast: cancelar dispatch pendiente, `plan_update_status("failed")`. Override por task vía `metadata.parallelRetryPolicy: "no-retry" | "fail-fast" | "continue-isolated"`. Timeout > 5min → tratado como failed.
+
 ---
 
 ### Estado 3: Plan formal (lee plan_db existente)

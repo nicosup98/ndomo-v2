@@ -462,6 +462,27 @@ NOTA: foreman solo planifica. Ejecución es craftsman. NO delegar a smiths, pain
 **Siguiente:** cambiar a craftsman en TUI → task_next_for_agent
 ```
 
+### 6.5 Plan Approve (legacy)
+
+`plan_approve` es un tool MCP registrado en `src/plugin.ts:621-632` que marca un plan como `approved` seteando `approved_at`.
+
+**Estado:** **LEGACY** — El flujo v2 de foreman (4 pasos, sección 6.2) **NO usa `plan_approve`**. En v2, el foreman pasa directo de `plan_create` (status `draft`) a `task_create_batch`. El status `approved` queda implícito al dispatchar tasks via `task_create_batch`.
+
+**Por qué existe aún:** Compatibilidad con código externo y workflows manuales que requieren gating explícito antes de ejecutar. Se mantiene como tool MCP para uso legacy/humano.
+
+**Cuándo invocarlo manualmente:** Si un usuario externo o script quiere un gating explícito "aprobar antes de ejecutar", puede llamar `plan_approve` entre `plan_create` y `task_create_batch`. En el flujo v2 normal esto es innecesario.
+
+**Diferencia con v2 flow:**
+
+| Aspecto | v2 flow (foreman 4 pasos) | Legacy (con `plan_approve`) |
+|---------|---------------------------|-----------------------------|
+| Flujo | `plan_create` → `task_create_batch` | `plan_create` → `plan_approve` → `task_create_batch` |
+| Status intermedio | `draft` → directo a tasks | `draft` → `approved` → tasks |
+| Gating | Ninguno (dispatch inmediato) | Explícito (aprobación manual) |
+| Uso en v2 | Siempre | Nunca (solo externo/manual) |
+
+**Archivo:** `src/plugin.ts:621-632`
+
 ---
 
 ## 7. Cambios al sistema

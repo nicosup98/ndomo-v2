@@ -448,3 +448,43 @@ describe("listPlans — plan_files JOIN", () => {
     expect(plans[1]?.files).toEqual([]);
   });
 });
+
+// ─── M5: original_plan_data snapshot completeness ───────────────────────────
+
+describe("createPlan — original_plan_data snapshot (M5)", () => {
+  test("snapshot includes files array", () => {
+    const plan = makePlan({ files: [{ filePath: "src/index.ts", role: "input" }] });
+    const snapshot = JSON.parse(plan.originalPlanData ?? "{}");
+
+    expect(snapshot.files).toEqual([{ filePath: "src/index.ts", role: "input" }]);
+  });
+
+  test("snapshot includes metadata object", () => {
+    const plan = makePlan({
+      metadata: { category: "feature", externalRefs: { jiraTicket: "ND-42" } },
+    });
+    const snapshot = JSON.parse(plan.originalPlanData ?? "{}");
+
+    expect(snapshot.metadata).toEqual({
+      category: "feature",
+      externalRefs: { jiraTicket: "ND-42" },
+    });
+  });
+
+  test("snapshot includes approach, priority, complexity", () => {
+    const plan = makePlan({ approach: "top-down", priority: 1, complexity: 5 });
+    const snapshot = JSON.parse(plan.originalPlanData ?? "{}");
+
+    expect(snapshot.approach).toBe("top-down");
+    expect(snapshot.priority).toBe(1);
+    expect(snapshot.complexity).toBe(5);
+  });
+
+  test("snapshot includes empty arrays/objects when fields omitted", () => {
+    const plan = makePlan();
+    const snapshot = JSON.parse(plan.originalPlanData ?? "{}");
+
+    expect(snapshot.files).toEqual([]);
+    expect(snapshot.metadata).toEqual({});
+  });
+});
