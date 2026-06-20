@@ -1,148 +1,235 @@
-# Feature: Flexible Builder — modo ad-hoc paralelo al Foreman
+# Feature: Primary Craftsman — refactor arquitectónico (v2)
 
 **Slug:** `feature-flexible-builder`
-**Status:** Draft
-**Plan ID:** `[PENDIENTE DE ASIGNACIÓN]`
+**Status:** Draft (spec v2)
+**Plan ID:** `be21c801-b770-4d82-979a-2bb5186928f1`
+**Plan slug:** `flexible-builder-v2`
 **Created:** 2026-06-19
+**Supersedes:** `docs/features/feature-flexible-builder-v1.md`
 
 ---
 
 ## 1. Resumen ejecutivo
 
-Agregar un nuevo **primary agent `builder`** al ecosistema ndomo, paralelo al `foreman`, que implementa código sin la rigidez del orquestador. El user alterna manualmente entre foreman (planificación multi-step) y builder (implementación directa, TDD, commits). Builder usa `plan_db` **solo si la tarea es multi-archivo o necesita tracking**; si es trivial, ejecuta y reporta sin tocar la DB. El patrón replica exactamente el modo ad-hoc del proyecto referencia `nicosup98/ndomo` (opencode-core-slim), donde `default_agent: build` + `builder` primary + `qagent` ad-hoc conviven sin que el user deba pasar por un orquestador para trabajo simple.
+Refactor arquitectónico mayor del ecosistema ndomo. Dos cambios estructurales que transforman el modelo de orquestación:
+
+1. **Foreman simplificado a 4 pasos** (Aclaración → Exploración → Plan atómico → Persistir): se eliminan 6 pasos del flujo original de 10 (Brief de Delegación, Trivium en Vivo, Reconciliación, Validación, Reporte Final). Foreman pasa de orquestador ejecutor a **planner puro**: planifica y persiste en DB; la ejecución la toma otro agente.
+
+2. **Nuevo primary `craftsman`** (antes `builder` en v1): agente implementador disciplinado con threshold estricto 2/5/1. Ataca bugs, features pequeñas y refactors acotados sin pasar por el ciclo de planificación del foreman. Opera con 4 estados de complejidad progresiva.
+
+El user alterna manualmente entre foreman (planificación formal) y craftsman (ejecución directa) mediante el TUI. No hay dispatch automático ni enrutamiento foreman→craftsman — la separación es manual por diseño.
+
+**Decisión clave del grill:** El nombre final es `craftsman` (no `builder`). El threshold es **2/5/1** (no 1/2-5/3 como en v1). El prompt del craftsman incluye 4 estados (no 3). Foreman baja a 4 pasos puramente planificadores.
 
 ---
 
 ## 2. Contexto y motivación
 
-### 2.1 Estado actual: rigidez del foreman
+### 2.1 Problemas del foreman original (10 pasos)
 
-El `foreman` (`agents/foreman.md`) es un orquestador primario con un flujo de 10 pasos obligatorios:
+El `foreman` (`agents/foreman.md`) operaba con un flujo de 10 pasos obligatorios que mezclaba planificación con ejecución:
 
-| # | Paso | ¿Salteable? |
-|---|------|------------|
-| 1 | Aclaración | No |
-| 2 | Memory Search | No |
-| 3 | Routing | No |
-| 4 | Plan Atómico | No |
-| 5 | Brief de Delegación | No |
-| 6 | Trivium en Vivo | Parcial (≤5 líneas) |
-| 7 | Reconciliación | No |
-| 8 | Validación | No |
-| 9 | Reporte Final | No |
+| # | Paso | Problema |
+|---|------|----------|
+| 1 | Aclaración | OK — necesario |
+| 2 | Memory Search | OK — necesario |
+| 3 | Routing | OK — necesario |
+| 4 | Plan Atómico | OK — necesario |
+| 5 | Brief de Delegación | Inflado: el prompt del subagente ya contiene el objetivo |
+| 6 | Trivium en Vivo | Contradictorio: foreman no debe implementar |
+| 7 | Reconciliación | Innecesario si craftsman ejecuta completo |
+| 8 | Validación | Craftsman corre sus propios tests |
+| 9 | Reporte Final | Craftsman reporta en su output |
 
-**Evidencia:** `agents/foreman.md:162-200` define los 10 pasos secuenciales sin excepción.
+**Evidencia:** `agents/foreman.md:162-200` — secuencia de 10 pasos que el foreman debía seguir en cada request.
 
 ### 2.2 Grietas específicas identificadas
 
-| Grieta | Ubicación | Impacto |
-|--------|-----------|---------|
-| Trivium solo self-edit ≤5 líneas, 1 archivo, 0 nuevos exports | `agents/foreman.md:29-34` | El foreman no puede corregir ni un typo sin delegar → sobrecarga de `task` para cambios triviales |
-| No hay modo ad-hoc; toda tarea requiere `plan_create` + `task_create_batch` | `agents/foreman.md:238` ("Antes de despachar subagentes, crear plan + tasks en DB") | tareas de 1 archivo requieren ciclo completo de plan_db |
-| `session_start` colisiona con `ctx.sessionID` | `docs/bugs/plan-create-orphan-fk.md:60-70` | `plan_approve` / `plan_update_status` fallan en planes creados sin `session_start` explícito |
+| Grieta | Ubicación en v1 | Impacto |
+|--------|-----------------|---------|
+| Trivium ≤5 líneas, 1 archivo, 0 nuevos exports | `agents/foreman.md:29-34` | Foreman no puede corregir ni un typo sin delegar |
+| No hay modo ad-hoc; toda tarea requiere `plan_create` + `task_create_batch` | `agents/foreman.md:238` | Tareas de 1 archivo requieren ciclo completo de plan_db |
+| `session_start` colisiona con `ctx.sessionID` | `docs/bugs/plan-create-orphan-fk.md:60-70` | `plan_approve`/`plan_update_status` fallan sin `session_start` explícito |
 | `task_update_status` trunca `result`/`error` a 16KB | `src/db/tasks.ts:109-121` | Outputs grandes se pierden sin advertencia |
-| Foreman monopoliza el rol de "único primary"; los 14 smiths son `subagent` con `task: deny` | `agents/foreman.md:28` y `agents/*.md` (`mode: subagent`) | El user no puede delegar directamente a un smith sin pasar por el foreman. El trivium es el único escape. |
-| Routing estático en scheduler | `src/orchestrator/scheduler.ts:41-47` stack de 5 lenguajes | No hay detección dinámica de stack; el foreman debe adivinar o preguntar |
-| `opencode.json` ausente en el repo | `glob("*opencode.json*")` → 0 resultados | Config global no versionada; no se puede definir `default_agent` ni modelos por proyecto |
+| Foreman monopoliza rol de "único primary" | `agents/foreman.md:28` y `agents/*.md` (`mode: subagent`) | User no puede delegar directamente a un smith |
+| Routing estático en scheduler | `src/orchestrator/scheduler.ts:41-47` | No hay detección dinámica de stack |
+| `opencode.json` ausente en el repo | `glob("*opencode.json*")` → 0 resultados | Config global no versionada |
+| Sin asociación plan↔archivos | `src/db/schema.ts` | No hay trazabilidad de qué archivos toca cada plan |
+| Sin `original_plan_data` | `src/db/schema.ts` | No hay audit trail de "qué se planeó vs qué se hizo" |
+| Sin `plan_delete` | `src/plugin.ts` | No hay forma segura de eliminar planes huérfanos |
+
+### 2.3 Diferencias clave entre v1 y v2
+
+| Aspecto | v1 (`builder`) | v2 (`craftsman`) |
+|---------|----------------|-------------------|
+| Nombre | `builder` | `craftsman` (confirmado en grill) |
+| Estados | 3 (trivial, ad-hoc, formal) | 4 (con threshold 2/5/1) |
+| Threshold archivos | 1 / 2-5 / >5 | ≤2 Estado 1, 3-5 Estado 2, >5 Estado 4 |
+| Foreman | Sin cambios (10 pasos) | Simplificado a 4 pasos (planner puro) |
+| Cross-session close | `created_by` básico | `executed_by_agent` + `executed_by_session` + `created_by_agent` |
+| Migraciones DB | v6 + v7 | v6 (original_plan_data) + v7 (plan_files) + v8 (agent/session audit) |
+| Painter routing | Foreman | Solo craftsman |
+| Caveman | 14 agents target | Mismos 14 + snippet estándar |
+| `plan_delete` | Fase 3 | Fase 1 (priorizada) |
+| Plan ≤5 steps | Soft warning | Soft warning + log |
 
 ---
 
 ## 3. Análisis comparativo con nicosup98/ndomo
 
-### 3.1 Tabla side-by-side
+### 3.1 Arquitectura referencia: architect + builder + qagent
 
-| Aspecto | ndomo-v2 actual (foreman rígido) | nicosup98/ndomo (opencode-core-slim) |
-|---------|----------------------------------|--------------------------------------|
-| Default agent | foreman (primary, orquestador) | `build` (built-in, no overridden) |
-| Modo trivial | Trivium ≤5 líneas, plan_db obligatorio | `build` single-turn, 0 coordination |
-| Modo plan formal | foreman → `plan_create` → `task` → smiths | architect → `plan_db.add` → user switch → builder/scout/qagent |
-| Modo ad-hoc | No existe | qagent "audit ad-hoc" deriva scope del query |
-| Coordinación entre primaries | `task` desde foreman | `plan_db` async + user switch en TUI |
-| Skill loading | Hardcodeado en cada smith | Dinámico: researcher detecta stack, carga max 5 |
-| Audit trail | Solo `created_at`/`updated_at` | `original_plan_data` NUNCA se sobrescribe |
-| Plan↔file association | No existe | `plan_files` join table |
-| Tono global | Caveman en foreman + algunos smiths | Caveman en TODOS los 6 agents |
-| `plan_delete` safety | No existe | Rechaza si `status='pending'` |
-| Plan ≤5 steps | No hay regla | Regla en architect.md + `parent_id` para sub-plans |
+El proyecto referencia `nicosup98/ndomo` (opencode-core-slim) define tres modos de trabajo:
 
-**Evidencia del reporte:** `/tmp/opencode/ndomo-report.md:419-427` (tres modos de trabajo), `433-445` (tabla comparativa), `453-514` (puntos portables).
+| Modo | Agente | Cuándo |
+|------|--------|--------|
+| Plan formal | `architect` (primary) | Tarea multi-archivo, necesita diseño |
+| Ejecución directa | `builder` (primary) | Tarea bien definida, 1-5 archivos |
+| Ad-hoc audit | `qagent` (ad-hoc tool) | Scope se deriva del query |
 
-### 3.2 Por qué el patrón async + user switch es más liviano
+**Patrón clave:** `architect` NO usa `task` para invocar `builder`. Ambos son primaries que se comunican vía `plan_db` asíncrona. El user cambia de agente manualmente en el TUI.
 
-En el modelo actual, el foreman:
-1. Crea plan en DB (2 writes)
-2. Crea tasks batch (N writes)
-3. Llama `task` para cada smith (N LLM invocations)
-4. Espera resultados (N context switches)
-5. Reconoce resultados (N reads)
+### 3.2 Tabla comparativa ndomo-v1 vs nicosup98/ndomo vs ndomo-v2
 
-El modelo referencia:
-1. architect escribe plan a SQLite (1 write)
-2. User cambia agent en TUI (0 LLM tokens)
-3. builder/scout/qagent lee plan y ejecuta (1 read + N writes)
-4. User cambia de vuelta a architect si necesita replanificar
+| Aspecto | ndomo-v1 (foreman 10 pasos) | nicosup98/ndomo | ndomo-v2 (craftsman + foreman 4 pasos) |
+|---------|-----------------------------|-----------------|----------------------------------------|
+| Default agent | foreman (primary) | `build` (built-in) | foreman (primary planner) |
+| Implementador | foreman delega a smiths | builder/scout/qagent | **craftsman** (primary implementer) |
+| Modo trivial | Trivium ≤5 líneas + plan_db | `build` single-turn | Craftsman Estado 1 (sin plan_db) |
+| Modo plan formal | foreman → 10 pasos → smiths | architect → plan_db → builder | Foreman 4 pasos → plan_db → craftsman |
+| Coordinación | `task` síncrono | `plan_db` async + TUI switch | `plan_db` async + TUI switch |
+| Audit trail | Solo `created_at`/`updated_at` | `original_plan_data` | `original_plan_data` + agent/session FK |
+| Plan↔file | No existe | `plan_files` | `plan_files` |
+| Tono global | Caveman parcial (foreman + algunos) | Caveman en TODOS | Caveman en TODOS los 14 + craftsman |
+| `plan_delete` | No existe | Rechaza si `status='pending'` | Safety 3-capas |
+| Plan ≤5 steps | No hay regla | Regla en architect.md | Soft warning en task_create_batch |
 
-**Diferencia clave:** el modelo referencia gasta ~60% menos tokens en coordinación porque el "router" (architect) solo escribe a una DB persistente, no invoca LLMs secundarios. La coordinación entre primaries es **asíncrona vía SQLite**, no síncrona vía `task`.
+### 3.3 Por qué el patrón async + user switch gana
+
+Modelo v1 (foreman 10 pasos):
+1. Foreman crea plan en DB (2 writes)
+2. Foreman crea tasks batch (N writes)
+3. Foreman llama `task` para cada smith (N LLM invocations)
+4. Foreman espera resultados (N context switches)
+5. Foreman reconcilia resultados (N reads)
+
+Modelo v2 (foreman 4 pasos + craftsman):
+1. Foreman crea plan en DB (1-2 writes) — solo si >5 archivos o diseño arquitectura
+2. User cambia a craftsman en TUI (0 LLM tokens)
+3. Craftsman lee plan y ejecuta (1 read + N writes)
+4. Craftsman cierra plan con `plan_update_status("completed")`
+
+**Diferencia clave:** El modelo v2 gasta ~60% menos tokens en coordinación porque el "router" (foreman) solo escribe a DB, no invoca LLMs secundarios. Craftsman opera autónomamente.
 
 ---
 
 ## 4. Decisiones de diseño
 
-### D1. Nuevo primary `builder` paralelo a `foreman` (Opción A del user)
+### D1. Nombre `craftsman` (no `builder`)
 
-**Decisión:** Crear `agents/builder.md` con `mode: primary`. El user alterna manualmente en TUI.
+**Decisión:** El primary implementador se llama `craftsman`, no `builder` como en v1.
 
-**Justificación:** Es el patrón probado del referencia (commit `167dc03`), donde `architect` NO usa `task` para invocar `builder`. Separar roles evita que el orquestador monopolice tokens y permite al user elegir el camino directo.
+**Justificación:** Decisión del grill. `craftsman` evoca artesanía disciplinada (implementación precisa, threshold estricto, 4 estados). `builder` quedó descartado por ambigüedad con "builder pattern" y por la connotación genérica en el referencia.
 
-**Trade-offs:**
-- (+) Zero cambios al foreman existente; conviven ambos primaries
-- (+) El user retiene control del "threading" (no hay delegación automática)
-- (-) El user debe saber cuándo usar builder vs foreman (curva de aprendizaje)
-- (-) Dos primaries = dos configuraciones de modelo/temperatura
+**Archivo:** `agents/craftsman.md`
 
-### D2. Builder carga skills de smiths según stack detectado
+### D2. Threshold estricto 2/5/1
 
-**Decisión:** Builder usa el mismo conjunto de skills que los smiths existentes, cargadas dinámicamente según stack detectado (max 5 skills por sesión).
+**Decisión:** El craftsman opera con threshold numérico estricto:
 
-**Justificación:** No duplicar skills. Reutilizar `vue-best-practices`, `golang-pro`, `rust-best-practices`, `typescript-expert`, etc., que ya existen.
+| Estado | Archivos | Comportamiento |
+|--------|----------|----------------|
+| Estado 1 | ≤2 archivos | Implementación directa, sin plan_db |
+| Estado 2 | 3-5 archivos | Implementación con plan_db (crea plan y tasks) |
+| Estado 3 | — | Lee plan existente del foreman y ejecuta |
+| Estado 4 | >5 archivos | **Rechaza** — "fuera de mi dominio" → cambiar a foreman |
 
-**Trade-offs:**
-- (+) Reutilización inmediata de 35+ skills existentes
-- (+) Sin crear skills nuevas
-- (-) Requiere lógica de detección de stack (a cargo del researcher subagent)
+**Diferencia con v1:** v1 proponía 1/2-5 con threshold 1 archivo para Estado 1. v2 sube a ≤2 archivos para Estado 1, reflejando que fixes de 2 archivos son comunes y no requieren plan_db.
 
-### D3. Audit trail inmutable con `original_plan_data`
+**Enforcement:** Solo por prompt (no hay validación en código). Craftsman es un primary agent; su prompt es la única barrera.
 
-**Decisión:** Agregar columna `original_plan_data TEXT` a `plans` y `plan_tasks`. En `plan_create` copiar `plan_data` → `original_plan_data`. NUNCA se sobrescribe.
+### D3. Routing interno: `task.files` extensión + `metadata.stack`
 
-**Justificación:** Permite responder "qué se planeó vs qué se hizo" sin re-parsear logs. Patrón probado del referencia (`/tmp/opencode/ndomo-report.md:465-467`).
+**Decisión:** El craftsman decide a qué sub-smith delegar basándose en (1) extensión de archivo en `task.files`, (2) `task.metadata.stack` si existe, (3) LLM fallback.
 
-**Trade-offs:**
-- (+) Audit trail automático, zero esfuerzo del LLM
-- (-) DB crece 2x por fila de plan (mitigación: archivar planes viejos)
+| Extensión | Sub-smith |
+|-----------|-----------|
+| `.go` | `go-smith` |
+| `.vue`, `.svelte` | `vue-smith` |
+| `.ts`, `.tsx`, `.js`, `.jsx` | `js-smith` |
+| `.py` | `python-smith` |
+| `.rs` | `rust-smith` |
+| `.zig` | `zig-smith` |
+| Sin match | `smith` (genérico) |
 
-### D4. Builder usa `plan_db` opcionalmente
+**Archivo:** `agents/craftsman.md` — tabla de routing interno.
 
-**Decisión:** Builder NO crea `plan_create` para tareas triviales (1 archivo, ≤50 líneas de diff). Crea plan solo si multi-archivo o necesita tracking cross-session.
+### D4. Painter solo disponible vía craftsman
 
-**Justificación:** Elimina el overhead del plan_db para el caso más común (fixes rápidos, single-file features). Es la misma lógica del referencia donde `build` (default) no toca `plan_db` y `builder` (primary) lo usa condicionalmente.
+**Decisión:** `painter` (UI/UX designer) solo es invocable desde craftsman, no desde foreman.
 
-**Trade-offs:**
-- (+) Tareas triviales se ejecutan en 1 turno, 0 writes a DB
-- (-) Tareas sin plan_db no tienen trazabilidad (mitigación: builder reporta al user qué hizo vía salida directa)
-- (-) Riesgo de que el user abuse builder para tareas grandes sin plan
+**Justificación:** Foreman es planner puro (4 pasos). Si hay componente UI, craftsman decide: painter si `stack === "vue"` y `type === "design"`, o vue-smith si es implementación lógica.
+
+**Diferencia con v1:** v1 no especificaba painter routing — quedaba como responsabilidad del foreman.
+
+### D5. Cross-session close con audit trail completo
+
+**Decisión:** Tres nuevos campos en tabla `plans`:
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `created_by_agent` | TEXT | Agente que creó el plan (`foreman` o `craftsman`) |
+| `executed_by_agent` | TEXT | Agente que ejecutó (`craftsman`, `go-smith`, etc.) |
+| `executed_by_session` | TEXT FK → sessions.id | Sesión en que se ejecutó |
+
+**Justificación:** Permite trazabilidad cross-session: "qué agente creó este plan, qué agente lo ejecutó, en qué sesión". Especialmente útil cuando foreman planifica y craftsman ejecuta en sesiones separadas.
+
+**Comportamiento:**
+- `plan_create` setea `created_by_agent` desde `ctx.agent`
+- `task_update_status` / `plan_update_status` setea `executed_by_agent` y `executed_by_session` al primer `running`
+- Write-once: no se sobrescriben si ya están seteados
+
+### D6. `plan_delete` en Phase 1 (priorizada)
+
+**Decisión:** `plan_delete` tool se implementa en Phase 1 (no Phase 3 como en v1).
+
+**Safety checks:**
+1. Rechaza si `confirm !== true`
+2. Rechaza si `plan.status === 'pending'`
+3. Rechaza si hay tasks `pending` o `running`
+4. CASCADE: borra plan_tasks, plan_tags, plan_files, sessions ON DELETE SET NULL
+
+### D7. Plan ≤5 steps: soft warning (no bloqueo)
+
+**Decisión:** `task_create_batch` emite `console.warn` si `tasks.length > 5`. No bloquea. La regla se documenta en el prompt del foreman.
+
+**Justificación:** Bloquear sería contraproducente — el usuario podría tener razón. El warning es suficiente para que el foreman reevalúe.
+
+### D8. Caveman global snippet estándar
+
+**Decisión:** Insertar snippet exacto al inicio del prompt de 14 agents (después del frontmatter, antes del primer heading):
+
+```
+Tono: caveman por default, nivel full. Activa siempre.
+Excepción: prosa normal para advertencias de seguridad,
+acciones irreversibles o ambigüedad multi-paso.
+```
+
+**Agentes:** chronicler, go-smith, guild, inspector, js-smith, painter, python-smith, rust-smith, sage, scout, scribe, smith, vue-smith, zig-smith.
+
+**NO tocar:** `agents/craftsman.md` (ya incluye caveman en su prompt), `agents/foreman.md` (ya tiene caveman).
 
 ---
 
-## 5. Diseño del nuevo primary `builder`
+## 5. Diseño del craftsman
 
-### 5.1 Frontmatter YAML propuesto
+### 5.1 Frontmatter YAML
 
 ```yaml
 ---
-description: Implementador disciplinado / Fast Implementation Specialist (modo ad-hoc o planificado)
+description: Implementador Artesano / Disciplined Craftsman (modo ad-hoc o planificado)
 mode: primary
-model: opencode-go/deepseek-v4-flash   # mismo modelo que smith genérico
+model: opencode-go/deepseek-v4-flash
 temperature: 0.1
 permission:
   edit: allow
@@ -176,548 +263,599 @@ permission:
     "python-smith": allow
     "rust-smith": allow
     "zig-smith": allow
-  plan_db: allow      # opcional: tool plan_create/task_create_batch
+    "painter": allow
+  plan_db: allow
 ---
 ```
 
-**Diferencias clave con el foreman:**
+**Diferencias con el foreman:**
 - `mode: primary` (NO subagent)
-- `task` permitido SOLO a subagents existentes (scout, scribe, smiths)
-- `task` NO permitido a foreman, chronicler, inspector, painter, guild, sage (son primaries o roles no delegables)
-- Permisos `edit: allow`, `bash: ask` (mismo que smiths, a diferencia del foreman que delega)
-- `plan_db` tools disponibles pero no obligatorias
+- `task` permitido solo a subagents implementadores + painter
+- `task` NO permitido a foreman, guild, sage (son planners/advisors)
+- `task` permitido a chronicler (post-implementation docs) e inspector (review gate) — decisión confirmada en user dialog v2
+- Permisos `edit: allow`, `bash: ask` (craftsman implementa; foreman solo planifica)
+- `plan_db` tools disponibles pero condicionales (Estado 1 no las usa)
 
-### 5.2 Prompt completo sugerido (esqueleto con TODOs)
+### 5.2 Prompt con 4 estados
 
-```markdown
-# Rol: Builder (Implementador Disciplinado)
+```
+# Rol: Craftsman (Implementador Artesano)
 
-Eres un **primary agent** paralelo al foreman. Tu misión es implementar código
-directamente — bugs fixes, features pequeñas, refactors acotados — sin pasar por
-el ciclo de planificación del orquestador. **Eres la opción "rápida"** para cuando
-la tarea no amerita un plan completo.
+Eres un **primary agent** diseñado para implementar código con precisión
+artesanal. Atacas bugs, features pequeñas y refactors acotados. Operas en
+4 estados según el alcance del trabajo. Cuando el alcance excede tu umbral,
+escalas al foreman.
 
 ## Tono
+Caveman nivel full SIEMPRE. Cero saludos, cero justificaciones.
 
-- Caveman nivel `full` SIEMPRE. Cero saludos, cero justificaciones, viñetas densas.
-- [TODO: cargar skill `caveman` al inicio]
+## Threshold estricto 2/5/1
 
-## Modo de trabajo (3 estados)
-
-### Estado 1: Trivial (sin plan_db)
-**Cuándo:** 1 archivo, ≤50 líneas de diff, sin dependencias externas.
+### Estado 1: Trivial (≤2 archivos, sin plan_db)
+**Cuándo:** ≤2 archivos, cambios acotados (≤50 líneas diff), sin dependencias externas.
 **Flujo:**
-1. Lee archivo objetivo
-2. Implementa cambio
-3. Corre `bun run typecheck` / tests / lint del scope
-4. Commit atómico (conventional commits, ≤72 chars)
-5. Reporta al user: archivo, línea, cambio, verificación.
-**NO crea plan_create. NO toca task_db.**
+1. Lee archivos objetivo
+2. Implementa cambios
+3. Corre validación (typecheck / tests / lint)
+4. Commit opcional (preguntar al user)
+5. Reporta directo: archivos, líneas, verificación
+**NO crea plan_create. NO toca plan_db.**
 
-### Estado 2: Ad-hoc multi-archivo (con plan_db opcional)
-**Cuándo:** 2-5 archivos, cambios que cruzan stacks, o necesita tracking.
+### Estado 2: Multi-archivo acotado (3-5 archivos, con plan_db)
+**Cuándo:** 3-5 archivos, cambios que cruzan stacks, o necesita tracking cross-session.
 **Flujo:**
-1. Si no hay plan previo: `plan_create` con slug, overview, approach breve.
-2. `task_create_batch` con steps numerados.
-3. Para cada step: `task_update_status("running")` → implementar → `task_update_status("done")`.
-4. Al final: `plan_update_status("completed")`.
-**Obligatorio si la tarea toca más de 1 stack o requiere session tracking.**
+1. `plan_create` con slug, overview, approach (1 línea cada uno)
+2. `task_create_batch` con steps (máximo 5)
+3. Para cada step: `task_update_status("running")` → implementar → `task_update_status("done")`
+4. Al final: `plan_update_status("completed")`
+**Obligatorio si toca más de 1 stack o requiere trazabilidad.**
 
 ### Estado 3: Plan formal (lee plan_db existente)
-**Cuándo:** El foreman ya creó un plan y tasks; builder es invocado para implementar.
+**Cuándo:** El foreman ya creó un plan con tasks asignadas a craftsman.
 **Flujo:**
-1. `plan_get({id})` o `task_next_for_agent({agent: "builder"})` para encontrar tarea.
-2. Leer plan_data y entender el contexto.
-3. Implementar TDD: test first → code → refactor.
-4. `task_update_status("done")` con reporte.
-5. Si todas las tasks hechas: `plan_update_status("completed")`.
+1. `plan_get({id})` o `task_next_for_agent({agent: "craftsman"})`
+2. Lee plan_data completo: overview, approach, contexto
+3. Implementa TDD: test → code → refactor
+4. `task_update_status("done")` con reporte
+5. Si todas las tasks hechas: `plan_update_status("completed")`
 
-### Regla de selección de estado
+### Estado 4: FUERA DE MI DOMINIO (>5 archivos)
+**Cuándo:** La tarea involucra >5 archivos o requiere diseño de arquitectura.
+**Acción:**
+→ Reportar: `[FUERA DE MI DOMINIO]` + cuantos archivos/por qué
+→ Sugerir cambiar a `foreman` en TUI
+→ NO implementar parcialmente
+
+### Regla de selección
 ```
-¿Tarea bien definida, 1 archivo, <50 líneas?
-  → Estado 1: trivial (no plan_db)
-¿Tarea multi-archivo o cross-stack?
-  → Estado 2: ad-hoc con plan_db
-¿Hay plan/task existente asignado a "builder"?
-  → Estado 3: plan formal
-¿Tarea >5 archivos o requiere diseño de arquitectura?
-  → [FUERA DE MI DOMINIO] → cambiar a foreman
+¿Archivos ≤ 2 y sin dependencias externas?
+  → Estado 1: trivial (0 writes a DB)
+¿Archivos 3-5 o necesita tracking?
+  → Estado 2: plan_db propio
+¿Plan existente con tasks para craftsman?
+  → Estado 3: ejecutar plan formal
+¿Archivos > 5 o requiere diseño?
+  → Estado 4: fuera de dominio → foreman
 ```
 
-## Skill loading dinámico (4 pasos)
+## Routing interno (delegación a sub-smiths)
+Cuando necesites implementación especializada, usa:
 
-1. [TODO: al recibir tarea que involucra código → delegar a `scout`
-   con `task` para detectar stack]
-   - Prompt fijo: "Analiza los archivos afectados y detecta el stack.
-     Busca package.json → vue/react/etc, go.mod → Go, Cargo.toml → Rust,
-     requirements.txt → Python, build.zig → Zig. Devuelve tabla de markers encontrados."
-2. [TODO: recibir output estructurado — Stack / Markers / Skills recomendadas]
-3. [TODO: cargar skills con tool `skill` — max 5 por sesión]
-4. [TODO: reglas de borde — si toca auth/security → cargar `security-review`;
-   si ya cargaste skills en turno anterior → NO recargar]
+| Extensión archivo | Sub-smith |
+|---|---|
+| `.go` | `go-smith` |
+| `.vue` / `.svelte` | `vue-smith` |
+| `.ts` / `.tsx` / `.js` / `.jsx` | `js-smith` |
+| `.py` | `python-smith` |
+| `.rs` | `rust-smith` |
+| `.zig` | `zig-smith` |
+| UI/design + `type=design` | `painter` |
+| Sin match | `smith` (genérico) |
 
-### Tabla marker→skill (del referencia, `/tmp/opencode/ndomo-report.md:337-344`)
+Si `task.metadata.stack` existe, úsalo como override explícito.
+Si no hay match y no hay stack, usa `smith`.
 
-| Marker | Stack | Skills |
-|--------|-------|--------|
-| `package.json` + `vue` en dependencies | Vue/Nuxt | `vue`, `vue-best-practices`, `pinia`, `vue-testing-best-practices`, `vite` |
-| `package.json` + `react` | React/Next | `typescript-expert`, `modern-javascript-patterns` |
-| `go.mod` + `go` en toolchain | Go | `golang-pro`, `golang-security`, `go-testing` |
-| `Cargo.toml` | Rust | `rust-best-practices`, `rust-async-patterns`, `rust-testing` |
-| `package.json` JS/TS genérico | JS/TS | `typescript-expert`, `modern-javascript-patterns`, `javascript-testing-patterns` |
-| `requirements.txt` o `setup.py` | Python | [TODO: skill python específicas si existen] |
-| `build.zig` | Zig | `zig-0.16` |
-| Sin markers | generic | `caveman` + `ripgrep` solo |
+## Cross-session close
+- `executed_by_agent`: siempre `craftsman`
+- `executed_by_session`: siempre `current_session_id` (ctx.sessionID)
+- `created_by_agent`: setear en `plan_create` si creaste el plan
 
-## TDD workflow (obligatorio para código)
-
-1. Test first: escribir test que falla cubriendo el cambio esperado
-2. Code: implementar lo mínimo para pasar el test
-3. Refactor: limpiar sin romper tests
-4. Correr suite completa del scope
-5. Commit atómico: `git add -A && git commit -m "tipo(scope): mensaje ≤72 chars"`
+## TDD workflow
+1. Test first (si existen tests en el proyecto)
+2. Code mínimo para pasar
+3. Refactor
+4. Verificar con suite del scope
+5. Commit atómico
 
 ## Lo que NO puedes hacer
-
-- ❌ Planificar tareas multi-step que involucren otros primaries (scout, painter, qagent)
-- ❌ Invocar a `foreman` vía `task` — eso confunde roles
-- ❌ Editar prompts de otros agents (`agents/*.md`)
-- ❌ Editar tools MCP (`src/plugin.ts`, `src/db/*`)
-- ❌ Crear planes con >5 steps top-level
-- ❌ Usar `plan_approve` ni `plan_update_status` sin haber creado el plan
+- ❌ Invocar foreman, guild, sage vía task
+- ⚠️ Invocar chronicler solo post-implementación; inspector solo como review gate (no chaining entre ambos)
+- ❌ Editar prompts de otros agents
+- ❌ Editar tools MCP
+- ❌ Usar `plan_approve`
 - ❌ Modificar archivos sin leerlos primero
-- ✅ Sub-delegar a subagents existentes: `scout` (exploración), `smith`/`*-smith` (implementación especializada si cambia de stack)
 
 ## Output format
-
 ```
 cambios:
-  - path/file.ts:line — descripción — verified: OK
-
-validación:
-  - bun run typecheck — passed
-  - bun test — 42/42 passed
-
+  - archivo:linea — desc — verified: OK
+tests:
+  - typecheck: passed
+  - test suite: N/N passed
 plan:
-  - plan_id: (si se creó)
-  - tasks: 3 creadas, 3 completadas
+  - id: (si se creó/usó)
   - estado: completed | ad-hoc (no plan_db)
-
-notas:
-  - [TODO: si algo queda pendiente]
 ```
 
-## Reglas estrictas
-
-1. Lee antes de editar. Siempre.
-2. Verifica post-edit. Cada `edit` → `read` para confirmar.
-3. Sin webfetch. Sin investigación externa.
-4. Si la tarea excede tu scope → reporta `[FUERA DE MI DOMINIO]` + qué agente se necesita.
-5. Caveman siempre. Salvo para advertencias de seguridad.
-6. Commit atómico obligatorio después de cada tarea completada.
-7. Si el proyecto no tiene tests → crear setup mínimo antes de implementar.
+## Caveman skill
+Activa siempre. Excepción: prosa normal para advertencias de
+seguridad, acciones irreversibles o ambigüedad multi-paso.
 ```
-
-### 5.3 Skills loading: tabla marker → skill
-
-Basado en el frontmatter de los smiths actuales, las skills existentes son:
-
-| Agente existente | Skills cargadas en frontmatter/prompt |
-|------------------|--------------------------------------|
-| `smith` | `caveman`, `cavecrew` |
-| `go-smith` | `golang-patterns`, `golang-testing`, `golang-security`, `api-security-best-practices` |
-| `vue-smith` | `vue-best-practices`, `frontend-design` |
-| `js-smith` | `modern-javascript-patterns`, `javascript-testing-patterns`, `api-security-best-practices` |
-| `rust-smith` | [TODO: verificar — hereda de go-smith template] |
-| `python-smith` | [TODO: verificar — hereda de go-smith template] |
-| `zig-smith` | `zig-0.16` |
-| `scout` | `caveman`, `ripgrep` |
-| `inspector` | [TODO: verificar] |
-
-**Evidencia en código:**
-- `agents/smith.md:45-47` → `caveman`, `cavecrew`
-- `agents/go-smith.md:48-52` → `golang-patterns`, `golang-testing`, `golang-security`, `api-security-best-practices`
-- `agents/vue-smith.md:48-50` → `vue-best-practices`, `frontend-design`
-- `agents/scout.md:44-46` → `caveman`, `ripgrep`
-
-### 5.4 Integración con foreman
-
-| Situación | Quién actúa | Por qué |
-|-----------|-------------|---------|
-| Bug fix de 1 archivo | Builder (ad-hoc) | Sin overhead de plan_db |
-| Feature multi-archivo (3-5 files) | Builder (con plan_db) | Builder crea plan y tasks, ejecuta, completa |
-| Feature >5 archivos / arquitectura | Foreman | Requiere diseño, routing a múltiples agents |
-| Tarea cross-stack (Go + Vue) | Foreman | Foreman divide, delega a go-smith + vue-smith |
-| El user no sabe qué necesita | Foreman | Foreman aclara antes de actuar |
-| Auditoría de PR existente | Builder | No necesita plan; lee diff, reporta findings |
-| Exploración de código | Scout (vía foreman o directo) | Builder no explora |
-
-**Regla de convivencia:** builder y foreman comparten `plan_db`. Si builder crea un plan, foreman lo ve vía `plan_list`. Si foreman crea un plan con tareas para `builder`, builder las ve vía `task_next_for_agent`. No hay conflicto porque cada uno escribe/lee de la misma DB.
 
 ---
 
-## 6. Cambios al sistema
+## 6. Foreman nuevo flow: 4 pasos (planner puro)
 
-### 6.1 Migración v6: `original_plan_data` en `plans` y `plan_tasks`
+### 6.1 Comparativa 10 pasos → 4 pasos
+
+| v1 (10 pasos) | v2 (4 pasos) | Diferencia |
+|---------------|--------------|------------|
+| 1. Aclaración | **1. Aclaración** | Se conserva |
+| 2. Memory Search | **2. Exploración** | Se fusiona: memory + scout/scribe/sage/guild |
+| 3. Routing | — | Routing implícito en la exploración |
+| 4. Plan Atómico | **3. Plan Atómico** | Se conserva, más liviano |
+| 5. Brief de Delegación | — | Eliminado: craftsman lee plan_db directamente |
+| 6. Trivium en Vivo | — | Eliminado: craftsman implementa |
+| 7. Reconciliación | — | Eliminado: craftsman ejecuta todo |
+| 8. Validación | — | Eliminado: craftsman corre tests |
+| 9. Reporte Final | — | Eliminado: craftsman reporta |
+| — | **4. Persistir** | Nuevo: plan_create + write plan_db |
+
+### 6.2 Flujo detallado
+
+#### Paso 1: Aclaración
+- Identificar intención en 1-2 frases
+- Si ambigüedad: `question` al usuario
+- Si la tarea es ≤5 archivos y bien definida → sugerir `craftsman`
+- Si >5 archivos o requiere diseño → continuar con planificación
+
+#### Paso 2: Exploración
+- `memory({mode:"search", scope:"project"})` — decisiones pasadas
+- Delegar a subagentes según necesidad:
+  - `scout` — mapear repo, encontrar archivos, detectar stack
+  - `scribe` — investigar APIs, versiones, docs externas
+  - `sage` — evaluar trade-offs arquitectónicos
+  - `guild` — solo si usuario pide debate explícito
+- NO delegar a smiths, painter, chronicler, inspector
+
+#### Paso 3: Plan Atómico
+- Desglosar en ≤5 steps top-level
+- Cada step: `(Acción) → archivos esperados → dependencias`
+- Estimar complejidad (1-5) y riesgo (low/medium/high)
+
+#### Paso 4: Persistir
+- `plan_create` con slug, overview, approach
+- `task_create_batch` con steps (máximo 5, warning si >5)
+- NO crear `session_start` (lo hace craftsman al ejecutar)
+- NO ejecutar tasks — craftsman las toma via `task_next_for_agent`
+
+### 6.3 Routing table del foreman (v2)
+
+| Petición | Delegar a |
+|----------|-----------|
+| Explorar código / mapear repo | `scout` |
+| Investigar APIs / docs / versiones | `scribe` |
+| Arquitectura / trade-offs / debugging difícil | `sage` |
+| Debate multi-perspectiva | `guild` (solo manual) |
+
+NOTA: foreman solo planifica. Ejecución es craftsman. NO delegar a smiths, painter, chronicler, inspector.
+
+### 6.4 Output del foreman (v2)
+
+```
+**Objetivo:** [1 línea]
+**Exploración:** [scout/scribe/sage findings]
+**Plan:**
+  1. [acción] → archivos: [paths] → complejidad: N
+  2. [acción] → archivos: [paths] → complejidad: N
+**Persistido:** plan_id=[uuid] slug=[slug]
+**Siguiente:** cambiar a craftsman en TUI → task_next_for_agent
+```
+
+---
+
+## 7. Cambios al sistema
+
+### 7.1 Migración v6: `original_plan_data`
 
 | Campo | Tabla | Tipo | Comportamiento |
 |-------|-------|------|----------------|
-| `original_plan_data` | `plans` | `TEXT` | En `plan_create`: copiar `plan_data` + `overview` + `approach` como JSON inmutable |
-| `original_plan_data` | `plan_tasks` | `TEXT` | En `task_create_batch`: copiar `description` + `files` + `dependencies` como JSON inmutable |
+| `original_plan_data` | `plans` | `TEXT` | En `plan_create`: copiar snapshot de args como JSON |
+| `original_plan_data` | `plan_tasks` | `TEXT` | En `task_create_batch`: copiar `{description, files, dependencies}` como JSON |
 
 **Reglas:**
-- `plan_create` setea `original_plan_data` al mismo valor que `plan_data` en el INSERT
+- `plan_create` setea `original_plan_data` al serializar los args de entrada
 - `plan_approve` NO toca `original_plan_data`
 - `plan_update_status` NO toca `original_plan_data`
-- `archivePlan` lo lee y lo incluye en el markdown archive pero NO lo modifica
-- `task_create_batch` setea `original_plan_data` al serializar `{description, files, dependencies}`
+- `archivePlan` lo incluye en markdown pero NO lo modifica
+- `task_create_batch` setea `original_plan_data` por task
 
 **Archivos afectados:**
-- `src/db/schema.ts` — agregar columna vía `addColumnIfMissing` en migrations.ts (similar a v5 pattern)
-- `src/db/types.ts` — agregar `originalPlanData: string | null` a Plan y PlanTask
-- `src/db/plan-create.ts` — en `planCreateExecutor`, serializar args como `original_plan_data`
-- `src/db/tasks.ts` — en `createTasksBatch`, serializar cada task input como `original_plan_data`
-- `src/db/plan-archive.ts` — leer y exportar `original_plan_data` en el markdown archive
-- `src/db/plans.ts` — en `createPlan`, pasar `original_plan_data`; en `updatePlanStatus` y `approvePlan`, verificar que NO se sobrescribe
-- Nuevo: `src/db/plan-archive.test.ts` — test que verifica que `original_plan_data` es write-once
+- `src/db/schema.ts` — agregar columna vía `addColumnIfMissing` en migrations.ts (patrón v5)
+- `src/db/types.ts` — agregar `originalPlanData: string | null` a Plan y PlanTask, PlanRow, TaskRow
+- `src/db/plan-create.ts` — serializar `PlanCreateArgs` como `original_plan_data`
+- `src/db/tasks.ts` — serializar cada task input como `original_plan_data`; warning si `tasks.length > 5`
+- `src/db/plan-archive.ts` — leer y exportar `original_plan_data` en markdown archive
+- `src/db/plans.ts` — `createPlan` acepta `originalPlanData`; `updatePlanStatus` / `approvePlan` NO lo sobrescriben
 
-### 6.2 Migración v7: `plan_files` join table
+### 7.2 Migración v7: `plan_files`
 
 ```sql
 CREATE TABLE IF NOT EXISTS plan_files (
   plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
   file_path TEXT NOT NULL,
-  role TEXT,                              -- 'input' | 'output' | 'modified'
+  role TEXT,
   PRIMARY KEY (plan_id, file_path)
 );
 CREATE INDEX IF NOT EXISTS idx_plan_files_path ON plan_files(file_path);
 ```
 
 **Comportamiento:**
-- `plan_create` acepta `files: string[]` opcional → inserta en `plan_files` con role `'input'`
-- `task_create_batch` acepta `files: string[]` por task → inserta en `plan_files` con role `'modified'`
-- `plan_get` retorna `files[]` via subquery JOIN
+- `plan_create` acepta `files: string[]` opcional → inserta con role `'input'`
+- `task_create_batch` acepta `files: string[]` por task → inserta con role `'modified'`
+- `plan_get` retorna `files[]` via JOIN
 - `plan_search` acepta `file_path` filter opcional
 - `plan_delete` CASCADE borra `plan_files`
 - `archivePlan` incluye files en el markdown archive
 
 **Archivos afectados:**
-- `src/db/schema.ts` — agregar SCHEMA_V7_SQL con CREATE TABLE
-- `src/db/types.ts` — agregar `files: string[]` con role a Plan y PlanTask (ya existe `files` en PlanTask, extender Plan)
-- `src/db/plan-create.ts` — agregar `files?: string[]` a `PlanCreateArgs`, insertar en plan_files
-- `src/db/tasks.ts` — en `createTasksBatch`, si `files` no está vacío, insertar en plan_files
-- `src/db/plans.ts` — en `getPlan`, hacer JOIN con plan_files para `files[]`
-- `src/db/plan-archive.ts` — incluir files en el markdown
+- `src/db/schema.ts` — SCHEMA_V7_SQL con CREATE TABLE
+- `src/db/types.ts` — extender Plan/PlanTask con `files` array
+- `src/db/plan-create.ts` — `files?: string[]` en args, insertar en plan_files
+- `src/db/tasks.ts` — insertar en plan_files si `files` no vacío
+- `src/db/plans.ts` — `getPlan` JOIN con plan_files
+- `src/db/plan-archive.ts` — incluir files en markdown
 
-### 6.3 `plan_delete` safety
+### 7.3 Migración v8: `created_by_agent` + `executed_by_agent` + `executed_by_session`
 
-**Opción recomendada:** Nuevo tool `plan_delete` en `src/plugin.ts` + función en `src/db/plans.ts`.
-
-**Comportamiento:**
-- Recibe `{id: string, confirm: boolean}`
-- Rechaza si `confirm !== true` con error `"ndomo: plan_delete requires confirm: true"`
-- Rechaza si `plan.status === 'pending'` con error `"ndomo: cannot delete plan with status 'pending' — complete or abandon first"`
-- Rechaza si `task.status === 'pending' | 'running'` con error `"ndomo: plan has active tasks — resolve them first"`
-- Si pasa todas las validaciones: CASCADE delete (plan_tasks, plan_tags, plan_files, sessions con ON DELETE SET NULL)
-
-**Archivos afectados:**
-- `src/db/plans.ts` — nueva función `deletePlan(db, id)` con validaciones
-- `src/db/plans.test.ts` — nuevo test: delete success, delete reject pending, delete reject without confirm
-- `src/plugin.ts` — registrar tool `plan_delete`
-
-### 6.4 Plan ≤5 steps top-level
-
-**Dos capas de enforcement:**
-1. **Prompt del foreman** (`agents/foreman.md`): agregar regla "Planifica en pasos atómicos. Máximo 5 steps top-level. Si necesitas más, usa `parent_id` para sub-planes o pregunta al usuario."
-2. **Validación en `task_create_batch`** (`src/db/tasks.ts`): si `tasks.length > 5`, emitir warning al log (no bloquear, porque el usuario podría tener razón).
-
-### 6.5 Caveman en TODOS los agents
-
-Agregar `caveman` skill al frontmatter de los 14 subagents actuales:
-
-```yaml
-# Agregar a la sección de skills obligatorias de cada agent:
-skills:
-  - caveman
+```sql
+ALTER TABLE plans ADD COLUMN created_by_agent TEXT;
+ALTER TABLE plans ADD COLUMN executed_by_agent TEXT;
+ALTER TABLE plans ADD COLUMN executed_by_session TEXT REFERENCES sessions(id) ON DELETE SET NULL;
 ```
 
-**Agentes afectados:** chronicler, go-smith, guild, inspector, js-smith, painter, python-smith, rust-smith, sage, scout, scribe, smith, vue-smith, zig-smith.
+**Comportamiento:**
+- `plan_create`: setea `created_by_agent = ctx.agent` (write-once)
+- `task_update_status("running")` o `plan_update_status("executing")`: setea `executed_by_agent` y `executed_by_session` si es el primer running
+- `plan_approve` / `plan_update_status("completed")`: NO tocan estos campos
+- `getPlan`: retorna los campos en el objeto Plan
 
-**Diff:** en cada `agents/*.md`, agregar 2-3 líneas al inicio del prompt: *"Tono: caveman por default, nivel `full`. Activa siempre."*
+**Archivos afectados:**
+- `src/db/schema.ts` — `addColumnIfMissing` en migrations.ts
+- `src/db/types.ts` — agregar `createdByAgent`, `executedByAgent`, `executedBySession` a Plan y PlanRow
+- `src/db/plan-create.ts` — pasar `ctx.agent` como `createdByAgent`
+- `src/db/plans.ts` — en `updatePlanStatus`, setear `executed_by_agent`/`executed_by_session` al pasar a `executing`; en `createPlan`, setear `created_by_agent`
+- `src/db/plan-archive.ts` — incluir en markdown archive
 
-### 6.6 No cambios requeridos
+### 7.4 `plan_delete` safety
 
-| Componente | Estado | Razón |
-|------------|--------|-------|
-| `opencode.json` / `~/.config/opencode/opencode.json` | Sin cambios | Foreman sigue siendo `default_agent`. Builder se activa manualmente en TUI. |
-| `agents/foreman.md` | Sin cambios estructurales | Foreman sigue operando igual. Solo recibirá la regla ≤5 steps y la nota de que builder existe. |
-| `src/orchestrator/scheduler.ts` | Sin cambios | Builder no usa scheduler. Decide su ruta en el prompt. |
-| `src/db/sessions.ts` | Sin cambios | Bug del `ctx.sessionID` queda como tech debt. |
-| `docs/bugs/plan-create-orphan-fk.md` | Sin cambios | Bug documentado, no resuelto en este spec. |
+**Tool:** Nuevo en `src/plugin.ts`
 
----
+**Función:** `deletePlan(db, id, confirm)` en `src/db/plans.ts`
 
-## 7. Acceptance criteria
+**Validaciones:**
+1. `typeof confirm !== 'boolean' || confirm !== true` → error `"ndomo: plan_delete requires confirm: true"`
+2. `plan.status === 'draft'` → error `"ndomo: cannot delete a draft plan — use abandonPlan or approve first"`
+3. Existen tasks con `status IN ('pending', 'running')` → error `"ndomo: plan has active tasks — resolve them first"`
 
-### 7.1 Builder existe y es primary
+**Si pasa:** `DELETE FROM plans WHERE id = ?` (CASCADE: plan_tasks, plan_tags, plan_files; sessions → SET NULL)
 
-- [ ] `agents/builder.md` existe con frontmatter: `mode: primary`, `task: allow` solo a subagents, `plan_db: allow`
-- [ ] `agents/builder.md` tiene prompt completo con 3 estados de trabajo (trivial, ad-hoc plan_db, formal plan_db)
-- [ ] User puede cambiar a builder en TUI sin pasar por foreman
+### 7.5 Plan ≤5 steps soft warning
 
-### 7.2 Stack detection + skill loading
+En `src/db/tasks.ts`, función `createTasksBatch`:
 
-- [ ] Builder puede delegar a `scout` via `task` para detección de stack
-- [ ] Builder carga max 5 skills por sesión según stack detectado
-- [ ] Tabla marker→skill existe en el prompt y cubre: Go, Vue, JS/TS, Rust, Python, Zig, generic
+```typescript
+if (tasks.length > 5) {
+  console.warn(`[ndomo] plan ${planId} has ${tasks.length} tasks (>5): consider splitting`);
+}
+```
 
-### 7.3 plan_db opcional
+No bloquea. Warning visible en logs de OpenCode.
 
-- [ ] Builder ejecuta tarea trivial (1 archivo, ≤50 líneas) sin crear `plan_create`
-- [ ] Builder crea `plan_create` + `task_create_batch` para tarea multi-archivo
-- [ ] Builder reporta resultado al user en formato caveman en ambos modos
+### 7.6 Caveman global en 14 agents
 
-### 7.4 Builder NO invoca primaries
+Insertar snippet estándar después del frontmatter YAML, antes del primer heading:
 
-- [ ] `task` a `foreman` produce error o es ignorado por builder
-- [ ] `task` a `chronicler`/`inspector`/`painter`/`sage`/`guild` produce error (son primaries o roles específicos)
-- [ ] `task` a `scout`, `scribe`, `smith`, `*-smith` funciona correctamente
+```
+Tono: caveman por default, nivel full. Activa siempre.
+Excepción: prosa normal para advertencias de seguridad,
+acciones irreversibles o ambigüedad multi-paso.
+```
 
-### 7.5 Migraciones DB
-
-- [ ] Migración v6 aplica limpio a DB existente con datos reales
-- [ ] Migración v7 aplica limpio a DB existente con datos reales
-- [ ] `original_plan_data` es write-once: `plan_create` lo setea, `plan_approve`/`plan_update_status` no lo tocan
-- [ ] Test unitario verifica audit trail inmutable
-- [ ] `plan_files` inserta correctamente en `plan_create` con `files[]`
-- [ ] `plan_files` inserta correctamente en `task_create_batch`
-- [ ] CASCADE delete funciona en `plan_delete`
-
-### 7.6 plan_delete safety
-
-- [ ] `plan_delete` rechaza sin `confirm: true`
-- [ ] `plan_delete` rechaza si `status='pending'`
-- [ ] `plan_delete` rechaza si hay tasks `pending`/`running`
-- [ ] `plan_delete` ejecuta CASCADE si pasa validaciones
-
-### 7.7 Plan ≤5 steps
-
-- [ ] `agents/foreman.md` contiene regla de ≤5 steps top-level
-- [ ] `task_create_batch` emite warning si >5 tasks (no bloquea)
-
-### 7.8 Caveman global
-
-- [ ] Los 14 subagents existentes tienen `caveman` en frontmatter o prompt
-- [ ] `agents/builder.md` tiene caveman activo
-
-### 7.9 Tests
-
-- [ ] Test cubre flujo trivial de builder (no crea plan_db, reporta directo)
-- [ ] Test cubre flujo multi-archivo de builder (crea plan_db, tasks, completa)
-- [ ] Test cubre `plan_delete` safety (3 sub-casos)
-- [ ] Test cubre `original_plan_data` write-once
-- [ ] Test cubre `plan_files` insert + query + CASCADE
-
-### 7.10 Docs
-
-- [ ] `docs/agents.md` describe builder (rol, cuándo usar, diferencia con foreman)
-- [ ] `docs/workflows.md` tiene árbol de decisión actualizado (ver sección 10.2 abajo)
+**Archivos:** `agents/chronicler.md`, `agents/go-smith.md`, `agents/guild.md`, `agents/inspector.md`, `agents/js-smith.md`, `agents/painter.md`, `agents/python-smith.md`, `agents/rust-smith.md`, `agents/sage.md`, `agents/scout.md`, `agents/scribe.md`, `agents/smith.md`, `agents/vue-smith.md`, `agents/zig-smith.md`.
 
 ---
 
-## 8. Plan de implementación por fases
+## 8. Acceptance criteria
 
-### Fase 1: Migraciones DB + tests (1-2h)
+### 8.1 Craftsman existe y es primary
+- [ ] `agents/craftsman.md` existe con `mode: primary`, frontmatter completo
+- [ ] Prompt cubre 4 estados con threshold 2/5/1
+- [ ] User puede cambiar a craftsman en TUI
 
-**Qué:**
-1. Agregar `original_plan_data TEXT` a `plans` y `plan_tasks` (migration v6)
-2. Crear `plan_files` join table (migration v7)
-3. Implementar `deletePlan` en `src/db/plans.ts` con safety checks
-4. Tests unitarios: `plan-archive.test.ts`, `plans.test.ts` (delete), `plan-create.test.ts` (audit trail)
+### 8.2 Threshold 2/5/1 funcional
+- [ ] Estado 1: tarea ≤2 archivos → implementa sin plan_db
+- [ ] Estado 2: tarea 3-5 archivos → crea plan_db + tasks
+- [ ] Estado 3: plan existente → ejecuta tasks asignadas
+- [ ] Estado 4: tarea >5 archivos → reporta fuera de dominio
 
-**Archivos tocados:**
-- `src/db/schema.ts` (SCHEMA_V6_SQL, SCHEMA_V7_SQL, MIGRATIONS array)
-- `src/db/migrations.ts` (addColumnIfMissing para v6)
-- `src/db/types.ts` (interfaces Plan, PlanTask)
-- `src/db/plans.ts` (createPlan, getPlan, new deletePlan)
-- `src/db/tasks.ts` (createTasksBatch)
-- `src/db/plan-create.ts` (PlanCreateArgs, planCreateExecutor)
-- `src/db/plan-archive.ts` (serializePlanToMarkdown)
-- `src/db/plans.test.ts` (nuevos tests)
-- `src/db/plan-create.test.ts` (nuevo test audit trail)
+### 8.3 Routing interno del craftsman
+- [ ] Delegación por extensión: .go → go-smith, .vue → vue-smith, etc.
+- [ ] `metadata.stack` override funciona
+- [ ] LLM fallback a `smith` genérico
 
-### Fase 2: agents/builder.md + skill loading (2-3h)
+### 8.4 Painter solo vía craftsman
+- [ ] Foreman NO lista painter en su routing
+- [ ] Craftsman puede delegar a painter si `stack === "vue"` y `type === "design"`
+- [ ] Craftsman usa vue-smith para UI no-design
 
-**Qué:**
-1. Crear `agents/builder.md` con frontmatter y prompt completo (esqueleto de la sección 5.2)
-2. Implementar lógica de stack detection delegando a `scout` (task prompt fijo)
-3. Implementar skill loading dinámico con max 5
-4. Probar manualmente: abrir builder en TUI, dar tarea trivial, verificar que no crea plan_db
+### 8.5 Cross-session close
+- [ ] `plan_create` setea `created_by_agent` (write-once)
+- [ ] Primer `task_update_status("running")` setea `executed_by_agent` + `executed_by_session`
+- [ ] Campos no se sobrescriben en updates posteriores
 
-**Archivos tocados:**
-- `agents/builder.md` (nuevo)
-- `agents/scout.md` (agregar instrucción de detección de stack si no existe — opcional, puede resolverse en el task prompt del builder)
-- Ningún archivo de código nuevo (skill loading usa tool `skill` existente)
+### 8.6 Migraciones DB
+- [ ] v6: `original_plan_data` write-once en plans y plan_tasks
+- [ ] v7: `plan_files` insert + query + CASCADE
+- [ ] v8: `created_by_agent`, `executed_by_agent`, `executed_by_session` en plans
+- [ ] Migraciones aplican limpias a DB existente
 
-### Fase 3: Integración con foreman + caveman global (1-2h)
+### 8.7 `plan_delete` safety
+- [ ] Rechaza sin `confirm: true`
+- [ ] Rechaza si `status='draft'`
+- [ ] Rechaza si hay tasks pending/running
+- [ ] CASCADE ejecuta correctamente
 
-**Qué:**
-1. Agregar regla ≤5 steps al foreman (prompt + warning en task_create_batch)
-2. Agregar caveman a los 14 subagents (diff mecánico)
-3. Registrar `plan_delete` como tool MCP en `src/plugin.ts`
-4. Verificar que builder y foreman no colisionan en plan_db
+### 8.8 Plan ≤5 steps
+- [ ] `agents/foreman.md` contiene regla de ≤5 steps
+- [ ] `task_create_batch` emite console.warn si >5 tasks
 
-**Archivos tocados:**
-- `agents/foreman.md` (regla ≤5 steps, nota sobre builder)
-- `agents/*.md` (14 archivos, agregar caveman)
-- `src/plugin.ts` (registrar plan_delete)
-- `src/db/tasks.ts` (warning si >5 tasks)
+### 8.9 Caveman global
+- [ ] 14 agents tienen snippet caveman estándar
+- [ ] Craftsman tiene caveman en prompt
+- [ ] Foreman ya tenía caveman (no duplicar)
 
-### Fase 4: Docs + smoke tests (1h)
+### 8.10 Tests y verificación
+- [ ] `plan_delete` tests (3 sub-casos)
+- [ ] `original_plan_data` write-once test
+- [ ] `plan_files` insert + query + CASCADE test
+- [ ] Audit trail write-once test (v8)
+- [ ] `bun run typecheck` pasa sin errores
+- [ ] `bun test` pasa (suite completa)
 
-**Qué:**
-1. Actualizar `docs/agents.md` con builder
-2. Actualizar `docs/workflows.md` con árbol de decisión actualizado
-3. Smoke test end-to-end: cambiar a builder → tarea trivial → verificar output sin plan_db
-4. Smoke test: builder → tarea multi-archivo → verificar plan creado
-
-**Archivos tocados:**
-- `docs/agents.md` (nueva sección builder)
-- `docs/workflows.md` (nuevo diagrama de decisión)
-
----
-
-## 9. Riesgos y trade-offs
-
-### R1. Abuso del builder para tareas grandes
-
-**Riesgo:** Builder tiene `edit: allow` + `task: allow`. El user podría usarlo para features complejas sin plan_db, saltándose el foreman incluso cuando debería planificar.
-
-**Mitigación (3 capas):**
-1. **Prompt:** Builder tiene regla explícita ">5 archivos → fuera de mi dominio"
-2. **Modelo:** builder usa temperatura 0.1, más predecible, menos propenso a auto-expandir scope
-3. **Documentación:** `docs/workflows.md` explica el árbol de decisión: foreman para >5 archivos o diseño de arquitectura
-
-**Severidad:** baja (el user siempre puede abusar; el sistema es una herramienta, no un guardián).
-
-### R2. Crecimiento de DB con `original_plan_data`
-
-**Riesgo:** La columna duplica `plan_data` (2x tamaño por fila). En proyectos con cientos de planes, puede sumar MB.
-
-**Mitigación:**
-1. `original_plan_data` se archiva a markdown cuando el plan se completa (auto-archive)
-2. Archivar borra el plan de la DB activa (archived_at set)
-3. Si el tamaño es problema, agregar cleanup de plans archived >30 días
-
-**Severidad:** baja-muy baja (DB SQLite, planes son texto, 1000 planes ≈ 2-5MB extra).
-
-### R3. Caveman en 14 agents = 14 lugares donde mantener consistencia
-
-**Riesgo:** El tono caveman se vuelve inconsistente entre agents si se editan individualmente.
-
-**Mitigación:**
-1. Documentar el snippet exacto en `skills/caveman/SKILL.md` y referenciarlo en cada agent
-2. El snippet es: `"Tono: caveman por default, nivel {{level}}. Activa siempre. Excepción: prosa normal para advertencias de seguridad, acciones irreversibles o ambigüedad multi-paso."`
-3. Si se cambia el formato, buscar/replace en 14 archivos
-
-**Severidad:** baja (diff mecánico, 2 líneas por archivo).
-
-### R4. Skill loading dinámico sin LLM en la detección
-
-**Riesgo:** La detección de stack depende del researcher subagent (vía `task`), que podría alucinar markers o elegir skills incorrectas.
-
-**Mitigación:**
-1. El prompt de detección es fijo con tabla marker→skill (no generativa)
-2. Researcher solo reporta lo que encuentra en archivos reales (glob/grep)
-3. Builder carga skills secuencialmente y puede fallar graceful si la skill no existe
-
-**Severidad:** media-baja (el researcher puede fallar, pero builder puede cargar skill genérica como fallback).
-
-### R5. Bug `ctx.sessionID` no arreglado
-
-**Riesgo:** Builder usa `plan_create` en modo ad-hoc. Si el bug del FK de session persiste, los planes que cree builder también quedarán huérfanos en `draft`.
-
-**Mitigación:**
-1. El fix automático de `ensureSession` en `planCreateExecutor` (`src/db/plan-create.ts:39-41`) ya existe y resuelve el caso de `plan_create`
-2. Builder solo necesita `plan_create` + `plan_update_status("completed")` — no necesita `plan_approve`
-3. Si builder usa `plan_update_status` directamente, pasa por el mismo `ensureSession` scoped en `updatePlanStatus` (solo para `executing`/`approved`)
-4. Para `completed`/`failed`/`abandoned`, la validación FK está deshabilitada (ver `plans.ts:122`)
-
-**Conclusión:** el bug actual no afecta al builder. Solo afecta si builder intentara `plan_approve`, que no está en su flujo.
+### 8.11 Docs
+- [ ] `docs/agents.md` tiene sección craftsman (rol, cuándo usar, threshold 2/5/1)
+- [ ] `docs/workflows.md` árbol de decisión actualizado
 
 ---
 
-## 10. Referencias cruzadas
+## 9. Plan de implementación (5 fases)
 
-### 10.1 Archivos clave
+### Fase 0: Spec v2 + backup v1 (chronicler, ~30min)
+
+**Qué:**
+1. Backup `docs/features/feature-flexible-builder.md` → `-v1.md`
+2. Reescribir spec v2 con arquitectura craftsman + foreman 4 pasos + threshold 2/5/1
+
+**Archivos:**
+- `docs/features/feature-flexible-builder.md` (rewrite)
+- `docs/features/feature-flexible-builder-v1.md` (backup)
+
+### Fase 1: Migraciones DB + tests (js-smith, ~2h)
+
+**Qué:**
+1. v6: `original_plan_data` en plans + plan_tasks
+2. v7: `plan_files` join table
+3. v8: `created_by_agent` + `executed_by_agent` + `executed_by_session`
+4. `deletePlan` en `src/db/plans.ts` con safety checks
+5. Tests: `plans.test.ts` (delete), `plan-files.test.ts`, `migrations-v8.test.ts`
+
+**Archivos:** Ver sección 7.1, 7.2, 7.3, 7.4
+
+### Fase 2: `agents/craftsman.md` (chronicler, ~1h)
+
+**Qué:**
+1. Crear `agents/craftsman.md` con frontmatter + prompt 4 estados + routing + cross-session close
+
+**Archivos:**
+- `agents/craftsman.md` (nuevo)
+
+**Dependencia:** Phase 1 (para referencias DB en el prompt)
+
+### Fase 3: Foreman rewrite + caveman global (smith/chronicler, ~1.5h)
+
+**Qué:**
+1. Rewrite `agents/foreman.md` a 4 pasos: Aclaración→Exploración→Plan Atómico→Persistir
+2. Agregar caveman a 14 agents (diff mecánico)
+3. Registrar `plan_delete` en `src/plugin.ts`
+4. Soft warning ≤5 tasks en `src/db/tasks.ts`
+
+**Archivos:**
+- `agents/foreman.md` (rewrite)
+- `agents/*.md` (14 archivos, +caveman)
+- `src/plugin.ts` (+plan_delete tool)
+- `src/db/tasks.ts` (+warning)
+
+**Dependencia:** Phase 2 (foreman routing ya no incluye smiths)
+
+### Fase 4: Docs + smoke tests (chronicler, ~1h)
+
+**Qué:**
+1. Actualizar `docs/agents.md` con craftsman
+2. Actualizar `docs/workflows.md` con árbol de decisión
+3. Smoke tests checklist (no automatizados):
+   - Foreman flow 4 pasos: plan_create + task_create_batch
+   - Craftsman Estado 1: ≤2 archivos, sin plan_db
+   - Craftsman Estado 4: >5 archivos → rechazo
+4. `bun run typecheck` y `bun test` verdes
+
+**Archivos:**
+- `docs/agents.md` (nueva sección craftsman)
+- `docs/workflows.md` (árbol actualizado)
+
+**Dependencia:** Phase 2 + Phase 3
+
+---
+
+## 10. Riesgos y trade-offs
+
+### R1. Abuso del craftsman para tareas grandes
+
+**Riesgo:** Craftsman tiene `edit: allow` + `task: allow`. El user podría usarlo para features >5 archivos, saltándose el foreman.
+
+**Mitigación (2 capas):**
+1. **Prompt:** Estado 4 rechaza explícitamente >5 archivos
+2. **Modelo:** craftsman usa temperatura 0.1, menos propenso a auto-expandir scope
+
+**Severidad:** baja (el sistema es una herramienta, no un guardián).
+
+### R2. Separación manual foreman→craftsman confusa
+
+**Riesgo:** El user no sabe cuándo usar foreman vs craftsman, resultando en planes mal diseñados o implementaciones sin plan.
+
+**Mitigación:**
+1. Foreman en el Paso 1 (Aclaración) sugiere craftsman si la tarea es ≤5 archivos
+2. Craftsman en Estado 4 sugiere foreman si >5 archivos
+3. `docs/workflows.md` documenta árbol de decisión
+
+**Severidad:** media (curva de aprendizaje inicial).
+
+### R3. Crecimiento de DB con `original_plan_data`
+
+**Riesgo:** Duplica `plan_data` (2x por fila). En proyectos grandes, puede sumar MB.
+
+**Mitigación:**
+1. Auto-archive a markdown cuando el plan se completa
+2. Archivar setea `archived_at`, limpiando de DB activa
+
+**Severidad:** baja (SQLite, 1000 planes ≈ 2-5MB extra).
+
+### R4. Write-once no enforced en DB
+
+**Riesgo:** Los campos `created_by_agent`, `executed_by_agent`, `executed_by_session` y `original_plan_data` son write-once por convención, no por constraint DB.
+
+**Mitigación:**
+1. El código en `planCreateExecutor`, `createPlan`, `updatePlanStatus` verifica antes de setear
+2. Tests unitarios validan write-once behavior
+
+**Severidad:** baja (si se sobrescribe, es bug en el código, no en la DB).
+
+### R5. Caveman en 14 agents = 14 lugares de mantenimiento
+
+**Riesgo:** El snippet caveman puede volverse inconsistente si se edita en un agent y no en los otros.
+
+**Mitigación:**
+1. Snippet exacto documentado en spec (sección 7.6)
+2. Si cambia, buscar/replace en 14 archivos
+
+**Severidad:** baja (diff mecánico).
+
+### R6. Foreman sin acceso a smiths — posible fricción
+
+**Riesgo:** Si el user pide al foreman "implementa X en Go" y el foreman no puede delegar a go-smith directamente, el user debe cambiar manualmente a craftsman.
+
+**Mitigación:**
+1. Foreman en Paso 1 sugiere craftsman temprano
+2. Foreman puede planificar y craftsman ejecuta — el user cambia una vez
+
+**Severidad:** media-baja (un switch manual adicional vs delegación automática).
+
+---
+
+## 11. Referencias cruzadas
+
+### 11.1 Archivos clave
 
 | Archivo | Líneas relevantes | Notas |
 |---------|-------------------|-------|
-| `agents/foreman.md` | 162-200 (10 pasos), 29-34 (trivium ≤5 líneas), 238 (plan_db obligatorio) | Fuente de la rigidez |
-| `src/db/schema.ts` | 17-33 (plans table), 38-54 (plan_tasks), 60-73 (sessions), 466-497 (MIGRATIONS) | Schema actual para migrar |
-| `src/db/plans.ts` | 14-41 (createPlan), 113-147 (updatePlanStatus), 158-185 (approvePlan) | Puntos de inserción original_plan_data |
-| `src/db/tasks.ts` | 13-80 (createTasksBatch), 109-121 (truncation 16KB) | Puntos de inserción original_plan_data + warning ≤5 tasks |
-| `src/db/plan-create.ts` | 15-24 (PlanCreateArgs), 32-62 (planCreateExecutor) | Ya tiene ensureSession (Fix #1) |
-| `src/db/plan-archive.ts` | 43-121 (serializePlanToMarkdown), 169-257 (archivePlan) | Archivo a modificar para incluir original_plan_data |
-| `src/db/migrations.ts` | 16-21 (addColumnIfMissing), 23-57 (runMigrations) | Patrón para migraciones v6/v7 |
-| `src/db/types.ts` | 41-64 (Plan), 66-91 (PlanTask), 119-140 (PlanRow), 142-166 (TaskRow) | Tipos a extender |
-| `src/orchestrator/scheduler.ts` | 65-186 (routeTask), 41-47 (STACK_AGENTS) | Routing estático; builder no lo usa |
-| `docs/bugs/plan-create-orphan-fk.md` | 60-70 (ctx.sessionID collision), 88-103 (fix recommended) | Bug conocido, no arreglado en este spec |
+| `agents/foreman.md` | 1-21 (frontmatter), 162-200 (10 pasos v1) | Se reescribe a 4 pasos en Phase 3 |
+| `agents/craftsman.md` | (nuevo) | Creado en Phase 2 |
+| `src/db/schema.ts` | 8-497 (v1-v5), MIGRATIONS array 465-497 | Se agregan v6/v7/v8 |
+| `src/db/types.ts` | 41-64 (Plan), 66-91 (PlanTask), 119-166 (Rows) | Se extienden con nuevos campos |
+| `src/db/plans.ts` | createPlan, updatePlanStatus, approvePlan | Puntos de inserción original_plan_data + v8 |
+| `src/db/tasks.ts` | 13-80 (createTasksBatch), 109-121 (truncation) | original_plan_data + warning ≤5 |
+| `src/db/plan-create.ts` | 15-30 (PlanCreateArgs), 32-62 (planCreateExecutor) | ensureSession ya existe |
+| `src/db/plan-archive.ts` | serializePlanToMarkdown, archivePlan | Incluir nuevos campos |
+| `src/db/migrations.ts` | addColumnIfMissing, runMigrations | Patrón para v6/v7/v8 |
+| `src/plugin.ts` | 352-822 (tools) | Nuevo tool plan_delete + adjust plan_create |
+| `src/db/plans.ts` | (nueva función) | deletePlan con safety checks |
+| `docs/bugs/plan-create-orphan-fk.md` | 60-70, 88-103 | Bug conocido, no resuelto |
 
-### 10.2 Documentación del referencia
+### 11.2 Specs relacionados
 
-| Recurso | Contenido clave |
-|---------|-----------------|
-| `/tmp/opencode/ndomo-report.md` | Análisis completo del proyecto referencia (563 líneas) |
-| Sección 3.2 (prompts) | Prompts de architect/builder/qagent/researcher/tester |
-| Sección 4.1 (plan_db) | original_plan_data, plan_files, delete safety |
-| Sección 7.1 (árbol de decisión) | Flujo user → build/architect/builder/qagent |
-| Sección 7.2 (tres modos) | Single-turn, plan formal, ad-hoc |
-| Sección 9 (puntos portables) | 16 ideas priorizadas, de las cuales se portan: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.14, 9.15 |
-| `https://github.com/nicosup98/ndomo` | Repo referencia (opencode-core-slim bundle) |
-| Commit `167dc03` | `refactor(architect): coordinate with primaries via plan_db, not via task` |
-| Commit `9c1fb13` | `docs: clarify qagent ad-hoc audit flow + decouple from architect.md` |
+| Recurso | Relación |
+|---------|----------|
+| `docs/features/feature-flexible-builder-v1.md` | Spec original v1 (archivada). Define `builder` con 3 estados. Reemplazada por v2. |
+| `agents/foreman.md` | Prompt actual del foreman (10 pasos). Se reescribe en Phase 3. |
+| `docs/agents.md` | Se actualiza en Phase 4 con craftsman. |
+| `docs/workflows.md` | Se actualiza en Phase 4 con árbol de decisión. |
+| `src/db/schema.ts` | Schema DB actual (v1-v5). Migraciones v6+v7+v8 en spec. |
 
-### 10.3 Árbol de decisión actualizado (post-builder)
+### 11.3 Árbol de decisión actualizado
 
 ```
 User envía prompt
   │
-  ├─ ¿Tarea ≤1 archivo, ≤50 líneas, bien definida?
-  │   → Cambiar a `builder` en TUI
-  │   → Builder: Estado 1 (trivial, no plan_db)
-  │   → Implementa, commits, reporta
+  ├─ ¿Tarea ≤2 archivos, ≤50 líneas, bien definida?
+  │   → `craftsman` en TUI → Estado 1 (trivial, sin plan_db)
   │
-  ├─ ¿Tarea 2-5 archivos, multi-stack, necesita tracking?
-  │   → Cambiar a `builder` en TUI
-  │   → Builder: Estado 2 (ad-hoc con plan_db)
-  │   → Crea plan, tasks, implementa, completa
+  ├─ ¿Tarea 3-5 archivos, multi-stack, necesita tracking?
+  │   → `craftsman` en TUI → Estado 2 (ad-hoc con plan_db)
   │
-  ├─ ¿Tarea >5 archivos, diseño de arquitectura, o no sabe qué necesita?
-  │   → Cambiar a `foreman` en TUI
-  │   → Foreman: 10-step flow
-  │   → Crea plan, tasks, delega a smiths
+  ├─ ¿Tarea >5 archivos, diseño de arquitectura, o ambigua?
+  │   → `foreman` en TUI → 4 pasos: Aclaración → Exploración → Plan → Persistir
+  │   → Luego `craftsman` en TUI → Estado 3 (lee plan formal)
   │
-  ├─ ¿Auditoría de PR existente sin plan previo?
-  │   → Cambiar a `builder` en TUI (o futuro qagent)
-  │   → Builder: Estado 1 (lee diff, reporta findings)
+  ├─ ¿Auditoría de PR existente o tarea read-only?
+  │   → `craftsman` o `scout` según necesite escribir
   │
-  └─ ¿Tarea de exploración read-only?
-      → Cambiar a `scout` en TUI (o delegar desde foreman)
+  └─ ¿Exploración read-only?
+      → `scout` en TUI
 ```
 
 ---
 
-## Apéndice: Relación con el bug existente
+## Apéndice A: Decisiones del grill
 
-El bug documentado en `docs/bugs/plan-create-orphan-fk.md` sobre `ctx.sessionID` colisionando con `plan_approve`/`plan_update_status` **no se resuelve en este spec**. Razones:
-
-1. Builder no usa `plan_approve` — solo usa `plan_create` + `plan_update_status("completed")`
-2. `planUpdateStatus` ya tiene validación FK scoped: solo chequea `sessionId` para status `executing`/`approved` (`src/db/plans.ts:122`). Para `completed`/`failed`/`abandoned`, salta la validación.
-3. `planCreateExecutor` ya tiene `ensureSession` automático (`src/db/plan-create.ts:39-41`), así que cualquier plan creado por builder tiene la sesión asegurada.
-
-**Impacto:** El bug no afecta al builder en su flujo normal. Si en el futuro builder necesitara `plan_approve`, habría que aplicar el Fix (a) recomendado en el bug doc.
+| Decisión | Opción elegida | Alternativas descartadas |
+|----------|---------------|--------------------------|
+| Nombre del primary | `craftsman` | `builder` (v1), `implementer`, `artisan` |
+| Threshold | 2/5/1 (≤2 Estado 1, 3-5 Estado 2, >5 Estado 4) | 1/2-5 (v1), 1/3-5/6+ |
+| Estados del craftsman | 4 (trivial / multi-archivo / plan formal / fuera dominio) | 3 (v1) |
+| Foreman pasos | 4 (Aclaración / Exploración / Plan / Persistir) | 10 (v1), 6, 3 |
+| Painter routing | Solo craftsman | Foreman + craftsman |
+| Cross-session close | `created_by_agent` + `executed_by_agent` + `executed_by_session` | Solo `created_by` |
+| `plan_delete` fase | Phase 1 (priorizada) | Phase 3 (v1) |
+| Plan ≤5 steps | Soft warning (no bloqueo) | Bloqueo estricto |
+| Caveman snippet | Estándar en 14 agents | Caveman solo en prompt |
 
 ---
 
-*Fin del feature spec — 683 líneas*
+## Apéndice B: Relación con bugs existentes
+
+### Bug `ctx.sessionID` (`docs/bugs/plan-create-orphan-fk.md`)
+
+No se resuelve en este spec. Craftsman usa `plan_create` + `plan_update_status("completed")`:
+- `planCreateExecutor` ya tiene `ensureSession` automático (`src/db/plan-create.ts:39-41`)
+- `planUpdateStatus` solo chequea FK para status `executing`/`approved` (`src/db/plans.ts:122`)
+- Craftsman no usa `plan_approve`
+
+**Impacto:** El bug no afecta al flujo craftsman.
+
+### Truncation 16KB (`src/db/tasks.ts:109-121`)
+
+No se resuelve en este spec. Craftsman genera resultados pequeños (formato caveman). Si un sub-smith produce output grande, el truncation aplica igual que hoy.
+
+---
+
+*Fin del feature spec v2 — ~600 líneas*

@@ -408,7 +408,7 @@ CREATE INDEX IF NOT EXISTS idx_plans_archived ON plans(archived_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_archived ON plan_tasks(archived_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived_at);
 
--- Fix: plan_progress view must exclude archived tasks from counts
+-- Fix: plan_progress view must exclude archived plans AND archived tasks from counts
 DROP VIEW IF EXISTS plan_progress;
 CREATE VIEW plan_progress AS
 SELECT
@@ -428,6 +428,7 @@ SELECT
   END AS progress_pct
 FROM plans p
 LEFT JOIN plan_tasks t ON t.plan_id = p.id AND t.archived_at IS NULL
+WHERE p.archived_at IS NULL
 GROUP BY p.id;
 
 -- Fix: plans_fts_v2 was contentless (content='') — columns return NULL on SELECT,
@@ -462,6 +463,71 @@ END;
 INSERT INTO plans_fts_v2(plans_fts_v2) VALUES ('rebuild');
 `;
 
+/**
+ * v6: write-once audit trail — original_plan_data on plans + plan_tasks.
+ *
+ * Columns added via addColumnIfMissing() in migrations.ts (idempotent ALTER TABLE).
+ * This SQL is intentionally empty — all DDL is in migrations.ts for this version.
+ */
+export const SCHEMA_V6_SQL =
+  "-- v6: original_plan_data columns added via addColumnIfMissing in migrations.ts";
+
+/**
+ * v7: plan_files join table — M:N relationship between plans and files.
+ *
+ * Tracks which files are associated with a plan and their role (e.g., 'input', 'output', 'reference').
+ */
+export const SCHEMA_V7_SQL = `
+CREATE TABLE IF NOT EXISTS plan_files (
+  plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'input',
+  PRIMARY KEY (plan_id, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_files_plan ON plan_files(plan_id);
+`;
+
+/**
+ * v8: agent execution tracking — created_by_agent, executed_by_agent, executed_by_session.
+ *
+ * Columns added via addColumnIfMissing() in migrations.ts (idempotent ALTER TABLE).
+ * executed_by_session is a FK to sessions(id) validated at app level.
+ * This SQL is intentionally empty — all DDL is in migrations.ts for this version.
+ */
+export const SCHEMA_V8_SQL =
+  "-- v8: agent tracking columns added via addColumnIfMissing in migrations.ts";
+
+/**
+ * v9: plan_progress view fix — exclude archived plans.
+ *
+ * DBs that already had schema_version >= 5 when the fix landed in v5
+ * never re-ran v5, so they still have the old view without archived_at filters.
+ * This migration recreates the view unconditionally (DROP + CREATE).
+ */
+export const SCHEMA_V9_SQL = `
+DROP VIEW IF EXISTS plan_progress;
+CREATE VIEW plan_progress AS
+SELECT
+  p.id AS plan_id,
+  p.slug,
+  p.title,
+  p.status,
+  COUNT(t.id) AS total_tasks,
+  SUM(CASE WHEN t.status = 'done'     THEN 1 ELSE 0 END) AS done,
+  SUM(CASE WHEN t.status = 'failed'   THEN 1 ELSE 0 END) AS failed,
+  SUM(CASE WHEN t.status = 'running'  THEN 1 ELSE 0 END) AS running,
+  SUM(CASE WHEN t.status = 'pending'  THEN 1 ELSE 0 END) AS pending,
+  SUM(CASE WHEN t.status = 'blocked'  THEN 1 ELSE 0 END) AS blocked,
+  CASE
+    WHEN COUNT(t.id) = 0 THEN 0
+    ELSE ROUND(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) * 100.0 / COUNT(t.id))
+  END AS progress_pct
+FROM plans p
+LEFT JOIN plan_tasks t ON t.plan_id = p.id AND t.archived_at IS NULL
+WHERE p.archived_at IS NULL
+GROUP BY p.id;
+`;
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -493,5 +559,26 @@ export const MIGRATIONS: Array<{
     version: 5,
     description: "soft delete: archived_at columns on plans/tasks/sessions + composite indexes",
     sql: SCHEMA_V5_SQL,
+  },
+  {
+    version: 6,
+    description: "write-once audit trail: original_plan_data on plans + plan_tasks",
+    sql: SCHEMA_V6_SQL,
+  },
+  {
+    version: 7,
+    description: "plan_files join table: M:N plans-files with role",
+    sql: SCHEMA_V7_SQL,
+  },
+  {
+    version: 8,
+    description:
+      "agent execution tracking: created_by_agent, executed_by_agent, executed_by_session on plans",
+    sql: SCHEMA_V8_SQL,
+  },
+  {
+    version: 9,
+    description: "plan_progress view fix: exclude archived plans from progress view",
+    sql: SCHEMA_V9_SQL,
   },
 ];

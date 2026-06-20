@@ -21,6 +21,7 @@ export interface PlanCreateArgs {
   complexity?: number | undefined;
   sessionId?: string | undefined;
   metadata?: PlanMetadata | undefined;
+  files?: string[] | undefined;
 }
 
 export interface PlanCreateContext {
@@ -39,7 +40,7 @@ export function planCreateExecutor(
   if (ctx.sessionID) {
     ensureSession(db, ctx.sessionID, `Plan: ${args.title}`);
   }
-  return createPlan(db, {
+  const plan = createPlan(db, {
     id: crypto.randomUUID(),
     slug: args.slug,
     title: args.title,
@@ -58,5 +59,20 @@ export function planCreateExecutor(
     category: typedMeta.category ?? null,
     metadata: typedMeta,
     archivedAt: null,
+    originalPlanData: null,
+    createdByAgent: ctx.agent ?? null,
+    executedByAgent: null,
+    executedBySession: null,
   });
+
+  // Issue 3: insert files into plan_files with role='input'
+  if (args.files && args.files.length > 0) {
+    for (const filePath of args.files) {
+      db.query(
+        "INSERT OR IGNORE INTO plan_files (plan_id, file_path, role) VALUES (?, ?, 'input')",
+      ).run(plan.id, filePath);
+    }
+  }
+
+  return plan;
 }

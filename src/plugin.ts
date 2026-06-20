@@ -23,6 +23,7 @@ import { archivePlan, resolveArchiveDir } from "./db/plan-archive.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
 import {
   approvePlan,
+  deletePlan,
   getPlan,
   getPlanBySlug,
   listPlans,
@@ -52,6 +53,20 @@ import {
   verifyIntegrity,
 } from "./lib.ts";
 import type { RoutingDecision } from "./lib.ts";
+
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
+/**
+ * Safely extract a filepath from tool args (write/edit tools).
+ * The SDK types `args` as `any` — it can be null, undefined, or any shape.
+ * Returns `undefined` when filepath is absent, null, or not a string.
+ */
+function extractFilePath(args: unknown): string | undefined {
+  if (args == null || typeof args !== "object") return undefined;
+  const record = args as Record<string, unknown>;
+  const fp = record.filePath ?? record.filepath;
+  return typeof fp === "string" ? fp : undefined;
+}
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -250,7 +265,7 @@ export const NdomoPlugin: Plugin = async (
 
   const hooks: Hooks = {
     // (a) Inject orchestrator state into session compaction context
-    "experimental.session.compacting": async (_input, output) => {
+    "experimental.session.compacting": async (input, output) => {
       const count = dispatcher.getActive().length;
       const paths = Array.from(activeWrites.keys()).join(", ");
       output.context.push(
@@ -266,7 +281,7 @@ export const NdomoPlugin: Plugin = async (
 
       // Enrich compaction context with DB state
       try {
-        const sessionId = (_input as { sessionID?: string }).sessionID ?? "";
+        const sessionId = input.sessionID ?? "";
         if (sessionId) {
           const activePlans = listPlans(db, { sessionId }).filter(
             (p) => p.status === "approved" || p.status === "executing",
@@ -312,14 +327,12 @@ export const NdomoPlugin: Plugin = async (
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "write" && input.tool !== "edit") return;
 
-      const args = output.args as Record<string, unknown> | undefined;
-      const filepath =
-        (args?.filePath as string | undefined) ?? (args?.filepath as string | undefined);
+      const filepath = extractFilePath(output.args);
       if (!filepath) return;
 
       const key = `${input.sessionID}:${input.callID}`;
       const existing = activeWrites.get(filepath);
-      if (existing !== undefined && existing !== key) {
+      if (existing != null && existing !== key) {
         throw new Error(`ndomo: file locked by active task ${existing}`);
       }
       activeWrites.set(filepath, key);
@@ -329,9 +342,7 @@ export const NdomoPlugin: Plugin = async (
     "tool.execute.after": async (input) => {
       if (input.tool !== "write" && input.tool !== "edit") return;
 
-      const args = input.args as Record<string, unknown> | undefined;
-      const filepath =
-        (args?.filePath as string | undefined) ?? (args?.filepath as string | undefined);
+      const filepath = extractFilePath(input.args);
       if (filepath) {
         activeWrites.delete(filepath);
       }
@@ -545,6 +556,7 @@ export const NdomoPlugin: Plugin = async (
           complexity: tool.schema.number().int().min(1).max(5).optional(),
           sessionId: tool.schema.string().optional(),
           metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+          files: tool.schema.array(tool.schema.string()).optional(),
         },
         execute: async (args, ctx) => {
           return JSON.stringify(planCreateExecutor(db, args, ctx));
@@ -561,7 +573,12 @@ export const NdomoPlugin: Plugin = async (
           if (!args.id && !args.slug) {
             throw new Error("ndomo: plan_get requires id or slug");
           }
-          const plan = args.id ? getPlan(db, args.id) : getPlanBySlug(db, args.slug as string);
+          let plan = null;
+          if (args.id) {
+            plan = getPlan(db, args.id);
+          } else if (args.slug) {
+            plan = getPlanBySlug(db, args.slug);
+          }
           return JSON.stringify(plan);
         },
       }),
@@ -614,6 +631,18 @@ export const NdomoPlugin: Plugin = async (
         },
       }),
 
+      plan_delete: tool({
+        description:
+          "Permanently delete a plan and all its data (tasks, files, tags). Requires confirm: true. Rejects draft plans and plans with active tasks.",
+        args: {
+          id: tool.schema.string(),
+          confirm: tool.schema.boolean(),
+        },
+        execute: async (args) => {
+          return JSON.stringify(deletePlan(db, args.id, { confirm: args.confirm }));
+        },
+      }),
+
       plan_update_status: tool({
         description:
           "Update a plan's status (draft, approved, executing, completed, failed, abandoned). Auto-archives to markdown on terminal status.",
@@ -629,10 +658,21 @@ export const NdomoPlugin: Plugin = async (
           ]),
         },
         execute: async (args, ctx) => {
-          const updated = updatePlanStatus(db, args.id, args.status as PlanStatus, {
-            sessionId: ctx.sessionID,
+          const opts: {
+            sessionId?: string;
+            updatedBy: string;
+            executedByAgent?: string;
+            executedBySession?: string;
+          } = {
             updatedBy: ctx.agent ?? "unknown",
-          });
+          };
+          if (ctx.sessionID) opts.sessionId = ctx.sessionID;
+          // v8: write-once executed_by when plan enters 'executing'
+          if (args.status === "executing") {
+            opts.executedByAgent = ctx.agent ?? "unknown";
+            if (ctx.sessionID) opts.executedBySession = ctx.sessionID;
+          }
+          const updated = updatePlanStatus(db, args.id, args.status as PlanStatus, opts);
 
           // Auto-archive on terminal status
           const TERMINAL_STATUSES = new Set(["completed", "failed", "abandoned"]);
@@ -641,7 +681,9 @@ export const NdomoPlugin: Plugin = async (
 
           if (updated && TERMINAL_STATUSES.has(args.status)) {
             try {
-              archiveResult = archivePlan(db, updated.id, { memDir: resolveArchiveDir(worktree || directory) });
+              archiveResult = archivePlan(db, updated.id, {
+                memDir: resolveArchiveDir(worktree || directory),
+              });
             } catch (err) {
               archiveError = err instanceof Error ? err.message : String(err);
               console.warn(`[ndomo] auto-archive failed for plan ${updated.id}: ${archiveError}`);
@@ -738,6 +780,7 @@ export const NdomoPlugin: Plugin = async (
               args.status as TaskStatus,
               fields,
               ctx.agent ?? "unknown",
+              { agent: ctx.agent, sessionId: ctx.sessionID },
             ),
           );
         },

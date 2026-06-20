@@ -7,6 +7,8 @@
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { escapeFtsQuery } from "./fts-escape.ts";
+import { setExecutedByOnce } from "./plans.ts";
+import { ensureSession } from "./sessions.ts";
 import type { PlanTask, TaskMetadata, TaskStatus } from "./types.ts";
 import { taskFromRow } from "./types.ts";
 
@@ -16,19 +18,59 @@ export function createTasksBatch(
   tasks: Array<
     Omit<
       PlanTask,
-      "id" | "planId" | "status" | "startedAt" | "completedAt" | "result" | "error" | "archivedAt"
+      | "id"
+      | "planId"
+      | "status"
+      | "startedAt"
+      | "completedAt"
+      | "result"
+      | "error"
+      | "archivedAt"
+      | "originalPlanData"
     >
   >,
 ): PlanTask[] {
+  // v6: soft warning for large task batches
+  if (tasks.length > 5) {
+    console.warn(
+      `ndomo: creating ${tasks.length} tasks in batch for plan ${planId} — consider splitting large plans`,
+    );
+  }
+
+  // F1: pre-dispatch overlap check — skip tasks with same (planId, agent, description)
+  //     that already exist (any status, not archived). Prevents duplicate task creation.
+  const existingSignatures = new Set<string>();
+  const existingRows = db
+    .query("SELECT agent, description FROM plan_tasks WHERE plan_id = ? AND archived_at IS NULL")
+    .all(planId) as Array<{ agent: string; description: string }>;
+  for (const row of existingRows) {
+    existingSignatures.add(`${row.agent}::${row.description}`);
+  }
+
   const results: PlanTask[] = [];
   const txn = db.transaction(() => {
     for (const t of tasks) {
+      // Skip if task with same (agent, description) already exists for this plan
+      const sig = `${t.agent}::${t.description}`;
+      if (existingSignatures.has(sig)) {
+        continue;
+      }
       const i = results.length;
       const id = crypto.randomUUID();
       const orderIndex = t.orderIndex ?? i;
+      // v6: write-once snapshot of task data
+      const originalPlanData = JSON.stringify({
+        description: t.description,
+        agent: t.agent,
+        files: t.files ?? [],
+        complexity: t.complexity,
+        dependencies: t.dependencies ?? [],
+        orderIndex,
+        createdBy: t.createdBy,
+      });
       db.query(
-        `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         planId,
@@ -40,13 +82,14 @@ export function createTasksBatch(
         JSON.stringify(t.dependencies ?? []),
         JSON.stringify(t.metadata ?? {}),
         t.createdBy,
-        t.updatedBy,
+        t.updatedBy ?? t.createdBy,
         t.sourceSessionId ?? null,
         t.sourceMessageId ?? null,
         t.reviewedBy ?? null,
         t.tokensUsed ?? null,
         t.durationMs ?? null,
         JSON.stringify(t.artifacts ?? []),
+        originalPlanData,
       );
       results.push({
         id,
@@ -63,7 +106,7 @@ export function createTasksBatch(
         error: null,
         dependencies: t.dependencies ?? [],
         createdBy: t.createdBy,
-        updatedBy: t.updatedBy,
+        updatedBy: t.updatedBy ?? t.createdBy ?? "unknown",
         sourceSessionId: t.sourceSessionId ?? null,
         sourceMessageId: t.sourceMessageId ?? null,
         reviewedBy: t.reviewedBy ?? null,
@@ -72,7 +115,20 @@ export function createTasksBatch(
         artifacts: t.artifacts ?? [],
         metadata: t.metadata ?? ({} as TaskMetadata),
         archivedAt: null,
+        originalPlanData,
       });
+
+      // Track signature to prevent in-batch duplicates
+      existingSignatures.add(sig);
+
+      // Issue 4: insert task files into plan_files with role='modified' (spec v2 §7.2)
+      if (t.files && t.files.length > 0) {
+        for (const filePath of t.files) {
+          db.query(
+            "INSERT OR IGNORE INTO plan_files (plan_id, file_path, role) VALUES (?, ?, 'modified')",
+          ).run(planId, filePath);
+        }
+      }
     }
   });
   txn();
@@ -126,6 +182,7 @@ export function updateTaskStatus(
   status: TaskStatus,
   fields?: { result?: string; error?: string },
   updatedBy?: string,
+  ctx?: { agent?: string; sessionId?: string },
 ): PlanTask | null {
   const now = Date.now();
   const setClauses: string[] = ["status = ?"];
@@ -134,6 +191,20 @@ export function updateTaskStatus(
   if (status === "running") {
     setClauses.push("started_at = ?");
     params.push(now);
+
+    // Issue 2: write-once executed_by_agent/session on plan when task starts
+    if (ctx?.agent) {
+      const task = db.query("SELECT plan_id FROM plan_tasks WHERE id = ?").get(id) as
+        | { plan_id: string }
+        | undefined;
+      if (task?.plan_id) {
+        // HIGH 3: ensure session exists before FK write
+        if (ctx.sessionId) {
+          ensureSession(db, ctx.sessionId, "auto-created for task execution", ctx.agent);
+        }
+        setExecutedByOnce(db, task.plan_id, ctx.agent, ctx.sessionId ?? null);
+      }
+    }
   }
   if (status === "done" || status === "failed") {
     setClauses.push("completed_at = ?");
@@ -181,26 +252,50 @@ export function searchTasks(
   return (rows as unknown[]).map(taskFromRow);
 }
 
+/**
+ * Atomically claim next pending task for agent.
+ * Uses transaction (SELECT + UPDATE) to prevent race condition.
+ * SQLite transactions are SERIALIZABLE — no concurrent claim possible.
+ */
 export function nextTaskForAgent(
   db: Database,
   agent: string,
   opts: { planId?: string; includeArchived?: boolean } = {},
 ): PlanTask | null {
+  const now = Date.now();
   const archiveFilter = opts.includeArchived ? "" : "AND archived_at IS NULL";
-  if (opts.planId !== undefined) {
+
+  return db.transaction(() => {
+    if (opts.planId !== undefined) {
+      const row = db
+        .query(
+          `SELECT * FROM plan_tasks
+           WHERE agent = ? AND plan_id = ? AND status = 'pending' ${archiveFilter}
+           ORDER BY order_index LIMIT 1`,
+        )
+        .get(agent, opts.planId);
+      if (row == null) return null;
+      const task = taskFromRow(row);
+      db.query(
+        `UPDATE plan_tasks SET status = 'running', started_at = ?, updated_by = ? WHERE id = ?`,
+      ).run(now, agent, task.id);
+      return { ...task, status: "running" as const, startedAt: now, updatedBy: agent };
+    }
+
     const row = db
       .query(
-        `SELECT * FROM plan_tasks WHERE agent = ? AND plan_id = ? AND status = 'pending' ${archiveFilter} ORDER BY order_index LIMIT 1`,
+        `SELECT * FROM plan_tasks
+         WHERE agent = ? AND status = 'pending' ${archiveFilter}
+         ORDER BY order_index LIMIT 1`,
       )
-      .get(agent, opts.planId);
-    return row != null ? taskFromRow(row) : null;
-  }
-  const row = db
-    .query(
-      `SELECT * FROM plan_tasks WHERE agent = ? AND status = 'pending' ${archiveFilter} ORDER BY order_index LIMIT 1`,
-    )
-    .get(agent);
-  return row != null ? taskFromRow(row) : null;
+      .get(agent);
+    if (row == null) return null;
+    const task = taskFromRow(row);
+    db.query(
+      `UPDATE plan_tasks SET status = 'running', started_at = ?, updated_by = ? WHERE id = ?`,
+    ).run(now, agent, task.id);
+    return { ...task, status: "running" as const, startedAt: now, updatedBy: agent };
+  })();
 }
 
 // ─── Tag helpers ─────────────────────────────────────────────────────────────

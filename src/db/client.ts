@@ -16,7 +16,10 @@ export function openDb(projectDir: string): Database {
   const dir = join(projectDir, NDOMO_DIR);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, DB_FILE);
-  return new Database(path, { create: true });
+  const db = new Database(path, { create: true });
+  // Enable foreign key enforcement (OFF by default in SQLite/bun:sqlite)
+  db.exec("PRAGMA foreign_keys = ON");
+  return db;
 }
 
 export function closeDb(db: Database): void {

@@ -21,11 +21,13 @@ import { runMigrations } from "./migrations.ts";
 import { planCreateExecutor } from "./plan-create.ts";
 import { getPlan } from "./plans.ts";
 import { getSession } from "./sessions.ts";
+import { createTasksBatch, getTask } from "./tasks.ts";
 
 let db: Database;
 
 beforeEach(() => {
   db = new Database(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
 });
 
@@ -136,5 +138,139 @@ describe("planCreateExecutor", () => {
     expect(plan.sessionId).toBe("ses_linked");
     // ctx.sessionID → plan.sourceSessionId (the origin)
     expect(plan.sourceSessionId).toBe("ses_source");
+  });
+
+  test("sets created_by_agent from ctx.agent", () => {
+    const plan = planCreateExecutor(
+      db,
+      { slug: "s9", title: "Agent Test", overview: "o", priority: 2 },
+      { agent: "foreman" },
+    );
+    expect(plan.createdByAgent).toBe("foreman");
+
+    const fetched = getPlan(db, plan.id);
+    expect(fetched?.createdByAgent).toBe("foreman");
+  });
+
+  test("created_by_agent defaults to null when ctx.agent is undefined", () => {
+    const plan = planCreateExecutor(
+      db,
+      { slug: "s10", title: "No Agent", overview: "o", priority: 2 },
+      {},
+    );
+    expect(plan.createdByAgent).toBeNull();
+  });
+
+  test("original_plan_data is set on creation", () => {
+    const plan = planCreateExecutor(
+      db,
+      { slug: "s11", title: "Snapshot", overview: "do stuff", priority: 2 },
+      { agent: "foreman" },
+    );
+    expect(plan.originalPlanData).not.toBeNull();
+
+    const fetched = getPlan(db, plan.id);
+    const opd = fetched?.originalPlanData;
+    expect(opd).not.toBeNull();
+
+    const data = JSON.parse(opd as string);
+    expect(data.slug).toBe("s11");
+    expect(data.title).toBe("Snapshot");
+    expect(data.createdBy).toBe("foreman");
+  });
+});
+
+describe("createTasksBatch", () => {
+  test("updated_by defaults to createdBy when undefined", () => {
+    const plan = planCreateExecutor(
+      db,
+      { slug: "task-test", title: "Task Test", overview: "test", priority: 2 },
+      { agent: "foreman" },
+    );
+
+    const tasks = createTasksBatch(db, plan.id, [
+      {
+        orderIndex: 0,
+        description: "test task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "foreman",
+        updatedBy: undefined as unknown as string, // explicitly undefined
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
+    ]);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toBeDefined();
+    const task0id = tasks[0]?.id as string;
+    const fetched = getTask(db, task0id);
+    expect(fetched).not.toBeNull();
+    expect(fetched?.updatedBy).toBe("foreman"); // defaults to createdBy
+  });
+});
+
+// ─── Issue 3: plan_files insertion ───────────────────────────────────────────
+
+describe("planCreateExecutor — plan_files insertion", () => {
+  test("with files → N rows in plan_files with role='input'", () => {
+    const plan = planCreateExecutor(
+      db,
+      {
+        slug: "files-test",
+        title: "Files Test",
+        overview: "o",
+        priority: 2,
+        files: ["src/a.ts", "src/b.ts"],
+      },
+      { agent: "foreman" },
+    );
+
+    const rows = db
+      .query("SELECT * FROM plan_files WHERE plan_id = ? ORDER BY file_path")
+      .all(plan.id) as Array<{ plan_id: string; file_path: string; role: string }>;
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.file_path).toBe("src/a.ts");
+    expect(rows[0]?.role).toBe("input");
+    expect(rows[1]?.file_path).toBe("src/b.ts");
+    expect(rows[1]?.role).toBe("input");
+  });
+
+  test("without files → 0 rows in plan_files", () => {
+    const plan = planCreateExecutor(
+      db,
+      { slug: "no-files", title: "No Files", overview: "o", priority: 2 },
+      { agent: "foreman" },
+    );
+
+    const rows = db.query("SELECT * FROM plan_files WHERE plan_id = ?").all(plan.id);
+
+    expect(rows).toHaveLength(0);
+  });
+
+  test("duplicate files → no break (PK dedup)", () => {
+    const plan = planCreateExecutor(
+      db,
+      {
+        slug: "dup-files",
+        title: "Dup",
+        overview: "o",
+        priority: 2,
+        files: ["src/x.ts", "src/x.ts"],
+      },
+      { agent: "foreman" },
+    );
+
+    const rows = db.query("SELECT * FROM plan_files WHERE plan_id = ?").all(plan.id);
+
+    expect(rows).toHaveLength(1); // PK dedup
   });
 });

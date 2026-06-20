@@ -13,6 +13,8 @@ export interface RoutingDecision {
   parallel: boolean;
   /** Task IDs that must complete before this one starts. */
   dependencies: string[];
+  /** Agent that should review output before merge (advisory, not blocking). */
+  requiresReview?: string;
 }
 
 /** Incoming task request from the foreman. */
@@ -22,15 +24,7 @@ export interface TaskRequest {
   /** Detected or declared tech stack. */
   stack?: "go" | "vue" | "js" | "python" | "zig" | "generic" | "unknown";
   /** Category of work. */
-  type:
-    | "implement"
-    | "explore"
-    | "research"
-    | "design"
-    | "debug"
-    | "audit"
-    | "document"
-    | "debate";
+  type: "implement" | "explore" | "research" | "design" | "debug" | "audit" | "document" | "debate";
   /** Files targeted by this task (for conflict detection). */
   files?: string[];
   /** Risk assessment from the foreman. */
@@ -154,7 +148,8 @@ export function routeTask(task: TaskRequest): RoutingDecision {
         agent: stackAgent,
         reason: `High-risk ${stack} implementation. Sage should review before merge.`,
         parallel: true,
-        dependencies: ["sage"],
+        dependencies: [],
+        requiresReview: "sage",
       };
     }
 
@@ -186,30 +181,63 @@ export function routeTask(task: TaskRequest): RoutingDecision {
 }
 
 /**
+ * A routing decision paired with its task ID, used for parallel conflict checks.
+ */
+export interface RoutedTask {
+  /** Unique task identifier. */
+  id: string;
+  /** The routing decision for this task. */
+  decision: RoutingDecision;
+}
+
+/**
  * Check if a set of tasks can run in parallel without file conflicts.
  *
- * Two tasks conflict when they target the same file — parallel execution
- * would cause write races. Tasks with no explicit file list are assumed
- * non-conflicting (they operate on unknown paths, so we give them the
+ * Two tasks conflict when:
+ *  - They target the same file (write race).
+ *  - One task's dependency ID matches another task in the batch (ordering violation).
+ *
+ * Tasks with no explicit file list are assumed non-conflicting (unknown paths,
  * benefit of the doubt).
  *
- * @param tasks - Array of routing decisions to evaluate.
- * @returns `true` if no two tasks share a target file.
+ * Accepts either:
+ *  - `RoutedTask[]` (preferred) — checks task ID dependencies.
+ *  - `RoutingDecision[]` (legacy) — checks agent-name dependencies.
+ *
+ * @param tasks - Array of routed tasks or routing decisions to evaluate.
+ * @returns `true` if no two tasks share a target file or have inter-batch dependencies.
  */
-export function canRunParallel(tasks: RoutingDecision[]): boolean {
-  // If any task is non-parallel, the batch can't be fully parallel
-  const allParallel = tasks.every((t) => t.parallel);
+export function canRunParallel(tasks: RoutedTask[] | RoutingDecision[]): boolean {
+  if (tasks.length === 0) return true;
+
+  // Detect shape: RoutedTask has `id` + `decision`, RoutingDecision has `agent` + `parallel`
+  const isRoutedTask = (t: unknown): t is RoutedTask =>
+    typeof t === "object" && t !== null && "id" in t && "decision" in t;
+
+  if (isRoutedTask(tasks[0])) {
+    const routed = tasks as RoutedTask[];
+    const allParallel = routed.every((t) => t.decision.parallel);
+    if (!allParallel) return false;
+
+    const taskIds = new Set(routed.map((t) => t.id));
+    for (const task of routed) {
+      for (const dep of task.decision.dependencies) {
+        if (taskIds.has(dep)) return false;
+      }
+    }
+    return true;
+  }
+
+  // Legacy path: RoutingDecision[] — dependencies are agent names
+  const decisions = tasks as RoutingDecision[];
+  const allParallel = decisions.every((t) => t.parallel);
   if (!allParallel) return false;
 
-  // Check dependency conflicts: if task A depends on task B's output,
-  // they can't run in parallel
-  const taskAgents = new Set(tasks.map((t) => t.agent));
-  for (const task of tasks) {
+  const taskAgents = new Set(decisions.map((t) => t.agent));
+  for (const task of decisions) {
     for (const dep of task.dependencies) {
-      // If the dependency is another task in this batch, they can't be parallel
       if (taskAgents.has(dep)) return false;
     }
   }
-
   return true;
 }
