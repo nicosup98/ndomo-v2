@@ -1,16 +1,17 @@
 # ndomo
 
-Plugin multi-agente para OpenCode. Taller de artesanos: 15 especialistas bajo un Foreman. Nativo en caveman. opencode-mem integrado. DCP peer opcional.
+Plugin multi-agente para OpenCode. Taller de artesanos: 19 especialistas bajo un Foreman, un Craftsman y un Warden. Nativo en caveman. opencode-mem integrado. DCP peer opcional.
 
 ## Qué es ndomo
 
-ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.com/opencode-ai). Enruta tareas de desarrollo a 15 agentes especializados (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler) coordinados por un único Foreman. Todos los agentes usan el protocolo de salida Caveman para comunicación eficiente en tokens. La persistencia de memoria entre sesiones la gestiona opencode-mem. El plugin opcional DCP proporciona poda de contexto adicional para sesiones largas.
+ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.com/opencode-ai). Enruta tareas de desarrollo a 19 agentes especializados (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler, y ops agents) coordinados por 3 primaries: Foreman (planificación), Craftsman (implementación), Warden (operaciones). Todos los agentes usan el protocolo de salida Caveman para comunicación eficiente en tokens. La persistencia de memoria entre sesiones la gestiona opencode-mem. El plugin opcional DCP proporciona poda de contexto adicional para sesiones largas.
 
 ## Agentes
 
 | Agente | Rol | Modelo (preset default) | Tipo |
 |---|---|---|---|
 | **foreman** | Orquestador y scheduler maestro | minimax/MiniMax-M3 | primary |
+| **warden** | Custodio de operaciones — CI/CD, deploy, releases, monitoreo | opencode-go/deepseek-v4-flash | primary |
 | **scout** | Reconocimiento de codebase | opencode-go/minimax-m2.7 | subagent |
 | **scribe** | Recuperación de conocimiento externo | opencode-go/minimax-m2.7 | subagent |
 | **painter** | Diseño UI/UX y composición visual | opencode-go/kimi-k2.6 | subagent |
@@ -25,8 +26,12 @@ ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.
 | **guild** | Consenso multi-LLM y debate | opencode-go/deepseek-v4-pro | subagent |
 | **inspector** | Auditor de calidad y seguridad | opencode-go/deepseek-v4-pro | subagent |
 | **chronicler** | Redactor de documentación técnica | opencode-go/deepseek-v4-flash | subagent |
+| **ci-smith** | Especialista en pipelines CI/CD | opencode-go/deepseek-v4-flash | subagent |
+| **deploy-smith** | Especialista en automatización de deploys | opencode-go/deepseek-v4-flash | subagent |
+| **release-smith** | Especialista en gestión de releases | opencode-go/deepseek-v4-flash | subagent |
+| **ops-scout** | Especialista en reconocimiento de infra (solo lectura) | opencode-go/deepseek-v4-flash | subagent |
 
-**Grupos:** Orquestador (foreman), Exploradores (scout, scribe), Constructores (painter, smith, go-smith, js-smith, python-smith, vue-smith, zig-smith, rust-smith), Asesores (sage, guild), Calidad (inspector, chronicler).
+**Grupos:** Orquestador (foreman), Exploradores (scout, scribe), Constructores (painter, smith, go-smith, js-smith, python-smith, vue-smith, zig-smith, rust-smith), Asesores (sage, guild), Calidad (inspector, chronicler), Operaciones (warden, ci-smith, deploy-smith, release-smith, ops-scout).
 
 ## Inicio Rápido
 

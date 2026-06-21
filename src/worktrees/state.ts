@@ -10,8 +10,8 @@
 import { exec as execCb } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
-import type { Worktree, WorktreeState } from "./manager.js";
-import { loadState } from "./manager.js";
+import type { Worktree, WorktreeState } from "./manager.ts";
+import { loadState } from "./manager.ts";
 
 const exec = promisify(execCb);
 

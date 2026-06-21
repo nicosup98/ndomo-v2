@@ -1,0 +1,8 @@
+# Default owners for everything in the repo
+* @nicosup98
+
+# CI/CD workflows and automation
+.github/ @nicosup98
+
+# Package and build configuration
+package.json @nicosup98

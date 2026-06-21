@@ -6,31 +6,32 @@
  * { "plugin": ["ndomo"] }
  * ```
  */
-export { NdomoPlugin, type NdomoPluginOptions } from "./plugin.ts";
+
 export type {
-  RoutingDecision,
-  TaskRequest,
   BackgroundTask,
   DispatchOptions,
-  TaskResult,
-  ReconciliationReport,
+  IntegrityReport,
   MemoryEntry,
+  ReconciliationReport,
+  RoutingDecision,
+  TaskRequest,
+  TaskResult,
   Worktree,
   WorktreeState,
-  IntegrityReport,
 } from "./lib.ts";
 export {
-  routeTask,
-  canRunParallel,
   BackgroundDispatcher,
-  reconcileResults,
+  canRunParallel,
   cavemanCompress,
-  prepareForMemory,
-  shouldStoreMemory,
-  getProjectTag,
-  memorySearchOptions,
   createWorktree,
+  getProjectTag,
   listActive,
+  memorySearchOptions,
+  prepareForMemory,
+  reconcileResults,
   removeWorktree,
+  routeTask,
+  shouldStoreMemory,
   verifyIntegrity,
 } from "./lib.ts";
+export { NdomoPlugin, type NdomoPluginOptions } from "./plugin.ts";

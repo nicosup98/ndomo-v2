@@ -11,8 +11,7 @@ import { tool } from "@opencode-ai/plugin";
 import { closeDb, openDb, runMigrations, searchPlans } from "ndomo/db";
 
 export default tool({
-  description:
-    "Full-text search over plan titles, overviews, and approaches using SQLite FTS5.",
+  description: "Full-text search over plan titles, overviews, and approaches using SQLite FTS5.",
   args: {
     query: tool.schema.string(),
     limit: tool.schema.number().optional(),

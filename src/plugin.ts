@@ -46,6 +46,7 @@ import type {
   TaskMetadata,
   TaskStatus,
 } from "./db/types.ts";
+import type { RoutingDecision } from "./lib.ts";
 import {
   BackgroundDispatcher,
   canRunParallel,
@@ -58,7 +59,6 @@ import {
   routeTask,
   verifyIntegrity,
 } from "./lib.ts";
-import type { RoutingDecision } from "./lib.ts";
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -370,10 +370,10 @@ export const NdomoPlugin: Plugin = async (
   }
 
   // Shared state — lives for the lifetime of the plugin instance
-  const dispatcher = new BackgroundDispatcher();
   const db: Database = openDb(worktree || directory);
   runMigrations(db);
   registerShutdownHandlers(db);
+  const dispatcher = new BackgroundDispatcher(db);
 
   /** filepath → `${sessionID}:${callID}` of the task that locked it. */
   const activeWrites = new Map<string, string>();
@@ -557,6 +557,26 @@ export const NdomoPlugin: Plugin = async (
         args: {},
         execute: async () => {
           return JSON.stringify(dispatcher.getActive());
+        },
+      }),
+
+      background_task_status: tool({
+        description: "Get the status of a background task by ID.",
+        args: { taskId: tool.schema.string() },
+        execute: async (args) => {
+          const task = dispatcher.getStatus(args.taskId);
+          if (!task) throw new Error(`ndomo: background task ${args.taskId} not found`);
+          return JSON.stringify(task);
+        },
+      }),
+
+      background_task_cancel: tool({
+        description:
+          "Cancel a pending or running background task. Returns true if cancelled, false if task was already terminal.",
+        args: { taskId: tool.schema.string() },
+        execute: async (args) => {
+          const cancelled = dispatcher.cancel(args.taskId);
+          return JSON.stringify({ taskId: args.taskId, cancelled });
         },
       }),
 

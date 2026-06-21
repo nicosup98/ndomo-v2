@@ -15,7 +15,7 @@
  *   rm -rf $TESTHOME
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";
 import { runMigrations } from "../src/db/migrations.ts";

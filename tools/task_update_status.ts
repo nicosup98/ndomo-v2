@@ -8,8 +8,8 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, openDb, runMigrations, updateTaskStatus } from "ndomo/db";
 import type { TaskStatus } from "ndomo/db";
+import { closeDb, openDb, runMigrations, updateTaskStatus } from "ndomo/db";
 
 export default tool({
   description: "Update a task's status. Optionally record result or error text.",

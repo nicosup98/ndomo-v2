@@ -1,12 +1,7 @@
 {
   "$schema": "./ndomo.schema.json",
-  "plugins": [
-    "ndomo",
-    "opencode-mem"
-  ],
-  "optionalPlugins": [
-    "@tarquinen/opencode-dcp"
-  ],
+  "plugins": ["ndomo", "opencode-mem"],
+  "optionalPlugins": ["@tarquinen/opencode-dcp"],
   "agentRouting": {
     "foreman": {
       "description": "Master orchestrator and scheduler",
@@ -27,15 +22,39 @@
         "chronicler",
         "inspector"
       ]
+    },
+    "craftsman": {
+      "description": "Implementador artesano — ejecuta bugs/features/refactors acotados",
+      "mode": "primary",
+      "delegates_to": [
+        "smith",
+        "go-smith",
+        "js-smith",
+        "vue-smith",
+        "python-smith",
+        "rust-smith",
+        "zig-smith",
+        "painter",
+        "inspector",
+        "chronicler",
+        "scout",
+        "scribe"
+      ]
+    },
+    "warden": {
+      "description": "Custodio de operaciones — CI/CD, deploy, releases, monitoring",
+      "mode": "primary",
+      "delegates_to": [
+        "ci-smith",
+        "deploy-smith",
+        "release-smith",
+        "ops-scout",
+        "sage",
+        "inspector"
+      ]
     }
   },
-  "protectedTools": [
-    "memory",
-    "compress",
-    "task",
-    "todowrite",
-    "skill"
-  ],
+  "protectedTools": ["memory", "compress", "task", "todowrite", "skill"],
   "caveman": {
     "intensity": "full",
     "autoClarity": true
@@ -89,37 +108,31 @@
         "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
         "temperature": 0.1,
         "reasoning_effort": "high"
-
       },
       "vue-smith": {
         "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
         "temperature": 0.1,
         "reasoning_effort": "high"
-
       },
       "zig-smith": {
         "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
         "temperature": 0.1,
         "reasoning_effort": "high"
-
       },
       "rust-smith": {
         "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
         "temperature": 0.1,
         "reasoning_effort": "high"
-
       },
       "chronicler": {
         "model": "opencode-go/deepseek-v4-flash",
         "temperature": 0.2,
         "reasoning_effort": "high"
-
       },
       "inspector": {
         "model": "opencode-go/kimi-k2.7-code",
         "temperature": 0.2,
         "reasoning_effort": "high"
-
       }
     },
     "budget": {

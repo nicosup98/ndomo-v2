@@ -13,8 +13,7 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "./migrations.ts";
-import { approvePlan, createPlan, getPlan, updatePlanStatus } from "./plans.ts";
-import { getPlanProgress } from "./plans.ts";
+import { approvePlan, createPlan, getPlan, getPlanProgress, updatePlanStatus } from "./plans.ts";
 import { createTasksBatch, getTask, updateTaskStatus } from "./tasks.ts";
 import type { Plan } from "./types.ts";
 
@@ -242,12 +241,12 @@ describe("v8: executed_by_agent/session", () => {
 // ─── Critical 2: v9 migration — plan_progress excludes archived ─────────────
 
 describe("v9: plan_progress view fix", () => {
-  test("DB with schema_version=5 → runMigrations → schema_version=9", () => {
-    // Fresh DB already runs all migrations up to v9
+  test("DB with schema_version=5 → runMigrations → schema_version=11", () => {
+    // Fresh DB already runs all migrations up to v11
     const row = db.query("SELECT MAX(version) as version FROM schema_version").get() as {
       version: number;
     };
-    expect(row.version).toBe(9);
+    expect(row.version).toBe(11);
   });
 
   test("plan_progress excludes archived plans", () => {

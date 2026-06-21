@@ -8,8 +8,8 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, listPlans, openDb, runMigrations } from "ndomo/db";
 import type { PlanStatus } from "ndomo/db";
+import { closeDb, listPlans, openDb, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "List plans, optionally filtered by status and session.",

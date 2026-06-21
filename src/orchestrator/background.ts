@@ -2,20 +2,23 @@
  * Background task dispatcher for the ndomo orchestrator.
  * Tracks state of tasks delegated to specialist agents.
  *
+ * DB-backed via bun:sqlite — persists across restarts.
  * The actual OpenCode task tool call is made by the foreman prompt —
  * this class is a pure state tracker, not an I/O layer.
  */
 
+import type { Database } from "bun:sqlite";
+
 /** Current state of a background task. */
 export interface BackgroundTask {
-  /** Unique task identifier (UUID). */
+  /** Unique task identifier (UUID v4). */
   id: string;
   /** Agent handling this task. */
   agent: string;
   /** What the agent is doing. */
   description: string;
   /** Lifecycle status. */
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   /** OpenCode session ID once the task is dispatched. */
   sessionId?: string;
   /** Agent output after completion. */
@@ -24,6 +27,12 @@ export interface BackgroundTask {
   startedAt?: number;
   /** Epoch ms when the task finished (success or failure). */
   completedAt?: number;
+  /** Epoch ms when the task was created. */
+  createdAt: number;
+  /** Files the agent should focus on. */
+  files?: string[];
+  /** Git worktree path for isolation. */
+  worktree?: string;
 }
 
 /** Options for dispatching a new background task. */
@@ -38,29 +47,61 @@ export interface DispatchOptions {
   worktree?: string;
 }
 
-/**
- * Generates a simple unique ID without external dependencies.
- * 8 hex chars from crypto gives 4 billion combinations — enough for task IDs.
- */
-function generateId(): string {
-  const bytes = new Uint8Array(4);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+/** DB row shape from background_tasks table (snake_case). */
+interface BackgroundTaskRow {
+  id: string;
+  agent: string;
+  description: string;
+  status: string;
+  session_id: string | null;
+  result: string | null;
+  started_at: number | null;
+  completed_at: number | null;
+  created_at: number;
+  files: string | null;
+  worktree: string | null;
 }
 
 /**
- * Background task state tracker.
+ * Background task state tracker backed by bun:sqlite.
  *
  * Usage:
  * ```ts
- * const dispatcher = new BackgroundDispatcher();
+ * const dispatcher = new BackgroundDispatcher(db);
  * const id = dispatcher.dispatch({ agent: "scout", description: "Find auth flow" });
  * // ... later, when the task completes ...
  * dispatcher.markComplete(id, "Found auth in src/auth/middleware.ts");
  * ```
  */
 export class BackgroundDispatcher {
-  private tasks: Map<string, BackgroundTask> = new Map();
+  constructor(private db: Database) {}
+
+  /**
+   * Convert a DB row to a BackgroundTask object.
+   * Deserializes JSON fields (files).
+   */
+  private rowToTask(row: BackgroundTaskRow): BackgroundTask {
+    const task: BackgroundTask = {
+      id: row.id,
+      agent: row.agent,
+      description: row.description,
+      status: row.status as BackgroundTask["status"],
+      createdAt: row.created_at,
+    };
+    if (row.session_id != null) task.sessionId = row.session_id;
+    if (row.result != null) task.result = row.result;
+    if (row.started_at != null) task.startedAt = row.started_at;
+    if (row.completed_at != null) task.completedAt = row.completed_at;
+    if (row.files != null) {
+      try {
+        task.files = JSON.parse(row.files) as string[];
+      } catch {
+        task.files = [];
+      }
+    }
+    if (row.worktree != null) task.worktree = row.worktree;
+    return task;
+  }
 
   /**
    * Register a new background task and return its ID.
@@ -68,17 +109,21 @@ export class BackgroundDispatcher {
    * for calling markRunning() once the OpenCode task tool is invoked.
    *
    * @param options - Task configuration.
-   * @returns Unique task ID.
+   * @returns Unique task ID (UUID v4).
    */
   dispatch(options: DispatchOptions): string {
-    const id = generateId();
-    const task: BackgroundTask = {
-      id,
-      agent: options.agent,
-      description: options.description,
-      status: "pending",
-    };
-    this.tasks.set(id, task);
+    const id = crypto.randomUUID();
+    this.db
+      .query(
+        "INSERT INTO background_tasks (id, agent, description, status, files, worktree) VALUES (?, ?, ?, 'pending', ?, ?)",
+      )
+      .run(
+        id,
+        options.agent,
+        options.description,
+        options.files ? JSON.stringify(options.files) : null,
+        options.worktree ?? null,
+      );
     return id;
   }
 
@@ -89,11 +134,11 @@ export class BackgroundDispatcher {
    * @param sessionId - OpenCode session ID.
    */
   markRunning(taskId: string, sessionId: string): void {
-    const task = this.tasks.get(taskId);
-    if (!task) return;
-    task.status = "running";
-    task.sessionId = sessionId;
-    task.startedAt = Date.now();
+    this.db
+      .query(
+        "UPDATE background_tasks SET status = 'running', session_id = ?, started_at = ? WHERE id = ?",
+      )
+      .run(sessionId, Date.now(), taskId);
   }
 
   /**
@@ -103,7 +148,10 @@ export class BackgroundDispatcher {
    * @returns Task state or undefined if not found.
    */
   getStatus(taskId: string): BackgroundTask | undefined {
-    return this.tasks.get(taskId);
+    const row = this.db
+      .query("SELECT * FROM background_tasks WHERE id = ?")
+      .get(taskId) as BackgroundTaskRow | null;
+    return row ? this.rowToTask(row) : undefined;
   }
 
   /**
@@ -112,13 +160,10 @@ export class BackgroundDispatcher {
    * @returns Array of active tasks.
    */
   getActive(): BackgroundTask[] {
-    const active: BackgroundTask[] = [];
-    for (const task of this.tasks.values()) {
-      if (task.status === "pending" || task.status === "running") {
-        active.push(task);
-      }
-    }
-    return active;
+    const rows = this.db
+      .query("SELECT * FROM background_tasks WHERE status IN ('pending', 'running')")
+      .all() as BackgroundTaskRow[];
+    return rows.map((r) => this.rowToTask(r));
   }
 
   /**
@@ -128,11 +173,11 @@ export class BackgroundDispatcher {
    * @param result - Agent output.
    */
   markComplete(taskId: string, result: string): void {
-    const task = this.tasks.get(taskId);
-    if (!task) return;
-    task.status = "completed";
-    task.result = result;
-    task.completedAt = Date.now();
+    this.db
+      .query(
+        "UPDATE background_tasks SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
+      )
+      .run(result, Date.now(), taskId);
   }
 
   /**
@@ -142,11 +187,11 @@ export class BackgroundDispatcher {
    * @param error - Error description.
    */
   markFailed(taskId: string, error: string): void {
-    const task = this.tasks.get(taskId);
-    if (!task) return;
-    task.status = "failed";
-    task.result = error;
-    task.completedAt = Date.now();
+    this.db
+      .query(
+        "UPDATE background_tasks SET status = 'failed', result = ?, completed_at = ? WHERE id = ?",
+      )
+      .run(error, Date.now(), taskId);
   }
 
   /**
@@ -156,13 +201,10 @@ export class BackgroundDispatcher {
    * @returns Array of finished tasks.
    */
   reconcile(): BackgroundTask[] {
-    const finished: BackgroundTask[] = [];
-    for (const task of this.tasks.values()) {
-      if (task.status === "completed" || task.status === "failed") {
-        finished.push(task);
-      }
-    }
-    return finished;
+    const rows = this.db
+      .query("SELECT * FROM background_tasks WHERE status IN ('completed', 'failed')")
+      .all() as BackgroundTaskRow[];
+    return rows.map((r) => this.rowToTask(r));
   }
 
   /**
@@ -171,35 +213,57 @@ export class BackgroundDispatcher {
    * @param taskId - Task to remove.
    */
   remove(taskId: string): void {
-    this.tasks.delete(taskId);
+    this.db.query("DELETE FROM background_tasks WHERE id = ?").run(taskId);
   }
 
   /**
    * Get count of tasks by status.
    */
-  stats(): { pending: number; running: number; completed: number; failed: number } {
-    let pending = 0;
-    let running = 0;
-    let completed = 0;
-    let failed = 0;
+  stats(): {
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+  } {
+    const rows = this.db
+      .query("SELECT status, COUNT(*) as count FROM background_tasks GROUP BY status")
+      .all() as Array<{ status: string; count: number }>;
 
-    for (const task of this.tasks.values()) {
-      switch (task.status) {
-        case "pending":
-          pending++;
-          break;
-        case "running":
-          running++;
-          break;
-        case "completed":
-          completed++;
-          break;
-        case "failed":
-          failed++;
-          break;
+    const counts = { pending: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+    for (const row of rows) {
+      if (row.status in counts) {
+        counts[row.status as keyof typeof counts] = row.count;
       }
     }
+    return counts;
+  }
 
-    return { pending, running, completed, failed };
+  /**
+   * Cancel a pending or running task.
+   *
+   * @param taskId - Task to cancel.
+   * @returns true if the task was cancelled, false if it was already terminal.
+   */
+  cancel(taskId: string): boolean {
+    const result = this.db
+      .query(
+        "UPDATE background_tasks SET status = 'cancelled', completed_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+      )
+      .run(Date.now(), taskId);
+    return result.changes > 0;
+  }
+
+  /**
+   * List all tasks for a specific agent, newest first.
+   *
+   * @param agent - Agent name to filter by.
+   * @returns Array of tasks for that agent.
+   */
+  listByAgent(agent: string): BackgroundTask[] {
+    const rows = this.db
+      .query("SELECT * FROM background_tasks WHERE agent = ? ORDER BY created_at DESC")
+      .all(agent) as BackgroundTaskRow[];
+    return rows.map((r) => this.rowToTask(r));
   }
 }

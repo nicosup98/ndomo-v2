@@ -528,6 +528,49 @@ WHERE p.archived_at IS NULL
 GROUP BY p.id;
 `;
 
+/**
+ * v10: plan_files multi-role PK + created_at.
+ *
+ * Changes PK from (plan_id, file_path) to (plan_id, file_path, role)
+ * so the same file can have multiple roles (input + modified + reviewed).
+ * Also adds created_at column for ordering/auditing.
+ *
+ * Safe migration: recreate table (SQLite cannot ALTER PK directly).
+ */
+export const SCHEMA_V10_SQL = `
+-- v10: plan_files multi-role PK + created_at
+CREATE TABLE IF NOT EXISTS plan_files_new (
+  plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'input',
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+  PRIMARY KEY (plan_id, file_path, role)
+);
+INSERT INTO plan_files_new (plan_id, file_path, role, created_at)
+  SELECT plan_id, file_path, role, strftime('%s','now') * 1000 FROM plan_files;
+DROP TABLE plan_files;
+ALTER TABLE plan_files_new RENAME TO plan_files;
+CREATE INDEX IF NOT EXISTS idx_plan_files_plan ON plan_files(plan_id);
+`;
+
+export const SCHEMA_V11_SQL = `
+CREATE TABLE IF NOT EXISTS background_tasks (
+  id TEXT PRIMARY KEY,
+  agent TEXT NOT NULL,
+  description TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','cancelled')),
+  session_id TEXT,
+  result TEXT,
+  started_at INTEGER,
+  completed_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+  files TEXT,
+  worktree TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_agent ON background_tasks(agent);
+`;
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -580,5 +623,15 @@ export const MIGRATIONS: Array<{
     version: 9,
     description: "plan_progress view fix: exclude archived plans from progress view",
     sql: SCHEMA_V9_SQL,
+  },
+  {
+    version: 10,
+    description: "plan_files multi-role PK: (plan_id, file_path, role) + created_at column",
+    sql: SCHEMA_V10_SQL,
+  },
+  {
+    version: 11,
+    description: "background_tasks table for DB-backed task dispatch persistence",
+    sql: SCHEMA_V11_SQL,
   },
 ];

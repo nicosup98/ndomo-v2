@@ -6,68 +6,64 @@
  */
 
 // ─── Client ──────────────────────────────────────────────────────────────────
-export { openDb, closeDb } from "./client.ts";
+export { closeDb, openDb } from "./client.ts";
 
 // ─── Migrations ──────────────────────────────────────────────────────────────
 export { runMigrations } from "./migrations.ts";
-
-// ─── Plans ───────────────────────────────────────────────────────────────────
-export {
-  createPlan,
-  getPlan,
-  getPlanBySlug,
-  listPlans,
-  searchPlans,
-  approvePlan,
-  updatePlanStatus,
-  addPlanTag,
-  removePlanTag,
-  getPlanTags,
-  findPlansByTag,
-  findPlansByCategory,
-  getPlanProgress,
-} from "./plans.ts";
-export type { PlanProgress } from "./plans.ts";
-
+export type { ArchiveResult } from "./plan-archive.ts";
 // ─── Plan Archive ────────────────────────────────────────────────────────────
 export { archivePlan, resolveArchiveDir } from "./plan-archive.ts";
-export type { ArchiveResult } from "./plan-archive.ts";
-
-// ─── Tasks ───────────────────────────────────────────────────────────────────
+export type { PlanProgress } from "./plans.ts";
+// ─── Plans ───────────────────────────────────────────────────────────────────
 export {
-  createTasksBatch,
-  getTask,
-  listTasksByPlan,
-  updateTaskStatus,
-  searchTasks,
-  nextTaskForAgent,
-  addTaskTag,
-  removeTaskTag,
-  getTaskTags,
-  splitFilesByStack,
-} from "./tasks.ts";
-export type { TaskUpdateResult, TaskTruncationInfo } from "./tasks.ts";
-
+  addPlanTag,
+  approvePlan,
+  createPlan,
+  findPlansByCategory,
+  findPlansByTag,
+  getPlan,
+  getPlanBySlug,
+  getPlanProgress,
+  getPlanTags,
+  listPlans,
+  removePlanTag,
+  searchPlans,
+  updatePlanStatus,
+} from "./plans.ts";
 // ─── Sessions ────────────────────────────────────────────────────────────────
 export {
-  startSession,
+  appendAgentHistory,
+  checkpointSession,
+  endSession,
   getSession,
   listSessions,
-  checkpointSession,
-  appendAgentHistory,
-  endSession,
+  startSession,
 } from "./sessions.ts";
+export type { TaskTruncationInfo, TaskUpdateResult } from "./tasks.ts";
+// ─── Tasks ───────────────────────────────────────────────────────────────────
+export {
+  addTaskTag,
+  createTasksBatch,
+  getTask,
+  getTaskTags,
+  listTasksByPlan,
+  nextTaskForAgent,
+  removeTaskTag,
+  searchTasks,
+  splitFilesByStack,
+  updateTaskStatus,
+} from "./tasks.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type {
   Plan,
-  PlanStatus,
   PlanCategory,
   PlanMetadata,
+  PlanStatus,
   PlanTask,
-  TaskStatus,
-  TaskMetadata,
   Session,
-  SessionOutcome,
   SessionMetadata,
+  SessionOutcome,
+  TaskMetadata,
+  TaskStatus,
 } from "./types.ts";

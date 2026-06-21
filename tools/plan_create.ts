@@ -7,10 +7,10 @@
  * the plugin (e.g. from agents that don't load the plugin).
  */
 
-import { tool } from "@opencode-ai/plugin";
-import { closeDb, createPlan, openDb, runMigrations } from "ndomo/db";
-import type { PlanMetadata } from "ndomo/db";
 import crypto from "node:crypto";
+import { tool } from "@opencode-ai/plugin";
+import type { PlanMetadata } from "ndomo/db";
+import { closeDb, createPlan, openDb, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "Create a new plan in the ndomo state database.",

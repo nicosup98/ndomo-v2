@@ -10,8 +10,15 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { archivePlan, closeDb, openDb, resolveArchiveDir, runMigrations, updatePlanStatus } from "ndomo/db";
 import type { ArchiveResult, PlanStatus } from "ndomo/db";
+import {
+  archivePlan,
+  closeDb,
+  openDb,
+  resolveArchiveDir,
+  runMigrations,
+  updatePlanStatus,
+} from "ndomo/db";
 
 export default tool({
   description:

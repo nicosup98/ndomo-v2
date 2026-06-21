@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { canRunParallel, routeTask } from "./scheduler.ts";
 import type { RoutedTask, RoutingDecision, TaskRequest } from "./scheduler.ts";
+import { canRunParallel, routeTask } from "./scheduler.ts";
 
 const mk = (overrides: Partial<TaskRequest> & Pick<TaskRequest, "type">): TaskRequest => ({
   description: "test task",

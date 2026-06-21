@@ -8,8 +8,8 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, createTasksBatch, openDb, runMigrations } from "ndomo/db";
 import type { TaskMetadata } from "ndomo/db";
+import { closeDb, createTasksBatch, openDb, runMigrations } from "ndomo/db";
 
 export default tool({
   description:

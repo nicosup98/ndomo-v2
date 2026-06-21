@@ -3,6 +3,11 @@
  *
  * Creates a project-level database in `.ndomo/state.db`.
  * Uses bun:sqlite (built-in, zero deps).
+ *
+ * NOTE on "async" terminology: bun:sqlite ops are SYNCHRONOUS (no async I/O).
+ * In ndomo architecture, "async" refers to inter-agent coordination via DB
+ * state + manual TUI switch between primaries (foreman↔craftsman), NOT to
+ * async database I/O. All db.exec / db.prepare / stmt.run calls are sync.
  */
 
 import { Database } from "bun:sqlite";

@@ -9,13 +9,14 @@
  * ```
  */
 
-// Orchestrator: scheduler
+// Memory: scoped tag helpers
 export {
-  routeTask,
-  canRunParallel,
-  type RoutingDecision,
-  type TaskRequest,
-} from "./orchestrator/scheduler.ts";
+  getAllTags,
+  getProjectTag,
+  getUserTag,
+  memoryAddOptions,
+  memorySearchOptions,
+} from "./mem/scoped.ts";
 
 // Orchestrator: background dispatcher
 export {
@@ -23,39 +24,35 @@ export {
   type BackgroundTask,
   type DispatchOptions,
 } from "./orchestrator/background.ts";
-
-// Orchestrator: result reconciliation
-export {
-  reconcileResults,
-  type TaskResult,
-  type ReconciliationReport,
-} from "./orchestrator/reconciler.ts";
-
 // Orchestrator: memory hooks
 export {
   cavemanCompress,
+  type MemoryEntry,
   prepareForMemory,
   shouldStoreMemory,
-  type MemoryEntry,
 } from "./orchestrator/memory-hook.ts";
-
-// Memory: scoped tag helpers
+// Orchestrator: result reconciliation
 export {
-  getProjectTag,
-  getUserTag,
-  getAllTags,
-  memorySearchOptions,
-  memoryAddOptions,
-} from "./mem/scoped.ts";
+  type ReconciliationReport,
+  reconcileResults,
+  type TaskResult,
+} from "./orchestrator/reconciler.ts";
+// Orchestrator: scheduler
+export {
+  canRunParallel,
+  type RoutingDecision,
+  routeTask,
+  type TaskRequest,
+} from "./orchestrator/scheduler.ts";
 
 // Worktrees: git worktree manager
 export {
-  createWorktree,
-  removeWorktree,
-  listActive,
-  getWorktree,
   cleanup,
+  createWorktree,
+  getWorktree,
+  listActive,
   loadState,
+  removeWorktree,
   saveState,
   type Worktree,
   type WorktreeState,
@@ -63,6 +60,6 @@ export {
 
 // Worktrees: integrity verification
 export {
-  verifyIntegrity,
   type IntegrityReport,
+  verifyIntegrity,
 } from "./worktrees/state.ts";

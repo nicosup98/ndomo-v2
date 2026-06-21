@@ -1,0 +1,36 @@
+# .github/dependabot.yml
+# Dependabot config: weekly auto-PRs for npm + github-actions
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      production:
+        applies-to: version-updates
+        dependency-type: "production"
+      development:
+        applies-to: version-updates
+        dependency-type: "development"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci(actions)"
+    # Auto-merge patch updates for actions (they're already SHA-pinned,
+    # so updates only happen when we bump SHAs intentionally)
+    automerge: false  # keep manual review

@@ -8,8 +8,8 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, openDb, runMigrations, startSession } from "ndomo/db";
 import type { SessionMetadata } from "ndomo/db";
+import { closeDb, openDb, runMigrations, startSession } from "ndomo/db";
 
 export default tool({
   description:

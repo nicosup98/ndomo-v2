@@ -11,8 +11,7 @@ import { tool } from "@opencode-ai/plugin";
 import { closeDb, openDb, runMigrations, searchTasks } from "ndomo/db";
 
 export default tool({
-  description:
-    "Full-text search over task descriptions, results, and errors using SQLite FTS5.",
+  description: "Full-text search over task descriptions, results, and errors using SQLite FTS5.",
   args: {
     query: tool.schema.string(),
     limit: tool.schema.number().optional(),

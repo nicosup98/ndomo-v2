@@ -1,16 +1,17 @@
 # ndomo
 
-OpenCode multi-agent plugin. Taller de artesanos: 15 specialists under one Foreman. Caveman-native. opencode-mem integrated. DCP peer optional.
+OpenCode multi-agent plugin. Taller de artesanos: 19 specialists under one Foreman, one Craftsman, and one Warden. Caveman-native. opencode-mem integrated. DCP peer optional.
 
 ## What is ndomo
 
-ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/opencode-ai). It routes development tasks to 15 specialized agents (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler) coordinated by a single Foreman. All agents use the Caveman output protocol for token-efficient communication. Memory persistence across sessions is handled by opencode-mem. The optional DCP plugin provides additional context pruning for long sessions.
+ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/opencode-ai). It routes development tasks to 19 specialized agents (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler, and ops agents) coordinated by 3 primaries: Foreman (planning), Craftsman (implementation), Warden (operations). All agents use the Caveman output protocol for token-efficient communication. Memory persistence across sessions is handled by opencode-mem. The optional DCP plugin provides additional context pruning for long sessions.
 
 ## Agents
 
 | Agent | Role | Model (default preset) | Type |
 |---|---|---|---|
 | **foreman** | Master orchestrator and scheduler | minimax/MiniMax-M3 | primary |
+| **warden** | Ops custodian — CI/CD, deploy, releases, monitoring | opencode-go/deepseek-v4-flash | primary |
 | **scout** | Codebase reconnaissance | opencode-go/minimax-m2.7 | subagent |
 | **scribe** | External knowledge retrieval | opencode-go/minimax-m2.7 | subagent |
 | **painter** | UI/UX design and visual composition | opencode-go/kimi-k2.6 | subagent |
@@ -25,8 +26,12 @@ ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/op
 | **guild** | Multi-LLM consensus and debate | opencode-go/deepseek-v4-pro | subagent |
 | **inspector** | Code quality and security auditor | opencode-go/deepseek-v4-pro | subagent |
 | **chronicler** | Technical documentation writer | opencode-go/deepseek-v4-flash | subagent |
+| **ci-smith** | CI/CD pipeline specialist | opencode-go/deepseek-v4-flash | subagent |
+| **deploy-smith** | Deployment automation specialist | opencode-go/deepseek-v4-flash | subagent |
+| **release-smith** | Release management specialist | opencode-go/deepseek-v4-flash | subagent |
+| **ops-scout** | Infrastructure recon specialist (read-only) | opencode-go/deepseek-v4-flash | subagent |
 
-**Groups:** Orchestrator (foreman), Explorers (scout, scribe), Builders (painter, smith, go-smith, js-smith, python-smith, vue-smith, zig-smith, rust-smith), Advisors (sage, guild), Quality (inspector, chronicler).
+**Groups:** Orchestrator (foreman), Explorers (scout, scribe), Builders (painter, smith, go-smith, js-smith, python-smith, vue-smith, zig-smith, rust-smith), Advisors (sage, guild), Quality (inspector, chronicler), Operations (warden, ci-smith, deploy-smith, release-smith, ops-scout).
 
 ## Quick Start
 
@@ -163,6 +168,6 @@ MIT
 
 ## Links
 
-- Repository: `<repo-url>`
+- Repository: [https://github.com/nicosup98/ndomo-v2](https://github.com/nicosup98/ndomo-v2)
 - OpenCode: [https://github.com/opencode-ai](https://github.com/opencode-ai)
 - opencode-mem: [https://github.com/opencode-ai/opencode-mem](https://github.com/opencode-ai/opencode-mem)

@@ -8,8 +8,8 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, listTasksByPlan, openDb, runMigrations } from "ndomo/db";
 import type { TaskStatus } from "ndomo/db";
+import { closeDb, listTasksByPlan, openDb, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "List tasks for a plan, optionally filtered by status.",

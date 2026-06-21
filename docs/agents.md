@@ -2,11 +2,11 @@
 
 ## Overview
 
-ndomo defines 16 agents grouped by function (2 primaries + 14 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
+ndomo defines 21 agents grouped by function (3 primaries + 18 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
 
 ## Primaries
 
-Two primary agents operate independently. The user switches between them manually via TUI.
+Three primary agents operate independently. The user switches between them manually via TUI.
 
 ### foreman
 
@@ -64,6 +64,23 @@ Flow (4 pasos):
 `task.metadata.stack` actúa como override explícito sobre la extensión. Si no hay match, usa `smith`.
 
 **Painter solo craftsman:** El agente UI/UX `painter` solo es invocable desde craftsman, no desde foreman. Craftsman decide: painter si `stack="vue"` y `type="design"`, o vue-smith para implementación lógica.
+
+### warden
+
+**Custodio de operaciones.** Primary agent para CI/CD, deploy, releases, monitoring, secrets, branch strategy y security ops. Opera en paralelo con foreman (planificación) y craftsman (implementación) — su dominio es exclusivamente ops.
+
+- **Model:** opencode-go/deepseek-v4-flash
+- **Temperature:** 0.3
+- **Permissions:** edit (ask), write (ask), bash (ask con read-only allow), webfetch (allow), question (allow), task (allow)
+- **Delegates to:** ci-smith, deploy-smith, release-smith, ops-scout (own fleet), sage, inspector (reused)
+- **File:** `agents/warden.md`
+
+**Cuándo usar:**
+- **Ad-hoc (cambio directo):** Ops simple — cambiar a warden en TUI sin pasar por foreman. Ej: bump version, restart service, audit one-off.
+- **Plan formal:** Warden crea plan con `metadata.category="ops"`, dispatcha via `task_create_batch` con agent="ci-smith"/"deploy-smith"/etc.
+- **Dispatched:** Foreman crea plan code+ops, dispatcha warden para portions ops. Warden hereda `plan_id` via session.
+
+**Regla de oro:** Warden NUNCA dispatcha a craftsman/smith/foreman. Si la tarea es code+ops → pedir al usuario que foreman planifique primero.
 
 ## Explorers
 
@@ -219,6 +236,51 @@ Technical documentation writer. Analyzes code and generates Markdown documentati
 - **Permissions:** edit (allow), write (allow), bash (deny)
 - **File:** `agents/chronicler.md`
 - **Use when:** "document this API", "generate README", "write migration guide"
+
+## Ops Sub-Agents
+
+Warden delega en 4 sub-agentes especializados en operaciones:
+
+### ci-smith
+
+**CI/CD pipeline specialist.** Crea/modifica GitHub Actions, GitLab CI, CircleCI workflows.
+
+- **Model:** opencode-go/deepseek-v4-flash
+- **Temperature:** 0.5
+- **Permissions:** edit (allow for `.github/workflows/*.yml`), bash (allow for `gh workflow*`)
+- **Delegates to:** none (focused specialist)
+- **File:** `agents/ci-smith.md`
+
+### deploy-smith
+
+**Deployment automation specialist.** Scripts de deploy, Docker, k8s, rollback procedures.
+
+- **Model:** opencode-go/deepseek-v4-flash
+- **Temperature:** 0.5
+- **Permissions:** edit (allow for `scripts/deploy*`, `Dockerfile*`, `k8s/`)
+- **Delegates to:** none
+- **File:** `agents/deploy-smith.md`
+
+### release-smith
+
+**Release management specialist.** Semver, CHANGELOG, GitHub releases, branch strategy enforcement.
+
+- **Model:** opencode-go/deepseek-v4-flash
+- **Temperature:** 0.3
+- **Permissions:** edit (allow for `CHANGELOG.md`, `package.json`)
+- **Delegates to:** none
+- **File:** `agents/release-smith.md`
+
+### ops-scout
+
+**Infrastructure reconnaissance specialist.** Audit de CI/CD/deploy/monitoring/secrets. Read-only.
+
+- **Model:** opencode-go/deepseek-v4-flash
+- **Temperature:** 0.5
+- **Permissions:** edit (deny), write (deny), bash (allow read-only)
+- **Delegates to:** none
+- **File:** `agents/ops-scout.md`
+- **Note:** Cross-primary — único sub-agent dispatchable por warden O foreman.
 
 ## Routing Tables
 
