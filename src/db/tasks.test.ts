@@ -12,6 +12,7 @@ import { createPlan, getPlan } from "./plans.ts";
 import { getSession } from "./sessions.ts";
 import {
   createTasksBatch,
+  getTask,
   nextTaskForAgent,
   splitFilesByStack,
   updateTaskStatus,
@@ -568,5 +569,136 @@ describe("createTasksBatch — cross-stack split (M7)", () => {
     for (const task of tasks) {
       expect((task.metadata as Record<string, unknown>).splitReason).toBe("cross-stack");
     }
+  });
+});
+
+// ─── T1: updateTaskStatus — extended fields ──────────────────────────────────
+
+describe("updateTaskStatus — extended fields (T1)", () => {
+  test("artifacts write", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "done", { artifacts: ["file1.ts", "file2.ts"] });
+
+    const row = db.query("SELECT artifacts FROM plan_tasks WHERE id = ?").get(taskId) as {
+      artifacts: string;
+    };
+    expect(JSON.parse(row.artifacts)).toEqual(["file1.ts", "file2.ts"]);
+  });
+
+  test("artifacts truncation", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+
+    // Build artifacts array whose JSON > 16KB
+    const longStrings = Array.from({ length: 200 }, (_, i) => `file${"x".repeat(100)}_${i}.ts`);
+    const warnSpy = { calls: [] as string[] };
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnSpy.calls.push(args.join(" "));
+      origWarn(...args);
+    };
+
+    try {
+      const result = updateTaskStatus(db, taskId, "done", { artifacts: longStrings });
+
+      expect(result?.truncation.truncated).toBe(true);
+      expect(warnSpy.calls.some((m) => m.includes("artifacts truncated"))).toBe(true);
+
+      const row = db.query("SELECT artifacts FROM plan_tasks WHERE id = ?").get(taskId) as {
+        artifacts: string;
+      };
+      const stored: string[] = JSON.parse(row.artifacts);
+      expect(stored.length).toBeLessThan(longStrings.length);
+      // Stored JSON must fit within 16KB
+      expect(JSON.stringify(stored).length).toBeLessThanOrEqual(16 * 1024);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  test("metadataPatch deep merge", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { a: 1, b: { x: 1 } } as unknown as Record<string, unknown> }),
+    ]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "done", { metadataPatch: { b: { y: 2 }, c: 3 } });
+
+    const task = getTask(db, taskId);
+    expect(task?.metadata as unknown as Record<string, unknown>).toEqual({
+      a: 1,
+      b: { x: 1, y: 2 },
+      c: 3,
+    });
+  });
+
+  test("reviewedBy write", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "done", { reviewedBy: "inspector" });
+
+    const row = db.query("SELECT reviewed_by FROM plan_tasks WHERE id = ?").get(taskId) as {
+      reviewed_by: string;
+    };
+    expect(row.reviewed_by).toBe("inspector");
+  });
+
+  test("reviewedVerdict stored in metadata", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "done", { reviewedVerdict: "approved" });
+
+    const task = getTask(db, taskId);
+    expect((task?.metadata as Record<string, unknown>).reviewedVerdict).toBe("approved");
+  });
+
+  test("retrocompat — undefined fields = no-write", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask({ artifacts: ["existing.ts"] })]);
+    const taskId = tasks[0]?.id as string;
+
+    // Update with only result — artifacts/metadata/reviewedBy should stay unchanged
+    updateTaskStatus(db, taskId, "done", { result: "ok" });
+
+    const row = db
+      .query("SELECT artifacts, reviewed_by, metadata FROM plan_tasks WHERE id = ?")
+      .get(taskId) as { artifacts: string; reviewed_by: string | null; metadata: string };
+    expect(JSON.parse(row.artifacts)).toEqual(["existing.ts"]);
+    expect(row.reviewed_by).toBeNull();
+  });
+
+  test("combined — all fields at once", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask({ metadata: { existing: true } })]);
+    const taskId = tasks[0]?.id as string;
+
+    const result = updateTaskStatus(db, taskId, "done", {
+      result: "final output",
+      artifacts: ["a.ts", "b.ts"],
+      metadataPatch: { newKey: 42 },
+      reviewedBy: "warden",
+      reviewedVerdict: "pass",
+    });
+
+    expect(result?.result).toBe("final output");
+
+    const row = db
+      .query("SELECT artifacts, reviewed_by, metadata FROM plan_tasks WHERE id = ?")
+      .get(taskId) as { artifacts: string; reviewed_by: string; metadata: string };
+    expect(JSON.parse(row.artifacts)).toEqual(["a.ts", "b.ts"]);
+    expect(row.reviewed_by).toBe("warden");
+    const meta = JSON.parse(row.metadata);
+    expect(meta.existing).toBe(true);
+    expect(meta.newKey).toBe(42);
+    expect(meta.reviewedVerdict).toBe("pass");
   });
 });

@@ -62,6 +62,52 @@ The install script:
 
 **Note:** The `reasoning_effort` field (optional, `low`|`medium`|`high`|`xhigh`) is supported for reasoning-capable models (DeepSeek, MiMo, OpenAI). Omit it for non-reasoning models.
 
+## Development Workflow
+
+When developing ndomo (editing agents, skills, config, or source files), use these commands to apply changes:
+
+| Command | When to use | What it does |
+|---|---|---|
+| `./scripts/install.sh` | First install, after cloning, or after changing agents/skills/config | Copies agents, skills, and config to `~/.config/opencode/`. Installs ndomo package. Always preferred for structural changes. |
+| `bun run dev:bust` | After editing only `src/*.ts` source files (no agent/skill/config changes) | Quick cache bust: removes stale Bun transpiler cache entries referencing ndomo, bumps mtime on all `src/*.ts` files. Does not kill opencode. |
+| `bun run dev:reset` | Same as `dev:bust` but when opencode is running and you need a clean restart | `dev:bust` + kills running opencode processes. Run this after editing source to ensure the next `opencode` picks up fresh code. |
+
+### Daily dev loop
+
+1. Edit source files in `src/`.
+2. Run `bun run dev:reset` to kill opencode + bust Bun cache + bump mtimes.
+3. Start opencode: `opencode`.
+4. Repeat.
+
+### Why symlinks cause stale cache
+
+Bun caches transpiled TypeScript modules in `~/.bun/install/cache/` keyed by the **resolved path** of the module. When ndomo is installed via a symlink (e.g., `~/.config/opencode/node_modules/ndomo → /home/nico/ndomo`), the cache key uses the symlink path. Editing source files on the target filesystem does **not** change the symlink path, so Bun serves stale code from cache.
+
+The `file:` dep strategy in `install_ndomo_package()` avoids this by creating a real copy in `node_modules` (no symlink → no stale cache). If you ever end up with a symlink install (from an older `install.sh` version or a manual `ln -s`), re-run `./scripts/install.sh` — it detects the symlink, removes it, and reinstalls as a real copy (`scripts/install.sh` lines 247–254).
+
+### Manual cache busting (advanced)
+
+Run the cache bust script directly for more control:
+
+```bash
+# Dry-run — inspect what would be removed
+./scripts/dev-bust-cache.sh
+
+# Apply — remove stale cache entries + bump mtimes
+./scripts/dev-bust-cache.sh --apply
+
+# Kill opencode first, then bust cache
+./scripts/dev-bust-cache.sh --apply --kill
+```
+
+The script (`scripts/dev-bust-cache.sh`):
+1. Optionally kills running opencode processes (`--kill`)
+2. Removes Bun cache entries referencing "ndomo"
+3. Removes Bun cache entries referencing the ndomo source path (`$PROJECT_ROOT/src`)
+4. Touches all `src/*.ts` files to bump mtime (forces re-transpilation)
+
+It is **idempotent** — safe to run multiple times. No-op if the cache is already clean.
+
 ## Install Flags
 
 | Flag | Description |

@@ -294,3 +294,215 @@ export function sessionFromRow(row: unknown): Session {
     archivedAt: r.archived_at ?? null,
   };
 }
+
+// ── v13: Ops types ──────────────────────────────────────────────
+
+export type EnvironmentSlug = string
+export type ReleaseVersion = string
+
+export type DeploymentStatus = "planned" | "in_progress" | "succeeded" | "failed" | "rolled_back"
+export type IncidentSeverity = "sev1" | "sev2" | "sev3" | "sev4"
+export type IncidentStatus = "open" | "triaging" | "mitigated" | "resolved" | "postmortem"
+export type RollbackStatus = "planned" | "approved" | "dry_run" | "executing" | "success" | "failed" | "cancelled"
+
+export interface Environment {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  metadata: Record<string, unknown> | null
+  createdAt: number
+  updatedAt: number
+  archivedAt: number | null
+}
+
+export interface Release {
+  id: string
+  version: string
+  title: string
+  notes: string | null
+  metadata: Record<string, unknown> | null
+  createdAt: number
+  archivedAt: number | null
+}
+
+export interface Deployment {
+  id: string
+  releaseId: string
+  environmentId: string
+  status: DeploymentStatus
+  deployedAt: number | null
+  createdAt: number
+  metadata: Record<string, unknown> | null
+}
+
+export interface Incident {
+  id: string
+  title: string
+  severity: IncidentSeverity
+  status: IncidentStatus
+  summary: string | null
+  triggeredByDeploymentId: string | null
+  createdAt: number
+  updatedAt: number
+  resolvedAt: number | null
+  metadata: Record<string, unknown> | null
+}
+
+export interface RollbackExecution {
+  id: string
+  deploymentId: string
+  incidentId: string | null
+  newDeploymentId: string | null
+  status: RollbackStatus
+  plan: string
+  executedAt: number | null
+  createdAt: number
+  metadata: Record<string, unknown> | null
+}
+
+// Insert types (for createIncident/recordRollback helpers)
+export interface InsertIncident {
+  title: string
+  severity: IncidentSeverity
+  summary?: string
+  triggeredByDeploymentId?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface InsertRollback {
+  deploymentId: string
+  incidentId?: string
+  newDeploymentId?: string
+  status?: RollbackStatus
+  plan: string
+  metadata?: Record<string, unknown>
+}
+
+// Row types (internal, for mappers)
+interface EnvironmentRow {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  metadata: string | null
+  created_at: number
+  updated_at: number
+  archived_at: number | null
+}
+
+interface ReleaseRow {
+  id: string
+  version: string
+  title: string
+  notes: string | null
+  metadata: string | null
+  created_at: number
+  archived_at: number | null
+}
+
+interface DeploymentRow {
+  id: string
+  release_id: string
+  environment_id: string
+  status: string
+  deployed_at: number | null
+  created_at: number
+  metadata: string | null
+}
+
+interface IncidentRow {
+  id: string
+  title: string
+  severity: string
+  status: string
+  summary: string | null
+  triggered_by_deployment_id: string | null
+  created_at: number
+  updated_at: number
+  resolved_at: number | null
+  metadata: string | null
+}
+
+interface RollbackRow {
+  id: string
+  deployment_id: string
+  incident_id: string | null
+  new_deployment_id: string | null
+  status: string
+  plan: string
+  executed_at: number | null
+  created_at: number
+  metadata: string | null
+}
+
+export function environmentFromRow(row: unknown): Environment {
+  const r = row as EnvironmentRow
+  return {
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    description: r.description ?? null,
+    metadata: r.metadata != null ? JSON.parse(r.metadata) : null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    archivedAt: r.archived_at ?? null,
+  }
+}
+
+export function releaseFromRow(row: unknown): Release {
+  const r = row as ReleaseRow
+  return {
+    id: r.id,
+    version: r.version,
+    title: r.title,
+    notes: r.notes ?? null,
+    metadata: r.metadata != null ? JSON.parse(r.metadata) : null,
+    createdAt: r.created_at,
+    archivedAt: r.archived_at ?? null,
+  }
+}
+
+export function deploymentFromRow(row: unknown): Deployment {
+  const r = row as DeploymentRow
+  return {
+    id: r.id,
+    releaseId: r.release_id,
+    environmentId: r.environment_id,
+    status: r.status as DeploymentStatus,
+    deployedAt: r.deployed_at ?? null,
+    createdAt: r.created_at,
+    metadata: r.metadata != null ? JSON.parse(r.metadata) : null,
+  }
+}
+
+export function incidentFromRow(row: unknown): Incident {
+  const r = row as IncidentRow
+  return {
+    id: r.id,
+    title: r.title,
+    severity: r.severity as IncidentSeverity,
+    status: r.status as IncidentStatus,
+    summary: r.summary ?? null,
+    triggeredByDeploymentId: r.triggered_by_deployment_id ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    resolvedAt: r.resolved_at ?? null,
+    metadata: r.metadata != null ? JSON.parse(r.metadata) : null,
+  }
+}
+
+export function rollbackFromRow(row: unknown): RollbackExecution {
+  const r = row as RollbackRow
+  return {
+    id: r.id,
+    deploymentId: r.deployment_id,
+    incidentId: r.incident_id ?? null,
+    newDeploymentId: r.new_deployment_id ?? null,
+    status: r.status as RollbackStatus,
+    plan: r.plan,
+    executedAt: r.executed_at ?? null,
+    createdAt: r.created_at,
+    metadata: r.metadata != null ? JSON.parse(r.metadata) : null,
+  }
+}

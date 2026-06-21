@@ -23,6 +23,8 @@
     "format": "biome format --write .",
     "test": "bun test",
     "test:smoke": "bash scripts/smoke.sh",
+    "dev:bust": "bash scripts/dev-bust-cache.sh --apply",
+    "dev:reset": "bash scripts/dev-bust-cache.sh --apply --kill",
     "status:plans": "bun run src/cli/status.ts --plans",
     "clean": "rm -rf dist .slim/worktrees",
     "prepare": "husky"

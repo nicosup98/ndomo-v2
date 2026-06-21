@@ -1,7 +1,7 @@
 ---
 description: Implementador Artesano / Disciplined Craftsman (modo ad-hoc o planificado)
 mode: primary
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/glm-5.2
 temperature: 0.1
 permission:
   edit: allow

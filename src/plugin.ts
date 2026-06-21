@@ -18,9 +18,10 @@ import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { openDb } from "./db/client.ts";
 import { runMigrations } from "./db/migrations.ts";
-import type { ArchiveResult } from "./db/plan-archive.ts";
-import { archivePlan, resolveArchiveDir } from "./db/plan-archive.ts";
+import { resolveArchiveDir } from "./db/plan-archive.ts";
+import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
+import { planUpdateStatusExecutor } from "./db/plan-update-status.ts";
 import {
   approvePlan,
   deletePlan,
@@ -28,20 +29,26 @@ import {
   getPlanBySlug,
   listPlans,
   searchPlans,
-  updatePlanStatus,
 } from "./db/plans.ts";
 import { checkpointSession, endSession, listSessions, startSession } from "./db/sessions.ts";
 import { registerShutdownHandlers } from "./db/shutdown.ts";
+import { createIncident } from "./db/incidents.ts";
+import { recordRollback } from "./db/rollbacks.ts";
 import {
   createTasksBatch,
   listTasksByPlan,
   nextTaskForAgent,
+  resolveTaskDependencies,
   searchTasks,
   updateTaskStatus,
 } from "./db/tasks.ts";
 import type {
+  IncidentSeverity,
+  InsertIncident,
+  InsertRollback,
   PlanMetadata,
   PlanStatus,
+  RollbackStatus,
   SessionMetadata,
   TaskMetadata,
   TaskStatus,
@@ -213,6 +220,16 @@ export type NdomoConfig = {
     autoCaptureEnabled: boolean;
     cavemanCompress: boolean;
   };
+  autoCheckpoint?: {
+    enabled?: boolean;
+    triggers?: string[];
+    minIntervalMs?: number;
+    captureState?: {
+      completedTasks?: boolean;
+      currentPhase?: boolean;
+      blockers?: boolean;
+    };
+  };
 };
 
 /**
@@ -377,6 +394,9 @@ export const NdomoPlugin: Plugin = async (
 
   /** filepath → `${sessionID}:${callID}` of the task that locked it. */
   const activeWrites = new Map<string, string>();
+
+  // Auto-checkpoint dispatcher (T3.3)
+  const autoCheckpoint = new AutoCheckpointDispatcher(db, ndomoConfig?.autoCheckpoint);
 
   // ─── Hooks ───────────────────────────────────────────────────────────────
 
@@ -696,7 +716,9 @@ export const NdomoPlugin: Plugin = async (
           files: tool.schema.array(tool.schema.string()).optional(),
         },
         execute: async (args, ctx) => {
-          return JSON.stringify(planCreateExecutor(db, args, ctx));
+          return JSON.stringify(
+            planCreateExecutor(db, args, { ...ctx, agent: ctx.agent ?? "unknown" }),
+          );
         },
       }),
 
@@ -787,7 +809,7 @@ export const NdomoPlugin: Plugin = async (
 
       plan_update_status: tool({
         description:
-          "Update a plan's status (draft, approved, executing, completed, failed, abandoned). Auto-archives to markdown on terminal status.",
+          "Update a plan's status (draft, approved, executing, completed, failed, abandoned). Auto-archives to markdown on terminal status. Use dryRun=true to pre-check readiness (blockers/warnings) without mutating. Use force=true with forceReason to bypass blockers (except status_invalid) — captured to plan_audit.",
         args: {
           id: tool.schema.string(),
           status: tool.schema.enum([
@@ -798,44 +820,112 @@ export const NdomoPlugin: Plugin = async (
             "failed",
             "abandoned",
           ]),
+          dryRun: tool.schema.boolean().optional(),
+          force: tool.schema.boolean().optional(),
+          forceReason: tool.schema.string().optional(),
         },
         execute: async (args, ctx) => {
-          const opts: {
-            sessionId?: string;
-            updatedBy: string;
-            executedByAgent?: string;
-            executedBySession?: string;
+          const archiveDir = resolveArchiveDir(worktree || directory);
+          const executorArgs: {
+            id: string;
+            status: PlanStatus;
+            dryRun?: boolean;
+            force?: boolean;
+            forceReason?: string;
           } = {
-            updatedBy: ctx.agent ?? "unknown",
+            id: args.id,
+            status: args.status as PlanStatus,
           };
-          if (ctx.sessionID) opts.sessionId = ctx.sessionID;
-          // v8: write-once executed_by when plan enters 'executing'
-          if (args.status === "executing") {
-            opts.executedByAgent = ctx.agent ?? "unknown";
-            if (ctx.sessionID) opts.executedBySession = ctx.sessionID;
+          if (args.dryRun !== undefined) executorArgs.dryRun = args.dryRun;
+          if (args.force !== undefined) executorArgs.force = args.force;
+          if (args.forceReason !== undefined) executorArgs.forceReason = args.forceReason;
+          const result = planUpdateStatusExecutor(
+            db,
+            executorArgs,
+            {
+              agent: ctx.agent,
+              sessionID: ctx.sessionID,
+              messageID: ctx.messageID,
+              directory,
+              worktree,
+            },
+            archiveDir,
+          );
+          // T3.3: auto-checkpoint on phase transition
+          if (result.statusChanged && !result.dryRun) {
+            autoCheckpoint.dispatch("phase_transition", {
+              planId: args.id,
+              sessionId: ctx.sessionID,
+              blockers: result.blockers.length > 0 ? result.blockers : undefined,
+            });
           }
-          const updated = updatePlanStatus(db, args.id, args.status as PlanStatus, opts);
+          return JSON.stringify(result);
+        },
+      }),
 
-          // Auto-archive on terminal status
-          const TERMINAL_STATUSES = new Set(["completed", "failed", "abandoned"]);
-          let archiveResult: ArchiveResult | null = null;
-          let archiveError: string | null = null;
-
-          if (updated && TERMINAL_STATUSES.has(args.status)) {
-            try {
-              archiveResult = archivePlan(db, updated.id, {
-                memDir: resolveArchiveDir(worktree || directory),
-              });
-            } catch (err) {
-              archiveError = err instanceof Error ? err.message : String(err);
-              console.warn(`[ndomo] auto-archive failed for plan ${updated.id}: ${archiveError}`);
+      plan_progress: tool({
+        description:
+          "Get plan progress summary (task counts + percentage). Filterable by planId and/or owner (metadata.ownedBy).",
+        args: {
+          planId: tool.schema.string().optional(),
+          owner: tool.schema.string().optional(),
+        },
+        execute: async (args) => {
+          if (args.owner) {
+            if (args.planId) {
+              const rows = db
+                .query(
+                  `SELECT pp.* FROM plan_progress_active pp
+                 JOIN plans p ON pp.plan_id = p.id
+                 WHERE pp.plan_id = ? AND json_extract(p.metadata, '$.ownedBy') = ?`,
+                )
+                .all(args.planId, args.owner);
+              return JSON.stringify(rows);
             }
+            const rows = db
+              .query(
+                `SELECT pp.* FROM plan_progress_active pp
+               JOIN plans p ON pp.plan_id = p.id
+               WHERE json_extract(p.metadata, '$.ownedBy') = ?`,
+              )
+              .all(args.owner);
+            return JSON.stringify(rows);
           }
+          if (args.planId) {
+            const rows = db
+              .query("SELECT * FROM plan_progress_active WHERE plan_id = ?")
+              .all(args.planId);
+            return JSON.stringify(rows);
+          }
+          const rows = db.query("SELECT * FROM plan_progress_active").all();
+          return JSON.stringify(rows);
+        },
+      }),
 
+      plan_files_write: tool({
+        description:
+          "Register files for a plan in plan_files with explicit roles (e.g. 'input', 'modified', 'output', 'reference'). Uses INSERT OR IGNORE for idempotency.",
+        args: {
+          planId: tool.schema.string(),
+          files: tool.schema.array(
+            tool.schema.object({
+              filePath: tool.schema.string(),
+              role: tool.schema.string(),
+            }),
+          ),
+        },
+        execute: async (args) => {
+          let inserted = 0;
+          for (const f of args.files) {
+            const result = db
+              .query("INSERT OR IGNORE INTO plan_files (plan_id, file_path, role) VALUES (?, ?, ?)")
+              .run(args.planId, f.filePath, f.role);
+            inserted += result.changes;
+          }
           return JSON.stringify({
-            plan: updated,
-            archived: archiveResult,
-            archiveError,
+            planId: args.planId,
+            inserted,
+            totalRequested: args.files.length,
           });
         },
       }),
@@ -915,16 +1005,25 @@ export const NdomoPlugin: Plugin = async (
           const fields: { result?: string; error?: string } = {};
           if (args.result !== undefined) fields.result = args.result;
           if (args.error !== undefined) fields.error = args.error;
-          return JSON.stringify(
-            updateTaskStatus(
-              db,
-              args.id,
-              args.status as TaskStatus,
-              fields,
-              ctx.agent ?? "unknown",
-              { agent: ctx.agent, sessionId: ctx.sessionID },
-            ),
+          const result = updateTaskStatus(
+            db,
+            args.id,
+            args.status as TaskStatus,
+            fields,
+            ctx.agent ?? "unknown",
+            { agent: ctx.agent, sessionId: ctx.sessionID },
           );
+          // T3.3: auto-checkpoint when last task in plan completes
+          if (result && args.status === "done" && result.planId) {
+            const pending = listTasksByPlan(db, result.planId, { status: "pending" });
+            if (pending.length === 0) {
+              autoCheckpoint.dispatch("task_batch_complete", {
+                planId: result.planId,
+                sessionId: ctx.sessionID,
+              });
+            }
+          }
+          return JSON.stringify(result);
         },
       }),
 
@@ -955,6 +1054,173 @@ export const NdomoPlugin: Plugin = async (
         execute: async (args) => {
           const opts = args.planId ? { planId: args.planId } : {};
           return JSON.stringify(nextTaskForAgent(db, args.agent, opts));
+        },
+      }),
+
+      task_dependency_resolver: tool({
+        description:
+          "Resolve task dependencies: check whether a task's dependencies are all done, and list pending/running/failed/blocked/missing deps. Accepts taskId, or planId+orderIndex to look up the task.",
+        args: {
+          taskId: tool.schema.string().optional(),
+          planId: tool.schema.string().optional(),
+          orderIndex: tool.schema.number().optional(),
+        },
+        execute: async (args) => {
+          let resolvedId = args.taskId;
+          if (!resolvedId) {
+            if (!args.planId || args.orderIndex === undefined) {
+              throw new Error(
+                "ndomo: task_dependency_resolver requires either taskId or planId+orderIndex",
+              );
+            }
+            const row = db
+              .query(
+                "SELECT id FROM plan_tasks WHERE plan_id = ? AND order_index = ? AND archived_at IS NULL",
+              )
+              .get(args.planId, args.orderIndex) as { id: string } | undefined;
+            if (!row) {
+              throw new Error(
+                `ndomo: no task found for planId=${args.planId} orderIndex=${args.orderIndex}`,
+              );
+            }
+            resolvedId = row.id;
+          }
+          return JSON.stringify(resolveTaskDependencies(db, resolvedId));
+        },
+      }),
+
+      task_peek_for_agent: tool({
+        description:
+          "List pending tasks for an agent without claiming them (read-only peek, no status change).",
+        args: {
+          agent: tool.schema.string(),
+          planId: tool.schema.string().optional(),
+          limit: tool.schema.number().optional(),
+        },
+        execute: async (args) => {
+          const limit = args.limit ?? 10;
+          const archiveFilter = "AND archived_at IS NULL";
+          const rows = args.planId
+            ? db
+                .query(
+                  `SELECT * FROM plan_tasks WHERE agent = ? AND plan_id = ? AND status = 'pending' ${archiveFilter} ORDER BY order_index LIMIT ?`,
+                )
+                .all(args.agent, args.planId, limit)
+            : db
+                .query(
+                  `SELECT * FROM plan_tasks WHERE agent = ? AND status = 'pending' ${archiveFilter} ORDER BY order_index LIMIT ?`,
+                )
+                .all(args.agent, limit);
+          return JSON.stringify(rows);
+        },
+      }),
+
+      task_add_artifact: tool({
+        description:
+          "Append an artifact path to a task's artifacts array. Optionally register it in plan_files with a role.",
+        args: {
+          taskId: tool.schema.string(),
+          artifact: tool.schema.string(),
+          role: tool.schema.string().optional(),
+        },
+        execute: async (args) => {
+          const row = db
+            .query("SELECT artifacts, plan_id FROM plan_tasks WHERE id = ?")
+            .get(args.taskId) as { artifacts: string; plan_id: string } | undefined;
+          if (!row) throw new Error(`ndomo: task ${args.taskId} not found`);
+          const currentArtifacts = JSON.parse(row.artifacts) as string[];
+          if (currentArtifacts.includes(args.artifact)) {
+            return JSON.stringify({ task: null, added: false, reason: "artifact already exists" });
+          }
+          const updatedArtifacts = [...currentArtifacts, args.artifact];
+          db.query("UPDATE plan_tasks SET artifacts = ? WHERE id = ?").run(
+            JSON.stringify(updatedArtifacts),
+            args.taskId,
+          );
+          if (args.role) {
+            db.query(
+              "INSERT OR IGNORE INTO plan_files (plan_id, file_path, role) VALUES (?, ?, ?)",
+            ).run(row.plan_id, args.artifact, args.role);
+          }
+          const updatedRow = db.query("SELECT * FROM plan_tasks WHERE id = ?").get(args.taskId);
+          return JSON.stringify({ task: updatedRow, added: true });
+        },
+      }),
+
+      task_review: tool({
+        description:
+          "Review a completed task. Sets reviewed_by and reviewed_verdict (stored in metadata). Only works on tasks with status='done'.",
+        args: {
+          taskId: tool.schema.string(),
+          reviewedBy: tool.schema.string(),
+          verdict: tool.schema.string(),
+        },
+        execute: async (args) => {
+          const row = db
+            .query("SELECT status, metadata FROM plan_tasks WHERE id = ?")
+            .get(args.taskId) as { status: string; metadata: string | null } | undefined;
+          if (!row) throw new Error(`ndomo: task ${args.taskId} not found`);
+          if (row.status !== "done")
+            throw new Error(`ndomo: task_review requires status='done', got '${row.status}'`);
+          const currentMeta = row.metadata ? JSON.parse(row.metadata) : {};
+          const updatedMeta = { ...currentMeta, reviewedVerdict: args.verdict };
+          db.query(
+            "UPDATE plan_tasks SET reviewed_by = ?, metadata = ? WHERE id = ?",
+          ).run(args.reviewedBy, JSON.stringify(updatedMeta), args.taskId);
+          const updatedRow = db.query("SELECT * FROM plan_tasks WHERE id = ?").get(args.taskId);
+          return JSON.stringify({ task: updatedRow });
+        },
+      }),
+
+      // ── Ops (T2: warden) ──────────────────────────────────────────
+
+      incident_create: tool({
+        description:
+          "Create an ops incident record. Validates severity enum (sev1-4) and FK on triggered_by_deployment_id if provided. Sets metadata.created_by from ctx.agent.",
+        args: {
+          title: tool.schema.string(),
+          severity: tool.schema.enum(["sev1", "sev2", "sev3", "sev4"]),
+          summary: tool.schema.string().optional(),
+          triggeredByDeploymentId: tool.schema.string().optional(),
+          metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+        },
+        execute: async (args, ctx) => {
+          const input: InsertIncident = {
+            title: args.title,
+            severity: args.severity as IncidentSeverity,
+            metadata: { ...(args.metadata ?? {}), created_by: ctx.agent ?? "unknown" },
+            ...(args.summary !== undefined && { summary: args.summary }),
+            ...(args.triggeredByDeploymentId !== undefined && { triggeredByDeploymentId: args.triggeredByDeploymentId }),
+          };
+          const incident = createIncident(db, input);
+          return JSON.stringify(incident);
+        },
+      }),
+
+      rollback_record: tool({
+        description:
+          "Record a rollback execution tied to a deployment (required) and optionally an incident and/or new_deployment. Validates FKs + status enum. Sets metadata.executed_by_agent from ctx.agent.",
+        args: {
+          deploymentId: tool.schema.string(),
+          plan: tool.schema.string(),
+          incidentId: tool.schema.string().optional(),
+          status: tool.schema
+            .enum(["planned", "approved", "dry_run", "executing", "success", "failed", "cancelled"])
+            .optional(),
+          newDeploymentId: tool.schema.string().optional(),
+          metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+        },
+        execute: async (args, ctx) => {
+          const input: InsertRollback = {
+            deploymentId: args.deploymentId,
+            plan: args.plan,
+            metadata: { ...(args.metadata ?? {}), executed_by_agent: ctx.agent ?? "unknown" },
+            ...(args.incidentId !== undefined && { incidentId: args.incidentId }),
+            ...(args.status !== undefined && { status: args.status as RollbackStatus }),
+            ...(args.newDeploymentId !== undefined && { newDeploymentId: args.newDeploymentId }),
+          };
+          const rollback = recordRollback(db, input);
+          return JSON.stringify(rollback);
         },
       }),
 

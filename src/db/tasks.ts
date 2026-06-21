@@ -269,11 +269,62 @@ function truncWithInfo(s: string | undefined): [string | undefined, boolean, num
   return [s, false, undefined];
 }
 
+/**
+ * Deep merge source into target. Nested objects merge recursively,
+ * arrays are replaced (not concatenated), primitives overwrite.
+ */
+function deepMerge(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...target };
+  for (const key of Object.keys(source)) {
+    const srcVal = source[key];
+    const tgtVal = result[key];
+    if (
+      srcVal !== null &&
+      typeof srcVal === "object" &&
+      !Array.isArray(srcVal) &&
+      tgtVal !== null &&
+      typeof tgtVal === "object" &&
+      !Array.isArray(tgtVal)
+    ) {
+      result[key] = deepMerge(tgtVal as Record<string, unknown>, srcVal as Record<string, unknown>);
+    } else {
+      result[key] = srcVal;
+    }
+  }
+  return result;
+}
+
+/**
+ * Truncate artifacts array so JSON.stringify fits within MAX_RESULT_BYTES.
+ * Keeps first N elements that fit. Returns [truncatedArray, wasTruncated].
+ */
+function truncateArtifacts(artifacts: string[]): [string[], boolean] {
+  const fullJson = JSON.stringify(artifacts);
+  if (fullJson.length <= MAX_RESULT_BYTES) return [artifacts, false];
+  const truncated: string[] = [];
+  for (const item of artifacts) {
+    const candidate = [...truncated, item];
+    if (JSON.stringify(candidate).length > MAX_RESULT_BYTES) break;
+    truncated.push(item);
+  }
+  return [truncated, true];
+}
+
 export function updateTaskStatus(
   db: Database,
   id: string,
   status: TaskStatus,
-  fields?: { result?: string; error?: string },
+  fields?: {
+    result?: string;
+    error?: string;
+    artifacts?: string[];
+    metadataPatch?: Record<string, unknown>;
+    reviewedBy?: string;
+    reviewedVerdict?: string;
+  },
   updatedBy?: string,
   ctx?: { agent?: string; sessionId?: string },
 ): TaskUpdateResult {
@@ -326,6 +377,44 @@ export function updateTaskStatus(
     }
   }
 
+  // T1: artifacts — JSON.stringify, truncate array if >16KB
+  if (fields?.artifacts !== undefined) {
+    const [truncatedArr, wasTruncated] = truncateArtifacts(fields.artifacts);
+    if (wasTruncated) {
+      truncationInfo.truncated = true;
+      truncationInfo.originalLength = JSON.stringify(fields.artifacts).length;
+      truncationInfo.truncatedLength = MAX_RESULT_BYTES;
+      console.warn(
+        `ndomo: task_update_status ${id} — artifacts truncated from ${truncationInfo.originalLength} to ${MAX_RESULT_BYTES} bytes`,
+      );
+    }
+    setClauses.push("artifacts = ?");
+    params.push(JSON.stringify(truncatedArr));
+  }
+
+  // T1: reviewed_by column
+  if (fields?.reviewedBy !== undefined) {
+    setClauses.push("reviewed_by = ?");
+    params.push(fields.reviewedBy);
+  }
+
+  // T1: metadataPatch (deep merge) + reviewedVerdict (stored in metadata)
+  if (fields?.metadataPatch !== undefined || fields?.reviewedVerdict !== undefined) {
+    const currentRow = db.query("SELECT metadata FROM plan_tasks WHERE id = ?").get(id) as
+      | { metadata: string | null }
+      | undefined;
+    const currentMetadata: Record<string, unknown> = currentRow?.metadata
+      ? JSON.parse(currentRow.metadata)
+      : {};
+    const patch: Record<string, unknown> = { ...(fields.metadataPatch ?? {}) };
+    if (fields?.reviewedVerdict !== undefined) {
+      patch.reviewedVerdict = fields.reviewedVerdict;
+    }
+    const merged = deepMerge(currentMetadata, patch);
+    setClauses.push("metadata = ?");
+    params.push(JSON.stringify(merged));
+  }
+
   if (updatedBy !== undefined) {
     setClauses.push("updated_by = ?");
     params.push(updatedBy);
@@ -358,9 +447,101 @@ export function searchTasks(
 }
 
 /**
+ * Resolve a task's dependencies: classify each dep ID by its current status.
+ * Throws if taskId is not found in the database.
+ *
+ * @returns Object with `canStart` (true iff all deps are 'done') and
+ *   arrays categorizing each dep by status.
+ */
+export function resolveTaskDependencies(
+  db: Database,
+  taskId: string,
+): {
+  canStart: boolean;
+  pendingDeps: string[];
+  runningDeps: string[];
+  failedDeps: string[];
+  blockedDeps: string[];
+  doneDeps: string[];
+  missingDeps: string[];
+  dependencies: string[];
+} {
+  const row = db
+    .query("SELECT dependencies FROM plan_tasks WHERE id = ?")
+    .get(taskId) as { dependencies: string } | undefined;
+  if (!row) throw new Error(`ndomo: task ${taskId} not found`);
+
+  const dependencies: string[] = (JSON.parse(row.dependencies) as string[]) ?? [];
+  if (dependencies.length === 0) {
+    return {
+      canStart: true,
+      pendingDeps: [],
+      runningDeps: [],
+      failedDeps: [],
+      blockedDeps: [],
+      doneDeps: [],
+      missingDeps: [],
+      dependencies,
+    };
+  }
+
+  const pendingDeps: string[] = [];
+  const runningDeps: string[] = [];
+  const failedDeps: string[] = [];
+  const blockedDeps: string[] = [];
+  const doneDeps: string[] = [];
+  const missingDeps: string[] = [];
+
+  // Batch-fetch all dep statuses in one query
+  const placeholders = dependencies.map(() => "?").join(",");
+  const depRows = db
+    .query(`SELECT id, status FROM plan_tasks WHERE id IN (${placeholders})`)
+    .all(...dependencies) as Array<{ id: string; status: string }>;
+
+  const statusMap = new Map<string, string>();
+  for (const dr of depRows) {
+    statusMap.set(dr.id, dr.status);
+  }
+
+  for (const depId of dependencies) {
+    const st = statusMap.get(depId);
+    if (st === undefined) {
+      missingDeps.push(depId);
+    } else if (st === "done") {
+      doneDeps.push(depId);
+    } else if (st === "pending") {
+      pendingDeps.push(depId);
+    } else if (st === "running") {
+      runningDeps.push(depId);
+    } else if (st === "failed") {
+      failedDeps.push(depId);
+    } else if (st === "blocked") {
+      blockedDeps.push(depId);
+    }
+  }
+
+  const canStart =
+    doneDeps.length === dependencies.length;
+
+  return {
+    canStart,
+    pendingDeps,
+    runningDeps,
+    failedDeps,
+    blockedDeps,
+    doneDeps,
+    missingDeps,
+    dependencies,
+  };
+}
+
+/**
  * Atomically claim next pending task for agent.
  * Uses transaction (SELECT + UPDATE) to prevent race condition.
  * SQLite transactions are SERIALIZABLE — no concurrent claim possible.
+ *
+ * Respects task dependencies: a pending task is only claimed if all
+ * entries in its `dependencies` JSON array have status='done'.
  */
 export function nextTaskForAgent(
   db: Database,
@@ -371,35 +552,51 @@ export function nextTaskForAgent(
   const archiveFilter = opts.includeArchived ? "" : "AND archived_at IS NULL";
 
   return db.transaction(() => {
-    if (opts.planId !== undefined) {
-      const row = db
-        .query(
-          `SELECT * FROM plan_tasks
-           WHERE agent = ? AND plan_id = ? AND status = 'pending' ${archiveFilter}
-           ORDER BY order_index LIMIT 1`,
-        )
-        .get(agent, opts.planId);
-      if (row == null) return null;
+    // Fetch candidate pending tasks (cap at 100 for efficiency)
+    const rows =
+      opts.planId !== undefined
+        ? (db
+            .query(
+              `SELECT * FROM plan_tasks
+               WHERE agent = ? AND plan_id = ? AND status = 'pending' ${archiveFilter}
+               ORDER BY order_index LIMIT 100`,
+            )
+            .all(agent, opts.planId) as unknown[])
+        : (db
+            .query(
+              `SELECT * FROM plan_tasks
+               WHERE agent = ? AND status = 'pending' ${archiveFilter}
+               ORDER BY order_index LIMIT 100`,
+            )
+            .all(agent) as unknown[]);
+
+    for (const row of rows) {
       const task = taskFromRow(row);
+
+      // Check dependencies: all must be 'done'
+      if (task.dependencies.length > 0) {
+        const placeholders = task.dependencies.map(() => "?").join(",");
+        const depRows = db
+          .query(`SELECT id, status FROM plan_tasks WHERE id IN (${placeholders})`)
+          .all(...task.dependencies) as Array<{ id: string; status: string }>;
+
+        const statusMap = new Map<string, string>();
+        for (const dr of depRows) {
+          statusMap.set(dr.id, dr.status);
+        }
+
+        const allDone = task.dependencies.every((depId) => statusMap.get(depId) === "done");
+        if (!allDone) continue; // skip — deps not met
+      }
+
+      // Claim this task
       db.query(
         `UPDATE plan_tasks SET status = 'running', started_at = ?, updated_by = ? WHERE id = ?`,
       ).run(now, agent, task.id);
       return { ...task, status: "running" as const, startedAt: now, updatedBy: agent };
     }
 
-    const row = db
-      .query(
-        `SELECT * FROM plan_tasks
-         WHERE agent = ? AND status = 'pending' ${archiveFilter}
-         ORDER BY order_index LIMIT 1`,
-      )
-      .get(agent);
-    if (row == null) return null;
-    const task = taskFromRow(row);
-    db.query(
-      `UPDATE plan_tasks SET status = 'running', started_at = ?, updated_by = ? WHERE id = ?`,
-    ).run(now, agent, task.id);
-    return { ...task, status: "running" as const, startedAt: now, updatedBy: agent };
+    return null;
   })();
 }
 

@@ -658,6 +658,96 @@ CREATE TABLE IF NOT EXISTS plan_audit (
 CREATE INDEX IF NOT EXISTS idx_plan_audit_captured ON plan_audit(captured_at DESC);
 `;
 
+// ── v13: ops tables ─────────────────────────────────────────────────────────
+
+export const SCHEMA_V13_SQL = `
+-- v13: ops tables (environments, releases, deployments, incidents, rollback_executions)
+
+-- environments: named deployment targets (e.g. "prod", "staging", "dev")
+CREATE TABLE IF NOT EXISTS environments (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  slug TEXT NOT NULL UNIQUE,
+  description TEXT,
+  metadata JSON,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  archived_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_environments_slug ON environments(slug);
+CREATE INDEX IF NOT EXISTS idx_environments_archived ON environments(archived_at);
+
+-- releases: versioned artifacts that can be deployed
+CREATE TABLE IF NOT EXISTS releases (
+  id TEXT PRIMARY KEY,
+  version TEXT NOT NULL,
+  title TEXT NOT NULL,
+  notes TEXT,
+  metadata JSON,
+  created_at INTEGER NOT NULL,
+  archived_at INTEGER,
+  CHECK(version <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_releases_version ON releases(version);
+CREATE INDEX IF NOT EXISTS idx_releases_created ON releases(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_releases_archived ON releases(archived_at);
+
+-- deployments: a release deployed to an environment at a point in time
+CREATE TABLE IF NOT EXISTS deployments (
+  id TEXT PRIMARY KEY,
+  release_id TEXT NOT NULL REFERENCES releases(id) ON DELETE RESTRICT,
+  environment_id TEXT NOT NULL REFERENCES environments(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','in_progress','succeeded','failed','rolled_back')),
+  deployed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  metadata JSON,
+  CHECK(release_id <> ''),
+  CHECK(environment_id <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_deployments_release ON deployments(release_id);
+CREATE INDEX IF NOT EXISTS idx_deployments_env ON deployments(environment_id);
+CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status);
+CREATE INDEX IF NOT EXISTS idx_deployments_deployed ON deployments(deployed_at DESC);
+
+-- incidents: operational events, optionally linked to a triggering deployment
+CREATE TABLE IF NOT EXISTS incidents (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL CHECK(title <> ''),
+  severity TEXT NOT NULL CHECK(severity IN ('sev1','sev2','sev3','sev4')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','triaging','mitigated','resolved','postmortem')),
+  summary TEXT,
+  triggered_by_deployment_id TEXT REFERENCES deployments(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  resolved_at INTEGER,
+  metadata JSON
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incidents_deployment ON incidents(triggered_by_deployment_id);
+
+-- rollback_executions: record of a rollback action, optionally tied to an incident
+CREATE TABLE IF NOT EXISTS rollback_executions (
+  id TEXT PRIMARY KEY,
+  deployment_id TEXT NOT NULL REFERENCES deployments(id) ON DELETE RESTRICT,
+  incident_id TEXT REFERENCES incidents(id) ON DELETE SET NULL,
+  new_deployment_id TEXT REFERENCES deployments(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','approved','dry_run','executing','success','failed','cancelled')),
+  plan TEXT NOT NULL,
+  executed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  metadata JSON,
+  CHECK(deployment_id <> ''),
+  CHECK(plan <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_rollbacks_deployment ON rollback_executions(deployment_id);
+CREATE INDEX IF NOT EXISTS idx_rollbacks_incident ON rollback_executions(incident_id);
+CREATE INDEX IF NOT EXISTS idx_rollbacks_new_deployment ON rollback_executions(new_deployment_id);
+CREATE INDEX IF NOT EXISTS idx_rollbacks_status ON rollback_executions(status);
+CREATE INDEX IF NOT EXISTS idx_rollbacks_created ON rollback_executions(created_at DESC);
+`;
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -725,5 +815,10 @@ export const MIGRATIONS: Array<{
     version: 12,
     description: "DB optimization: plan_progress views, composite indexes, plan_audit skeleton",
     sql: SCHEMA_V12_SQL,
+  },
+  {
+    version: 13,
+    description: "ops tables: environments, releases, deployments, incidents, rollback_executions",
+    sql: SCHEMA_V13_SQL,
   },
 ];

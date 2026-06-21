@@ -226,17 +226,16 @@ show_preset_table() {
   done
 }
 
-# Install ndomo package into ~/.config/opencode/node_modules/ via file: dep or symlink
+# Install ndomo package into ~/.config/opencode/node_modules/
+# Strategy order (avoids Bun cache stale with symlinks — see docs/installation.md):
+#   1. file: dep + bun install → real copy in node_modules (best, no symlink)
+#   2. bun link → managed symlink (second best, bun-tracked)
+#   3. manual symlink → last resort only (may cause Bun cache stale)
 install_ndomo_package() {
   local project_root="$1"
   local config_dir="$2"
   local pkg_json="$config_dir/package.json"
-
-  # Skip if already linked/installed
-  if [[ -e "$config_dir/node_modules/ndomo" ]]; then
-    info "ndomo already installed at $config_dir/node_modules/ndomo"
-    return 0
-  fi
+  local nm_ndomo="$config_dir/node_modules/ndomo"
 
   # Skip if user opted out
   if [[ "${NDOMO_SKIP_PACKAGE_INSTALL:-0}" == "1" ]]; then
@@ -244,36 +243,63 @@ install_ndomo_package() {
     return 0
   fi
 
-  # Need package.json in config dir
-  if [[ ! -f "$pkg_json" ]]; then
-    warn "$pkg_json not found, falling back to symlink"
-    ln -sfn "$project_root" "$config_dir/node_modules/ndomo"
+  # If existing install is a symlink, remove it — symlinks cause Bun cache stale
+  if [[ -L "$nm_ndomo" ]]; then
+    warn "existing ndomo install is a symlink (causes Bun cache stale in dev)"
+    info "removing symlink, will reinstall as real copy..."
+    rm -f "$nm_ndomo"
+  elif [[ -e "$nm_ndomo" ]]; then
+    info "ndomo already installed at $nm_ndomo"
     return 0
   fi
 
-  # Strategy 1: add file: dep + bun install
+  # Need package.json in config dir for bun-based strategies
+  if [[ ! -f "$pkg_json" ]]; then
+    warn "$pkg_json not found, falling back to manual symlink"
+    mkdir -p "$config_dir/node_modules"
+    ln -sfn "$project_root" "$nm_ndomo"
+    ok "ndomo symlinked at $nm_ndomo (last resort — no package.json)"
+    warn "symlink install may cause Bun cache stale — run 'bun run dev:bust' to recover"
+    return 0
+  fi
+
+  # Strategy 1: file: dep + bun install → real copy (no symlink, no cache stale)
   if command -v bun >/dev/null 2>&1; then
     info "adding ndomo file: dep to $pkg_json"
     if jq --arg path "$project_root" '.dependencies.ndomo = ("file://" + $path)' "$pkg_json" > "$pkg_json.tmp" && mv "$pkg_json.tmp" "$pkg_json"; then
       if (cd "$config_dir" && bun install --no-frozen-lockfile 2>&1); then
-        if [[ -e "$config_dir/node_modules/ndomo" ]]; then
-          ok "ndomo installed via bun (file: dep)"
+        if [[ -e "$nm_ndomo" ]] && [[ ! -L "$nm_ndomo" ]]; then
+          ok "ndomo installed via bun (file: dep) — real copy, no symlink"
           return 0
         fi
       fi
-      warn "bun install did not materialize ndomo, falling back to symlink"
+      warn "bun install did not materialize ndomo as real copy, trying bun link..."
     else
-      warn "jq update of $pkg_json failed, falling back to symlink"
+      warn "jq update of $pkg_json failed, trying bun link..."
     fi
   else
     warn "bun not found in PATH, using symlink fallback"
   fi
 
-  # Strategy 2: manual symlink (no package.json update)
-  info "creating symlink: $config_dir/node_modules/ndomo -> $project_root"
+  # Strategy 2: bun link → managed symlink (bun-tracked, better than manual)
+  if command -v bun >/dev/null 2>&1; then
+    info "trying bun link..."
+    if (cd "$project_root" && bun link 2>&1) && (cd "$config_dir" && bun link ndomo 2>&1); then
+      if [[ -e "$nm_ndomo" ]]; then
+        ok "ndomo linked via bun link (managed symlink)"
+        warn "bun link uses symlinks — run 'bun run dev:bust' if cache goes stale"
+        return 0
+      fi
+    fi
+    warn "bun link failed, falling back to manual symlink"
+  fi
+
+  # Strategy 3: manual symlink (last resort)
+  info "creating manual symlink: $nm_ndomo -> $project_root"
   mkdir -p "$config_dir/node_modules"
-  if ln -sfn "$project_root" "$config_dir/node_modules/ndomo"; then
-    ok "ndomo symlinked at $config_dir/node_modules/ndomo"
+  if ln -sfn "$project_root" "$nm_ndomo"; then
+    ok "ndomo symlinked at $nm_ndomo (last resort)"
+    warn "manual symlink may cause Bun cache stale — run 'bun run dev:bust' to recover"
   else
     die "failed to install ndomo package"
   fi

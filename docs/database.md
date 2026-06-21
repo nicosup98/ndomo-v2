@@ -149,9 +149,9 @@ FTS5 syntax injection from hyphens and special characters (`src/db/fts-escape.ts
 `SCHEMA_V5_SQL` note: columns are added via `addColumnIfMissing()` in `migrations.ts`
 because SQLite 3.45 lacks `IF NOT EXISTS` for `ALTER TABLE ADD COLUMN` (`src/db/schema.ts:400-403`).
 
-## Tools (14)
+## Tools (22)
 
-### Plans (6)
+### Plans (8)
 
 | Tool | Args | Returns |
 |---|---|---|
@@ -160,28 +160,53 @@ because SQLite 3.45 lacks `IF NOT EXISTS` for `ALTER TABLE ADD COLUMN` (`src/db/
 | `plan_list` | `status?`, `sessionId?`, `limit?` | `Plan[]` (JSON) |
 | `plan_search` | `query`, `limit?`, `includeArchived?` | `Plan[]` (JSON, FTS5 ranked) |
 | `plan_approve` | `id` | `Plan \| null` (JSON) |
-| `plan_update_status` | `id`, `status` (enum: `draft`/`approved`/`executing`/`completed`/`failed`/`abandoned`) | `{plan, archived, archiveError}` (JSON) |
+| `plan_update_status` | `id`, `status` (enum: `draft`/`approved`/`executing`/`completed`/`failed`/`abandoned`), `dryRun?`, `force?`, `forceReason?` | `{plan, statusChanged, blocked, forced, dryRun, blockers, warnings, archived, archiveError, auditId}` (JSON) |
+| `plan_progress` | `planId?`, `owner?` | Progress rows[] (JSON) |
+| `plan_files_write` | `planId`, `files[]` (array of `{filePath, role}`) | `{planId, inserted, totalRequested}` (JSON) |
 
 - `plan_create` generates a UUID v4 internally via `crypto.randomUUID()` (`src/plugin.ts:581`).
 - `plan_update_status` auto-archives when status is `completed`, `failed`, or `abandoned`
   (`src/plugin.ts:688-697`). Archive errors are non-blocking (logged as warning).
+  Extended with readiness checks: `dryRun=true` returns blockers/warnings without mutating.
+  `force=true` with `forceReason` bypasses blockers (except `status_invalid`), captured to `plan_audit`.
+  Triggers auto-checkpoint on phase transition (`src/db/auto-checkpoint.ts`).
+- `plan_progress` queries the `plan_progress_active` view (excludes archived plans). When `owner` is provided,
+  JOINs with `plans` and filters via `json_extract(metadata, '$.ownedBy')` (`src/plugin.ts:843`).
+- `plan_files_write` uses `INSERT OR IGNORE` for idempotency. PK is `(plan_id, file_path, role)`.
+  Roles: "input", "modified", "output", "reference" (`src/plugin.ts:875`).
 
-### Tasks (5)
+### Tasks (9)
 
 | Tool | Args | Returns |
 |---|---|---|
 | `task_create_batch` | `planId`, `tasks[]` (array of `{description, agent, files?, complexity?, dependencies?, metadata?}`) | `PlanTask[]` (JSON) |
 | `task_list` | `planId`, `status?` | `PlanTask[]` (JSON) |
-| `task_update_status` | `id`, `status` (enum), `result?`, `error?` | `PlanTask \| null` (JSON) |
+| `task_update_status` | `id`, `status` (enum), `result?`, `error?`, `artifacts?`, `metadataPatch?`, `reviewedBy?`, `reviewedVerdict?` | `PlanTask \| null` (JSON) |
 | `task_search` | `query`, `limit?`, `includeArchived?` | `PlanTask[]` (JSON, FTS5 ranked) |
 | `task_next_for_agent` | `agent`, `planId?` | `PlanTask \| null` (JSON) |
+| `task_peek_for_agent` | `agent`, `planId?`, `limit?` | `PlanTask[]` (JSON) |
+| `task_add_artifact` | `taskId`, `artifact`, `role?` | `{task, added}` (JSON) |
+| `task_review` | `taskId`, `reviewedBy`, `verdict` | `{task}` (JSON) |
+| `task_dependency_resolver` | `taskId?` OR `planId?` + `orderIndex?` | `{canStart, pendingDeps, runningDeps, failedDeps, blockedDeps, doneDeps, missingDeps, dependencies}` (JSON) |
 
 - `task_create_batch` is transactional — all tasks insert or none (`src/db/tasks.ts:24-77`).
   Status defaults to `pending`. Each task gets a UUID and sequential `order_index`.
 - `task_update_status` truncates `result` and `error` to 16KB max (`"…[truncated]"` suffix,
   `src/db/tasks.ts:109-121`). Sets `started_at` on `running`, `completed_at` on `done`/`failed`.
+  Also accepts `artifacts` (replaces array, truncated if >16KB), `metadataPatch` (deep merged into existing
+  metadata), `reviewedBy` (sets `reviewed_by` column), and `reviewedVerdict` (stored in `metadata` JSON)
+  (`src/db/tasks.ts:316-428`). All new fields are optional — retrocompatible with existing callers.
 - `task_next_for_agent` returns the first `pending` task ordered by `order_index`
   for the given agent, optionally scoped to a plan.
+- `task_peek_for_agent` is read-only — unlike `task_next_for_agent`, it does NOT claim the task (no status
+  change). Returns pending tasks ordered by `order_index`, excludes archived (`src/plugin.ts:1030`).
+- `task_add_artifact` appends to the existing `artifacts` array (dedup — returns `added: false` if already
+  present). If `role` is provided, also inserts into `plan_files` (`src/plugin.ts:1056`).
+- `task_review` only works on tasks with `status='done'`. Sets `reviewed_by` column and stores `reviewedVerdict`
+  in `metadata` JSON (`src/plugin.ts:1089`).
+- `task_dependency_resolver` resolves a task's dependencies by classifying each dep ID by its current status.
+  Returns `canStart` (true iff all deps are `done`) plus categorized arrays. Accepts `taskId` directly,
+  or `planId` + `orderIndex` to look up the task (`src/db/tasks.ts:449-510`).
 
 ### Sessions (3)
 
@@ -196,6 +221,18 @@ because SQLite 3.45 lacks `IF NOT EXISTS` for `ALTER TABLE ADD COLUMN` (`src/db/
   using `COALESCE(?, key_decisions)` to preserve existing decisions (`src/db/sessions.ts:81-85`).
 - `session_end` sets `ended_at` only if not already set (`WHERE ended_at IS NULL`,
   `src/db/sessions.ts:110`). Returns `null` if already ended.
+
+### Ops (2)
+
+| Tool | Args | Returns |
+|---|---|---|
+| `incident_create` | `title`, `severity` (enum: sev1-4), `summary?`, `triggeredByDeploymentId?`, `metadata?` | `Incident` (JSON) |
+| `rollback_record` | `deploymentId`, `plan`, `incidentId?`, `status?` (enum), `newDeploymentId?`, `metadata?` | `RollbackExecution` (JSON) |
+
+- `incident_create` validates severity enum (sev1-4) and FK on `triggeredByDeploymentId` if provided.
+  Sets `metadata.created_by` from `ctx.agent ?? "unknown"` (`src/plugin.ts:1121`).
+- `rollback_record` requires `deploymentId` (FK validated), optional `incidentId`/`newDeploymentId` (FK validated).
+  Sets `metadata.executed_by_agent` from `ctx.agent ?? "unknown"` (`src/plugin.ts:1144`).
 
 ## Lifecycle
 
@@ -286,3 +323,42 @@ git-friendly and survive DB deletion.
 Migrations are applied automatically by `runMigrations(db)` on plugin startup.
 The `schema_version` table tracks applied versions. Manual migration is not
 required.
+
+## Schema v13 — ops tables
+
+Migration v13 adds 5 tables for operational tracking (warden scope). All use `CREATE TABLE IF NOT EXISTS`
+(idempotent — no `addColumnIfMissing` needed). Registered in `MIGRATIONS` array (`src/db/schema.ts:820-823`).
+
+### Tables
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `environments` | Named deployment targets (prod, staging, dev) | id, name (UNIQUE), slug (UNIQUE), description, metadata, archived_at |
+| `releases` | Versioned artifacts deployable to environments | id, version, title, notes, metadata, archived_at |
+| `deployments` | A release deployed to an environment | id, release_id (FK), environment_id (FK), status (CHECK: planned/in_progress/succeeded/failed/rolled_back), deployed_at |
+| `incidents` | Operational events, optionally linked to a deployment | id, title, severity (CHECK: sev1-4), status (CHECK: open/triaging/mitigated/resolved/postmortem), summary, triggered_by_deployment_id (FK nullable) |
+| `rollback_executions` | Record of a rollback action | id, deployment_id (FK required), incident_id (FK nullable), new_deployment_id (FK nullable), status (CHECK: planned/approved/dry_run/executing/success/failed/cancelled), plan |
+
+### FK graph
+
+```
+environments ←─── deployments ───→ releases
+                     ↑
+                     │ triggered_by_deployment_id (nullable)
+                  incidents
+                     ↑
+                     │ incident_id (nullable)
+              rollback_executions
+                     │
+                     ├── deployment_id (required) ──→ deployments
+                     └── new_deployment_id (nullable) ──→ deployments
+```
+
+### Migration notes
+
+- **Idempotent**: all 5 tables use `CREATE TABLE IF NOT EXISTS`. Re-running v13 is a no-op.
+- **No special-casing**: the generic `runMigrations(db)` runner handles v13 without addColumnIfMissing.
+- **Rollback strategy**: tables are additive (no ALTER TABLE on existing tables). To remove:
+  `DROP TABLE` in FK-safe order: `rollback_executions` → `incidents` → `deployments` → `releases` → `environments`.
+  Then decrement `schema_version` to 12.
+- **Indices**: all FK columns + status/severity/created_at have indices for query performance.

@@ -119,6 +119,128 @@ session_end(id="s1")
 Ver [docs/database.md](docs/database.md) para referencia completa de tools y
 [agents/foreman.md](../agents/foreman.md) para el flujo detallado del foreman.
 
+## T3 Unified Close Flow
+
+The `plan_update_status` tool now includes readiness checks before closing a plan.
+This prevents premature closures and gives agents visibility into blockers.
+
+### Pre-check with dryRun
+
+```bash
+# 1. Pre-check — see blockers without mutating
+plan_update_status(id="p1", status="completed", dryRun=true)
+# → { blocked: true, blockers: ["tasks_pending", "sessions_open"], warnings: [] }
+
+# 2. Fix blockers (complete pending tasks, close sessions)
+task_update_status(id="t3", status="done", result="...")
+session_end(id="s1")
+
+# 3. Re-check — should be clear now
+plan_update_status(id="p1", status="completed", dryRun=true)
+# → { blocked: false, blockers: [], warnings: [] }
+
+# 4. Actually close
+plan_update_status(id="p1", status="completed")
+```
+
+### Force close with reason
+
+When blockers can't be resolved (e.g., abandoned work), force-close with a reason:
+
+```bash
+plan_update_status(id="p1", status="abandoned", force=true, forceReason="scope changed, pivoting to new approach")
+# → { forced: true, auditId: 42 }
+```
+
+The force action is captured in `plan_audit` for traceability. `status_invalid` blockers
+cannot be force-bypassed.
+
+### Blockers reference
+
+| Blocker | Meaning |
+|---|---|
+| `tasks_pending` | Plan has tasks with `status='pending'` |
+| `tasks_running` | Plan has tasks with `status='running'` |
+| `sessions_open` | Plan has sessions without `ended_at` |
+| `status_invalid` | Transition not allowed by state machine |
+
+## Auto-Checkpoint Behavior
+
+The plugin automatically captures orchestrator state into session checkpoints
+on configurable triggers. This provides continuity across context compactions
+and agent dispatches without manual `session_checkpoint` calls.
+
+### Triggers
+
+| Trigger | Fires when |
+|---|---|
+| `phase_transition` | `plan_update_status` succeeds (status actually changed, not dryRun) |
+| `task_batch_complete` | Last pending task in a plan is marked `done` |
+
+### Configuration (`ndomo.json`)
+
+```json
+{
+  "autoCheckpoint": {
+    "enabled": true,
+    "triggers": ["phase_transition", "task_batch_complete"],
+    "minIntervalMs": 30000,
+    "captureState": {
+      "completedTasks": true,
+      "currentPhase": true,
+      "blockers": true
+    }
+  }
+}
+```
+
+- `enabled` — master switch (default: `true`)
+- `triggers` — which triggers are active (default: both)
+- `minIntervalMs` — debounce interval in ms (default: 30000)
+- `captureState` — which state fields to capture (default: all `true`)
+
+### Behavior
+
+- **Non-blocking**: checkpoints are dispatched asynchronously via microtask — never blocks the tool executor.
+- **Debounced**: rapid state changes produce at most one checkpoint per `minIntervalMs`.
+- **Loop-safe**: an `isAutoCheckpointing` guard flag prevents re-entrant dispatch.
+  Since `checkpointSession` only writes to the sessions table (not plans/tasks),
+  loops are structurally impossible — the flag is a safety net.
+- **Graceful**: errors in auto-checkpoint are swallowed (logged via `console.error`) — never break the caller.
+
+### Captured state
+
+```json
+{
+  "trigger": "phase_transition",
+  "completedTasks": 5,
+  "currentPhase": "executing",
+  "blockers": ["tasks_pending"]
+}
+```
+
+## Dependency-Aware Task Dispatch
+
+`task_next_for_agent` now respects task dependencies. A task is only eligible
+for claiming when all its dependencies (referenced by task ID) have `status='done'`.
+
+```bash
+# Tasks: t1 (no deps), t2 (depends on t1), t3 (depends on t1)
+task_next_for_agent(agent="craftsman", planId="p1")
+# → claims t1 (no deps)
+
+# After t1 is done:
+task_next_for_agent(agent="craftsman", planId="p1")
+# → claims t2 or t3 (both have t1 done)
+```
+
+Use `task_dependency_resolver` to inspect a task's dependency state before claiming:
+
+```bash
+task_dependency_resolver(taskId="t2")
+# → { canStart: true, doneDeps: ["t1"], pendingDeps: [], ... }
+```
+
 ## Deepwork
 
 **When to use:** Multi-file refactors (> 5 files), risky architecture changes (database schema, auth flow, API contracts), phased features with inter-step dependencies, cross-stack work.
@@ -238,3 +360,89 @@ Verificación manual de los flujos primarios post-refactor. No requiere DB real 
 - [ ] Sugiere cambiar a foreman en TUI (`agents/craftsman.md:125`)
 - [ ] NO implementa parcialmente — rechaza completo (`agents/craftsman.md:126`, `agents/craftsman.md:193`)
 - [ ] Output format: resultado/razon/sugerencia (`agents/craftsman.md:220-224`)
+
+## Tools by agent
+
+### Craftsman
+
+| Mode | Tools used |
+|---|---|
+| AD-HOC (Estado 1) | `task_update_status` (result/error only), `session_start`/`session_end` |
+| PLAN (Estado 2) | `plan_create`, `task_create_batch`, `task_update_status`, `task_next_for_agent`, `task_add_artifact`, `task_review`, `plan_progress`, `plan_files_write`, `session_start`/`session_end` |
+| DISPATCHED (Estado 3) | `task_next_for_agent`, `task_update_status` (with artifacts/metadataPatch), `task_add_artifact`, `task_review`, `task_peek_for_agent`, `plan_progress`, `session_start`/`session_end` |
+
+- `task_peek_for_agent` — read-only check before claiming (no status change).
+- `task_add_artifact` — register output files after implementation.
+- `task_review` — inspector reviews done tasks, sets verdict.
+- `plan_progress` — monitor plan progress during execution.
+- `plan_files_write` — register input/modified/output files for a plan.
+
+### Warden
+
+| Mode | Tools used |
+|---|---|
+| AD-HOC | `task_update_status`, `session_start`/`session_end` |
+| PLAN | `plan_create` (metadata.category="ops"), `task_create_batch`, `task_update_status`, `task_review`, `plan_progress`, `incident_create`, `rollback_record`, `session_start`/`session_end` |
+| DISPATCHED | `task_next_for_agent`, `task_update_status`, `task_review`, `plan_progress`, `incident_create`, `rollback_record` |
+
+- `incident_create` — register an ops incident (sev1-4) when a deployment fails or issue detected.
+- `rollback_record` — record a rollback execution tied to a deployment (required) + optional incident.
+
+### Foreman
+
+| Mode | Tools used |
+|---|---|
+| Planning | `plan_create`, `task_create_batch`, `plan_get`, `plan_list`, `plan_search`, `plan_approve`, `plan_update_status`, `plan_progress`, `session_start`/`session_end` |
+| Dispatch | `task_create_batch` (agent="craftsman"/"warden"), `task_next_for_agent` (check), `plan_progress` (monitor) |
+
+- Foreman does NOT use `task_update_status` (delegates execution to craftsman/warden).
+- Foreman does NOT use `task_add_artifact` or `task_review` (those are post-execution tools).
+
+## Warden ops workflow — incident response
+
+The 3-call flow for incident response (warden scope):
+
+```
+1. Detect failure (deployment status='failed' or external alert)
+   │
+2. incident_create(title, severity, summary, triggeredByDeploymentId?)
+   → Returns Incident record with status='open'
+   │
+3. rollback_record(deploymentId, plan, incidentId, status='planned')
+   → Returns RollbackExecution record
+   → Optional: update status to 'executing' → 'success'/'failed' as rollback progresses
+```
+
+### Integration with warden workflow
+
+This flow fits into the warden's existing incident response pattern (`agents/warden.md`):
+
+1. **Detect** — warden monitors deployments (via `plan_progress` or external alerts).
+2. **Triage** — `incident_create` with severity sev1-4. Status starts as `open`.
+   - Use `triggeredByDeploymentId` to link the incident to the failing deployment.
+3. **Rollback** — `rollback_record` with the deployment_id (required) + incident_id (optional but recommended).
+   - The `plan` field describes the rollback strategy (e.g. "redeploy previous release v1.2.3").
+   - Status transitions: `planned` → `approved` → `dry_run` → `executing` → `success`/`failed`.
+4. **Resolve** — update incident status to `mitigated` then `resolved` (via `updateIncidentStatus` DB helper).
+   - Optional: `postmortem` status for retrospective.
+
+### Example (3-call flow)
+
+```typescript
+// 1. Detect: deployment d_abc123 failed
+// 2. Create incident
+incident_create({
+  title: "prod deployment v2.1.0 failed — auth service 500s",
+  severity: "sev1",
+  summary: "Deployment d_abc123 caused auth service to return 500 errors. ~30% of users affected.",
+  triggeredByDeploymentId: "d_abc123",
+})
+
+// 3. Record rollback plan
+rollback_record({
+  deploymentId: "d_abc123",
+  plan: "Redeploy previous release v2.0.3. Steps: 1) mark d_abc123 as rolled_back, 2) create new deployment for v2.0.3 to prod, 3) verify auth service health.",
+  incidentId: "inc_xyz789",
+  status: "planned",
+})
+```

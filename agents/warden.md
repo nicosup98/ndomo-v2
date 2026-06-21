@@ -1,7 +1,7 @@
 ---
 description: Warden (Custodio de Operaciones / Operations Custodian)
 mode: primary
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/kimi-k2.7-code
 temperature: 0.3
 permission:
   edit: ask

@@ -11,6 +11,9 @@ import { ensureSession } from "./sessions.ts";
 import type { Plan, PlanCategory, PlanStatus } from "./types.ts";
 import { planFromRow, planWithFilesFromRow } from "./types.ts";
 
+// Terminal statuses that should set completed_at when entered
+const TERMINAL_STATUSES = new Set<PlanStatus>(["completed", "failed", "abandoned"]);
+
 export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updatedAt">): Plan {
   const now = Date.now();
   // v6: build original_plan_data snapshot (write-once) — M5: added files + metadata
@@ -239,6 +242,12 @@ export function updatePlanStatus(
       db.query("UPDATE plans SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
     }
   }
+
+  // Set completed_at on terminal status (idempotent — only if NULL)
+  if (TERMINAL_STATUSES.has(status)) {
+    db.query("UPDATE plans SET completed_at = ? WHERE id = ? AND completed_at IS NULL").run(now, id);
+  }
+
   return getPlan(db, id);
 }
 
