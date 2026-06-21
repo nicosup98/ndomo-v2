@@ -503,8 +503,23 @@ function planProgressFromRow(row: unknown): PlanProgress {
 export function getPlanProgress(db: Database, planId?: string): PlanProgress[] {
   const sql =
     planId !== undefined
-      ? "SELECT * FROM plan_progress WHERE plan_id = ?"
-      : "SELECT * FROM plan_progress";
+      ? "SELECT * FROM plan_progress_active WHERE plan_id = ?"
+      : "SELECT * FROM plan_progress_active";
+  const rows = planId !== undefined ? db.query(sql).all(planId) : db.query(sql).all();
+  return (rows as unknown[]).map(planProgressFromRow);
+}
+
+/**
+ * Query the plan_progress_historical view for ALL plans (including archived).
+ *
+ * @param db   - Database instance
+ * @param planId - optional plan id to filter by; omit for all plans
+ */
+export function getPlanProgressHistorical(db: Database, planId?: string): PlanProgress[] {
+  const sql =
+    planId !== undefined
+      ? "SELECT * FROM plan_progress_historical WHERE plan_id = ?"
+      : "SELECT * FROM plan_progress_historical";
   const rows = planId !== undefined ? db.query(sql).all(planId) : db.query(sql).all();
   return (rows as unknown[]).map(planProgressFromRow);
 }

@@ -571,6 +571,93 @@ CREATE INDEX IF NOT EXISTS idx_background_tasks_status ON background_tasks(statu
 CREATE INDEX IF NOT EXISTS idx_background_tasks_agent ON background_tasks(agent);
 `;
 
+/**
+ * v12: DB optimization — plan_progress views, composite indexes, plan_audit skeleton.
+ *
+ * (1) plan_progress_active + plan_progress_historical views (P1 fix)
+ * (2) Replace idx_plans_status_priority with idx_plans_listplans (P1.5)
+ * (3) Consolidate plan_tasks indexes — drop redundant single-column indexes (P3)
+ * (4) Add composite indexes on background_tasks (P2)
+ * (5) plan_audit table skeleton for future audit trail (P4 foundation)
+ */
+export const SCHEMA_V12_SQL = `
+-- v12: plan_progress views (explicit active + historical) + index optimization + plan_audit skeleton
+
+-- P1: plan_progress_active (explicit name, same as current plan_progress)
+DROP VIEW IF EXISTS plan_progress;
+DROP VIEW IF EXISTS plan_progress_active;
+DROP VIEW IF EXISTS plan_progress_historical;
+
+CREATE VIEW plan_progress_active AS
+SELECT
+  p.id AS plan_id,
+  p.slug,
+  p.title,
+  p.status,
+  COUNT(t.id) AS total_tasks,
+  SUM(CASE WHEN t.status = 'done'     THEN 1 ELSE 0 END) AS done,
+  SUM(CASE WHEN t.status = 'failed'   THEN 1 ELSE 0 END) AS failed,
+  SUM(CASE WHEN t.status = 'running'  THEN 1 ELSE 0 END) AS running,
+  SUM(CASE WHEN t.status = 'pending'  THEN 1 ELSE 0 END) AS pending,
+  SUM(CASE WHEN t.status = 'blocked'  THEN 1 ELSE 0 END) AS blocked,
+  CASE
+    WHEN COUNT(t.id) = 0 THEN 0
+    ELSE ROUND(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) * 100.0 / COUNT(t.id))
+  END AS progress_pct
+FROM plans p
+LEFT JOIN plan_tasks t ON t.plan_id = p.id AND t.archived_at IS NULL
+WHERE p.archived_at IS NULL
+GROUP BY p.id;
+
+-- P1: plan_progress_historical (ALL plans, ALL tasks)
+CREATE VIEW plan_progress_historical AS
+SELECT
+  p.id AS plan_id,
+  p.slug,
+  p.title,
+  p.status,
+  COUNT(t.id) AS total_tasks,
+  SUM(CASE WHEN t.status = 'done'     THEN 1 ELSE 0 END) AS done,
+  SUM(CASE WHEN t.status = 'failed'   THEN 1 ELSE 0 END) AS failed,
+  SUM(CASE WHEN t.status = 'running'  THEN 1 ELSE 0 END) AS running,
+  SUM(CASE WHEN t.status = 'pending'  THEN 1 ELSE 0 END) AS pending,
+  SUM(CASE WHEN t.status = 'blocked'  THEN 1 ELSE 0 END) AS blocked,
+  CASE
+    WHEN COUNT(t.id) = 0 THEN 0
+    ELSE ROUND(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) * 100.0 / COUNT(t.id))
+  END AS progress_pct
+FROM plans p
+LEFT JOIN plan_tasks t ON t.plan_id = p.id
+GROUP BY p.id;
+
+-- Backward compat: plan_progress = plan_progress_active
+CREATE VIEW plan_progress AS
+SELECT * FROM plan_progress_active;
+
+-- P1.5: replace idx_plans_status_priority with composite matching listPlans query
+DROP INDEX IF EXISTS idx_plans_status_priority;
+CREATE INDEX IF NOT EXISTS idx_plans_listplans ON plans(status, archived_at, priority, created_at DESC);
+
+-- P3: consolidate plan_tasks indexes — drop redundant single-column indexes
+DROP INDEX IF EXISTS idx_tasks_status;
+DROP INDEX IF EXISTS idx_tasks_agent;
+DROP INDEX IF EXISTS idx_tasks_archived;
+
+-- P2: background_tasks composite indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_background_tasks_agent_created ON background_tasks(agent, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_created ON background_tasks(created_at DESC);
+
+-- P4 foundation: plan_audit table skeleton
+CREATE TABLE IF NOT EXISTS plan_audit (
+  plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  captured_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+  snapshot TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'archive',
+  PRIMARY KEY(plan_id, captured_at)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_audit_captured ON plan_audit(captured_at DESC);
+`;
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -633,5 +720,10 @@ export const MIGRATIONS: Array<{
     version: 11,
     description: "background_tasks table for DB-backed task dispatch persistence",
     sql: SCHEMA_V11_SQL,
+  },
+  {
+    version: 12,
+    description: "DB optimization: plan_progress views, composite indexes, plan_audit skeleton",
+    sql: SCHEMA_V12_SQL,
   },
 ];
