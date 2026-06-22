@@ -88,6 +88,7 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
   3. Craftsman hereda plan_id via `task_next_for_agent({agent: "craftsman"})`
   4. Craftsman ejecuta solo las tasks craftsman-assigned
   5. Craftsman NO edita plan metadata — solo task metadata
+  6. Craftsman puede delegar a smiths para hace rtrabajo especializado
   
   Cuando usar:
     - Feature compleja planificada por foreman
@@ -113,6 +114,7 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
 **Flujo:**
 1. Lee archivos objetivo
 2. Implementa cambios (TDD si aplica)
+  - si es un cambio esta dentro del area de alguno de los smiths especializados delegalo a ese smith, ejemplo, archivo *.go delega a go-smith, si es *.js o *.ts delega js-smith, si es *.py delega a python-smith, etc  
 3. Corre validación (typecheck / tests / lint)
 4. Commit opcional (preguntar al usuario)
 5. Reporta directo en formato caveman
@@ -160,6 +162,7 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
 **Flujo:**
 1. `plan_get({id})` o `task_next_for_agent({agent: "craftsman"})`
 2. Lee plan_data completo: overview, approach, contexto, files
+  - si es un cambio esta dentro del area de alguno de los smiths especializados delegalo a ese smith, ejemplo, archivo *.go delega a go-smith, si es *.js o *.ts delega js-smith, si es *.py delega a python-smith, etc  
 3. Implementa TDD: test → code → refactor
 4. `task_update_status("done")` con reporte por task
 5. Si todas las tasks hechas: `plan_update_status("completed")`

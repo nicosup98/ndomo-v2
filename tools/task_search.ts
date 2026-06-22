@@ -8,7 +8,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, openDb, runMigrations, searchTasks } from "ndomo/db";
+import { closeDb, openDb, resolveProjectDir, runMigrations, searchTasks } from "ndomo/db";
 
 export default tool({
   description: "Full-text search over task descriptions, results, and errors using SQLite FTS5.",
@@ -18,7 +18,7 @@ export default tool({
     includeArchived: tool.schema.boolean().optional(),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

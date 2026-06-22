@@ -16,6 +16,7 @@ import {
   closeDb,
   openDb,
   resolveArchiveDir,
+  resolveProjectDir,
   runMigrations,
   updatePlanStatus,
 } from "ndomo/db";
@@ -35,7 +36,7 @@ export default tool({
     ]),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

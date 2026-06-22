@@ -83,7 +83,11 @@ export function createTasksBatch(
       | "error"
       | "archivedAt"
       | "originalPlanData"
-    >
+      | "orderIndex"
+    > & {
+      /** Preferred order_index slot. If omitted or occupied, core allocates dynamically. */
+      orderIndex?: number;
+    }
   >,
 ): PlanTask[] {
   // v6: soft warning for large task batches
@@ -103,6 +107,78 @@ export function createTasksBatch(
     existingSignatures.add(`${row.agent}::${row.description}`);
   }
 
+  // ─── order_index collision-safe allocation (fix: UNIQUE constraint on retries) ──
+  // The UNIQUE(plan_id, order_index) constraint covers ALL rows (archived or not).
+  // Callers may pass t.orderIndex as a preferred slot, but it's only a hint —
+  // the core reassigns if the slot is occupied. This makes task_create_batch safe
+  // to call 2+ times on the same plan (retry, cross-step dispatch, etc.).
+  const MAX_RETRIES = 10;
+
+  // Collect ALL existing order_indices (including archived) for collision detection.
+  const usedOrderIndices = new Set<number>();
+  const allOrderRows = db
+    .query("SELECT order_index FROM plan_tasks WHERE plan_id = ?")
+    .all(planId) as Array<{ order_index: number }>;
+  for (const row of allOrderRows) {
+    usedOrderIndices.add(row.order_index);
+  }
+
+  // nextFreeInteger starts after the MAX of non-archived tasks (so new tasks
+  // fill in after the active set, not after archived outliers).
+  const maxRow = db
+    .query("SELECT MAX(order_index) as m FROM plan_tasks WHERE plan_id = ? AND archived_at IS NULL")
+    .get(planId) as { m: number | null } | undefined;
+  let nextFreeInteger = Math.floor(maxRow?.m ?? -1) + 1;
+
+  /**
+   * Allocate a unique order_index.
+   * Tries the preferred slot first; if occupied (or undefined), falls back to
+   * nextFreeInteger, incrementing until a free slot is found.
+   * Marks the slot as used in usedOrderIndices before returning.
+   */
+  function allocateOrderIndex(preferred: number | undefined): number {
+    if (preferred !== undefined && !usedOrderIndices.has(preferred)) {
+      usedOrderIndices.add(preferred);
+      if (Math.floor(preferred) >= nextFreeInteger) {
+        nextFreeInteger = Math.floor(preferred) + 1;
+      }
+      return preferred;
+    }
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const candidate = nextFreeInteger;
+      if (!usedOrderIndices.has(candidate)) {
+        usedOrderIndices.add(candidate);
+        nextFreeInteger = candidate + 1;
+        return candidate;
+      }
+      nextFreeInteger++;
+    }
+    throw new Error(
+      `ndomo: could not allocate unique order_index after ${MAX_RETRIES} retries for plan ${planId}`,
+    );
+  }
+
+  /**
+   * Allocate order_index for a split sub-task.
+   * stackIdx=0 → parent slot (integer).
+   * stackIdx>0 → parentOrder + stackIdx*0.1 (decimal); if occupied, escalate
+   * to next free integer (no further decimal attempts).
+   */
+  function allocateSplitOrderIndex(parentOrder: number, stackIdx: number): number {
+    if (stackIdx === 0) {
+      // parentOrder was already allocated and marked as used in the pre-loop.
+      // Return directly — do NOT re-allocate (would see slot as occupied).
+      return parentOrder;
+    }
+    const decimalCandidate = parentOrder + stackIdx * 0.1;
+    if (!usedOrderIndices.has(decimalCandidate)) {
+      usedOrderIndices.add(decimalCandidate);
+      return decimalCandidate;
+    }
+    // Decimal occupied → escalate to next free integer
+    return allocateOrderIndex(undefined);
+  }
+
   const results: PlanTask[] = [];
   const txn = db.transaction(() => {
     for (const t of tasks) {
@@ -111,14 +187,18 @@ export function createTasksBatch(
       const stackKeys = filesByStack ? Object.keys(filesByStack) : [];
       const needsSplit = filesByStack !== null && stackKeys.length > 1;
 
+      // For split tasks: allocate parent order_index first (used as base for decimals).
+      // For non-split tasks: orderIndex is allocated per sub-task below.
+      const parentOrder = needsSplit ? allocateOrderIndex(t.orderIndex) : undefined;
+
       // Generate sub-tasks: either the original or split children
+      // (orderIndex is allocated below via helpers — not set here)
       const subTasks = needsSplit
-        ? stackKeys.map((stack, stackIdx) => ({
+        ? stackKeys.map((stack) => ({
             ...t,
             description: t.description,
             agent: STACK_AGENT_MAP[stack] ?? "smith",
             files: filesByStack[stack] ?? [],
-            orderIndex: (t.orderIndex ?? results.length) + stackIdx * 0.1,
             metadata: {
               ...t.metadata,
               splitFrom: null as string | null, // filled after first insert
@@ -129,13 +209,21 @@ export function createTasksBatch(
 
       let firstSubTaskId: string | null = null;
 
-      for (const effectiveTask of subTasks) {
+      for (let stackIdx = 0; stackIdx < subTasks.length; stackIdx++) {
+        const effectiveTask = subTasks[stackIdx];
+        if (effectiveTask === undefined) continue;
+
         // Skip if task with same (agent, description) already exists for this plan
         const sig = `${effectiveTask.agent}::${effectiveTask.description}`;
         if (existingSignatures.has(sig)) {
           continue;
         }
-        const i = results.length;
+
+        // Allocate order_index via collision-safe helpers
+        const orderIndex = needsSplit
+          ? allocateSplitOrderIndex(parentOrder as number, stackIdx)
+          : allocateOrderIndex(effectiveTask.orderIndex);
+
         const id = crypto.randomUUID();
 
         // Wire splitFrom to first sub-task id
@@ -146,45 +234,81 @@ export function createTasksBatch(
           ? { ...effectiveTask.metadata, splitFrom: firstSubTaskId }
           : (effectiveTask.metadata ?? {});
 
-        const orderIndex = effectiveTask.orderIndex ?? i;
-        // v6: write-once snapshot of task data (M5: added metadata)
-        const originalPlanData = JSON.stringify({
+        // Defense-in-depth: try/catch UNIQUE constraint with retry on order_index.
+        // The pre-loop allocation should prevent collisions, but if a race or
+        // edge case triggers SQLITE_CONSTRAINT, reassign order_index and retry.
+        let currentOrderIndex = orderIndex;
+        let originalPlanData = JSON.stringify({
           description: effectiveTask.description,
           agent: effectiveTask.agent,
           files: effectiveTask.files ?? [],
           complexity: effectiveTask.complexity,
           dependencies: effectiveTask.dependencies ?? [],
           metadata: taskMetadata,
-          orderIndex,
+          orderIndex: currentOrderIndex,
           createdBy: effectiveTask.createdBy,
         });
-        db.query(
-          `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id,
-          planId,
-          orderIndex,
-          effectiveTask.description,
-          effectiveTask.agent,
-          JSON.stringify(effectiveTask.files ?? []),
-          effectiveTask.complexity,
-          JSON.stringify(effectiveTask.dependencies ?? []),
-          JSON.stringify(taskMetadata),
-          effectiveTask.createdBy,
-          effectiveTask.updatedBy ?? effectiveTask.createdBy,
-          effectiveTask.sourceSessionId ?? null,
-          effectiveTask.sourceMessageId ?? null,
-          effectiveTask.reviewedBy ?? null,
-          effectiveTask.tokensUsed ?? null,
-          effectiveTask.durationMs ?? null,
-          JSON.stringify(effectiveTask.artifacts ?? []),
-          originalPlanData,
-        );
+        let inserted = false;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          try {
+            db.query(
+              `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              id,
+              planId,
+              currentOrderIndex,
+              effectiveTask.description,
+              effectiveTask.agent,
+              JSON.stringify(effectiveTask.files ?? []),
+              effectiveTask.complexity,
+              JSON.stringify(effectiveTask.dependencies ?? []),
+              JSON.stringify(taskMetadata),
+              effectiveTask.createdBy,
+              effectiveTask.updatedBy ?? effectiveTask.createdBy,
+              effectiveTask.sourceSessionId ?? null,
+              effectiveTask.sourceMessageId ?? null,
+              effectiveTask.reviewedBy ?? null,
+              effectiveTask.tokensUsed ?? null,
+              effectiveTask.durationMs ?? null,
+              JSON.stringify(effectiveTask.artifacts ?? []),
+              originalPlanData,
+            );
+            inserted = true;
+            break;
+          } catch (err) {
+            if (
+              attempt < MAX_RETRIES - 1 &&
+              err instanceof Error &&
+              err.message.includes("UNIQUE")
+            ) {
+              // order_index collision — reassign and rebuild snapshot
+              currentOrderIndex = allocateOrderIndex(undefined);
+              originalPlanData = JSON.stringify({
+                description: effectiveTask.description,
+                agent: effectiveTask.agent,
+                files: effectiveTask.files ?? [],
+                complexity: effectiveTask.complexity,
+                dependencies: effectiveTask.dependencies ?? [],
+                metadata: taskMetadata,
+                orderIndex: currentOrderIndex,
+                createdBy: effectiveTask.createdBy,
+              });
+              continue;
+            }
+            throw err;
+          }
+        }
+        if (!inserted) {
+          throw new Error(
+            `ndomo: failed to insert task after ${MAX_RETRIES} retries for plan ${planId}`,
+          );
+        }
+
         results.push({
           id,
           planId,
-          orderIndex,
+          orderIndex: currentOrderIndex,
           description: effectiveTask.description,
           agent: effectiveTask.agent,
           files: effectiveTask.files ?? [],

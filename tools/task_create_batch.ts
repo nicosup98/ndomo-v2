@@ -9,7 +9,7 @@
 
 import { tool } from "@opencode-ai/plugin";
 import type { TaskMetadata } from "ndomo/db";
-import { closeDb, createTasksBatch, openDb, runMigrations } from "ndomo/db";
+import { closeDb, createTasksBatch, openDb, resolveProjectDir, runMigrations } from "ndomo/db";
 
 export default tool({
   description:
@@ -28,7 +28,7 @@ export default tool({
     ),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {
@@ -41,10 +41,13 @@ export default tool({
       const tasks = createTasksBatch(
         db,
         args.planId,
-        args.tasks.map((t, idx) => {
+        args.tasks.map((t) => {
           const typedMeta = (t.metadata ?? {}) as TaskMetadata;
           return {
-            orderIndex: idx,
+            // orderIndex intentionally omitted — createTasksBatch allocates
+            // dynamically via SELECT MAX+1 to avoid UNIQUE constraint collisions
+            // on retries/splits. Caller-provided idx was the root cause of the
+            // UNIQUE constraint bug (plan ca69222a).
             description: t.description,
             agent: t.agent,
             files: t.files ?? [],

@@ -8,7 +8,14 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, getPlan, getPlanBySlug, openDb, runMigrations } from "ndomo/db";
+import {
+  closeDb,
+  getPlan,
+  getPlanBySlug,
+  openDb,
+  resolveProjectDir,
+  runMigrations,
+} from "ndomo/db";
 
 export default tool({
   description: "Get a plan by ID or slug.",
@@ -20,7 +27,7 @@ export default tool({
     if (!args.id && !args.slug) {
       throw new Error("ndomo: plan_get requires id or slug");
     }
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

@@ -9,7 +9,7 @@
 
 import { tool } from "@opencode-ai/plugin";
 import type { PlanStatus } from "ndomo/db";
-import { closeDb, listPlans, openDb, runMigrations } from "ndomo/db";
+import { closeDb, listPlans, openDb, resolveProjectDir, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "List plans, optionally filtered by status and session.",
@@ -21,7 +21,7 @@ export default tool({
     limit: tool.schema.number().optional(),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

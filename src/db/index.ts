@@ -7,7 +7,6 @@
 
 // ─── Client ──────────────────────────────────────────────────────────────────
 export { closeDb, openDb } from "./client.ts";
-
 // ─── Migrations ──────────────────────────────────────────────────────────────
 export { runMigrations } from "./migrations.ts";
 export type { ArchiveResult } from "./plan-archive.ts";
@@ -30,6 +29,9 @@ export {
   searchPlans,
   updatePlanStatus,
 } from "./plans.ts";
+export type { ProjectDirContext } from "./resolve-project-dir.ts";
+// ─── Project dir resolution ──────────────────────────────────────────────────
+export { resolveProjectDir } from "./resolve-project-dir.ts";
 // ─── Sessions ────────────────────────────────────────────────────────────────
 export {
   appendAgentHistory,

@@ -9,7 +9,7 @@
 
 import { tool } from "@opencode-ai/plugin";
 import type { TaskStatus } from "ndomo/db";
-import { closeDb, openDb, runMigrations, updateTaskStatus } from "ndomo/db";
+import { closeDb, openDb, resolveProjectDir, runMigrations, updateTaskStatus } from "ndomo/db";
 
 export default tool({
   description: "Update a task's status. Optionally record result or error text.",
@@ -20,7 +20,7 @@ export default tool({
     error: tool.schema.string().optional(),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

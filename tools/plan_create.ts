@@ -10,7 +10,7 @@
 import crypto from "node:crypto";
 import { tool } from "@opencode-ai/plugin";
 import type { PlanMetadata } from "ndomo/db";
-import { closeDb, createPlan, openDb, runMigrations } from "ndomo/db";
+import { closeDb, createPlan, openDb, resolveProjectDir, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "Create a new plan in the ndomo state database.",
@@ -25,7 +25,7 @@ export default tool({
     metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

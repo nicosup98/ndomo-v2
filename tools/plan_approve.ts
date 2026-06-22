@@ -8,13 +8,13 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { approvePlan, closeDb, openDb, runMigrations } from "ndomo/db";
+import { approvePlan, closeDb, openDb, resolveProjectDir, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "Mark a plan as approved. Sets approved_at to the current timestamp.",
   args: { id: tool.schema.string() },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

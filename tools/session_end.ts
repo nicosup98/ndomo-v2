@@ -8,13 +8,13 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { closeDb, endSession, openDb, runMigrations } from "ndomo/db";
+import { closeDb, endSession, openDb, resolveProjectDir, runMigrations } from "ndomo/db";
 
 export default tool({
   description: "Mark a session as ended. Sets ended_at to the current timestamp.",
   args: { id: tool.schema.string() },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

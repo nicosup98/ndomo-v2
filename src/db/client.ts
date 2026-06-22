@@ -12,12 +12,21 @@
 
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 const NDOMO_DIR = ".ndomo";
 const DB_FILE = "state.db";
 
 export function openDb(projectDir: string): Database {
+  // Defensive validation: reject paths that would place .ndomo at the
+  // filesystem root (e.g. projectDir="/" → "/.ndomo" → EACCES) or relative
+  // paths that resolve against CWD unpredictably. See plan
+  // 4dc34202 (harden-open-db-path-validation).
+  if (projectDir === "" || projectDir === "/" || !isAbsolute(projectDir)) {
+    throw new Error(
+      `openDb: invalid projectDir ${JSON.stringify(projectDir)} — must be a non-root absolute path (e.g. /home/user/project). Received "/" or a relative path would create ".ndomo" at the filesystem root or an unpredictable CWD-relative location.`,
+    );
+  }
   const dir = join(projectDir, NDOMO_DIR);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, DB_FILE);

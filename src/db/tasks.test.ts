@@ -13,6 +13,7 @@ import { getSession } from "./sessions.ts";
 import {
   createTasksBatch,
   getTask,
+  listTasksByPlan,
   nextTaskForAgent,
   splitFilesByStack,
   updateTaskStatus,
@@ -700,5 +701,221 @@ describe("updateTaskStatus — extended fields (T1)", () => {
     expect(meta.existing).toBe(true);
     expect(meta.newKey).toBe(42);
     expect(meta.reviewedVerdict).toBe("pass");
+  });
+});
+
+// ─── order_index collision-safe allocation (fix: plan ca69222a) ──────────────
+
+describe("createTasksBatch — order_index collision-safe allocation", () => {
+  test("(a) batch con plan pre-poblado — nueva task asigna order_index=1 sin colisión", () => {
+    const plan = makePlan();
+    // Pre-populate with 1 task at order_index=0
+    createTasksBatch(db, plan.id, [makeTask({ description: "existing task" })]);
+
+    // New batch — caller passes orderIndex=0 (collides with existing)
+    const result = createTasksBatch(db, plan.id, [
+      makeTask({ description: "new task", orderIndex: 0 }),
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.orderIndex).toBe(1);
+    expect(result[0]?.description).toBe("new task");
+  });
+
+  test("(b) split cross-stack con plan pre-poblado — parent=1, decimal 1.1", () => {
+    const plan = makePlan();
+    // Pre-populate with 1 task at order_index=0
+    createTasksBatch(db, plan.id, [makeTask({ description: "existing task" })]);
+
+    // New batch with cross-stack files: .py+.py → python, .md → other = 2 stacks
+    const result = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["a.py", "b.py", "c.md"], description: "split task" }),
+    ]);
+
+    expect(result).toHaveLength(2);
+    // Parent (first sub-task) → order_index=1 (next free after 0)
+    // Second sub-task → 1 + 0.1 = 1.1
+    const orderIndices = result.map((t) => t.orderIndex).sort((a, b) => a - b);
+    expect(orderIndices).toEqual([1, 1.1]);
+  });
+
+  test("(c) split cross-stack — decimales ocupados → escala a integer libre", () => {
+    const plan = makePlan();
+    // Pre-populate with tasks at 0.1 and 0.2 (but NOT 0)
+    createTasksBatch(db, plan.id, [
+      makeTask({ description: "task at 0.1", orderIndex: 0.1, agent: "agent-X" }),
+      makeTask({ description: "task at 0.2", orderIndex: 0.2, agent: "agent-Y" }),
+    ]);
+
+    // New batch with 3-stack split, caller passes orderIndex=0
+    // .go + .ts + .py → 3 stacks → 3 sub-tasks
+    const result = createTasksBatch(db, plan.id, [
+      makeTask({ files: ["a.go", "b.ts", "c.py"], description: "split task", orderIndex: 0 }),
+    ]);
+
+    expect(result).toHaveLength(3);
+    // stackIdx=0 → parentOrder=0 (free)
+    // stackIdx=1 → 0.1 (occupied) → escalate to next free integer = 1
+    // stackIdx=2 → 0.2 (occupied) → escalate to next free integer = 2
+    const orderIndices = result.map((t) => t.orderIndex).sort((a, b) => a - b);
+    expect(orderIndices).toEqual([0, 1, 2]);
+  });
+
+  test("(d) caller pasa orderIndex colisionante → core reasigna a siguiente libre", () => {
+    const plan = makePlan();
+    // Pre-populate with task at order_index=0
+    createTasksBatch(db, plan.id, [makeTask({ description: "existing task" })]);
+
+    // New batch — caller passes orderIndex=0 (collides)
+    const result = createTasksBatch(db, plan.id, [
+      makeTask({ description: "new task", orderIndex: 0 }),
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.orderIndex).toBe(1); // reassigned to next free
+  });
+
+  test("(e) reproduce bug 18252705 — 2nd batch with colliding orderIndex succeeds", () => {
+    const plan = makePlan();
+    // 1st batch — 1 task at order_index=0 (simulates old caller passing idx=0)
+    const first = createTasksBatch(db, plan.id, [
+      makeTask({ description: "task 0", orderIndex: 0 }),
+    ]);
+    expect(first).toHaveLength(1);
+    expect(first[0]?.orderIndex).toBe(0);
+
+    // 2nd batch — 4 tasks. OLD callers passed orderIndex 0,1,2,3 (idx from map).
+    // With fix, even if caller passes colliding indices, core reassigns.
+    const second = createTasksBatch(db, plan.id, [
+      makeTask({ description: "task A", orderIndex: 0 }), // collides → 1
+      makeTask({ description: "task B", orderIndex: 1 }), // collides → 2
+      makeTask({ description: "task C", orderIndex: 2 }), // collides → 3
+      makeTask({ description: "task D", orderIndex: 3 }), // collides → 4
+    ]);
+
+    expect(second).toHaveLength(4);
+    const orderIndices = second.map((t) => t.orderIndex).sort((a, b) => a - b);
+    expect(orderIndices).toEqual([1, 2, 3, 4]);
+  });
+
+  test("(f) caller omite orderIndex — core asigna secuencial desde MAX+1", () => {
+    const plan = makePlan();
+    // 1st batch — 2 tasks, no orderIndex specified
+    const first = createTasksBatch(db, plan.id, [
+      makeTask({ description: "task X" }),
+      makeTask({ description: "task Y" }),
+    ]);
+    expect(first).toHaveLength(2);
+    expect(first[0]?.orderIndex).toBe(0);
+    expect(first[1]?.orderIndex).toBe(1);
+
+    // 2nd batch — 2 more tasks, no orderIndex
+    const second = createTasksBatch(db, plan.id, [
+      makeTask({ description: "task Z" }),
+      makeTask({ description: "task W" }),
+    ]);
+    expect(second).toHaveLength(2);
+    expect(second[0]?.orderIndex).toBe(2);
+    expect(second[1]?.orderIndex).toBe(3);
+  });
+
+  test("(g) archived task ocupa slot — nueva task evita colisión", () => {
+    const plan = makePlan();
+    // Create and archive a task at order_index=0
+    const created = createTasksBatch(db, plan.id, [makeTask({ description: "archived task" })]);
+    db.query("UPDATE plan_tasks SET archived_at = ? WHERE id = ?").run(
+      Date.now(),
+      created[0]?.id as string,
+    );
+
+    // New batch — caller passes orderIndex=0 (collides with archived row)
+    const result = createTasksBatch(db, plan.id, [
+      makeTask({ description: "new task", orderIndex: 0 }),
+    ]);
+
+    expect(result).toHaveLength(1);
+    // Archived row still occupies (plan_id, order_index) in UNIQUE constraint.
+    // Core detects collision via usedOrderIndices (includes archived) → reassigns.
+    expect(result[0]?.orderIndex).not.toBe(0);
+  });
+});
+
+// ─── listTasksByPlan — includeArchived flag (plan 76a12c8d) ──────────────────
+
+describe("listTasksByPlan — includeArchived flag", () => {
+  test("(a) sin flag — omite tasks con archived_at IS NOT NULL", () => {
+    const plan = makePlan();
+    // Create 2 tasks: one live, one to be archived
+    const created = createTasksBatch(db, plan.id, [
+      makeTask({ description: "live task" }),
+      makeTask({ description: "doomed task" }),
+    ]);
+    expect(created).toHaveLength(2);
+
+    // Archive the 2nd task
+    db.query("UPDATE plan_tasks SET archived_at = ? WHERE id = ?").run(
+      Date.now(),
+      created[1]?.id as string,
+    );
+
+    // Default call (no includeArchived) → only live task
+    const tasks = listTasksByPlan(db, plan.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.description).toBe("live task");
+    expect(tasks[0]?.archivedAt).toBeNull();
+  });
+
+  test("(b) includeArchived=true — retorna tasks archivadas también", () => {
+    const plan = makePlan();
+    const created = createTasksBatch(db, plan.id, [
+      makeTask({ description: "live task" }),
+      makeTask({ description: "archived task" }),
+    ]);
+    expect(created).toHaveLength(2);
+
+    db.query("UPDATE plan_tasks SET archived_at = ? WHERE id = ?").run(
+      Date.now(),
+      created[1]?.id as string,
+    );
+
+    // With includeArchived=true → both tasks returned
+    const tasks = listTasksByPlan(db, plan.id, { includeArchived: true });
+    expect(tasks).toHaveLength(2);
+    const descriptions = tasks.map((t) => t.description).sort();
+    expect(descriptions).toEqual(["archived task", "live task"]);
+    // Archived task carries archivedAt timestamp
+    const archived = tasks.find((t) => t.description === "archived task");
+    expect(archived?.archivedAt).not.toBeNull();
+  });
+
+  test("(c) includeArchived=true + status filter — combina ambos filtros", () => {
+    const plan = makePlan();
+    const created = createTasksBatch(db, plan.id, [
+      makeTask({ description: "live pending" }),
+      makeTask({ description: "archived pending" }),
+      makeTask({ description: "live done" }),
+    ]);
+    // Archive 2nd task, mark 3rd as done
+    db.query("UPDATE plan_tasks SET archived_at = ? WHERE id = ?").run(
+      Date.now(),
+      created[1]?.id as string,
+    );
+    updateTaskStatus(db, created[2]?.id as string, "done", { result: "ok" }, "test");
+
+    // status=pending + includeArchived=true → both pending tasks (live + archived)
+    const pendingAll = listTasksByPlan(db, plan.id, {
+      status: "pending",
+      includeArchived: true,
+    });
+    expect(pendingAll).toHaveLength(2);
+    expect(pendingAll.map((t) => t.description).sort()).toEqual([
+      "archived pending",
+      "live pending",
+    ]);
+
+    // status=pending without includeArchived → only live pending
+    const pendingLive = listTasksByPlan(db, plan.id, { status: "pending" });
+    expect(pendingLive).toHaveLength(1);
+    expect(pendingLive[0]?.description).toBe("live pending");
   });
 });

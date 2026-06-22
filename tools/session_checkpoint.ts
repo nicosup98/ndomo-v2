@@ -8,7 +8,7 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
-import { checkpointSession, closeDb, openDb, runMigrations } from "ndomo/db";
+import { checkpointSession, closeDb, openDb, resolveProjectDir, runMigrations } from "ndomo/db";
 
 export default tool({
   description:
@@ -19,7 +19,7 @@ export default tool({
     keyDecisions: tool.schema.string().optional(),
   },
   execute: async (args, ctx) => {
-    const projectDir = ctx.worktree || ctx.directory;
+    const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {

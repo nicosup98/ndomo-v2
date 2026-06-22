@@ -16,10 +16,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import { openDb } from "./db/client.ts";
+import { createIncident } from "./db/incidents.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { resolveArchiveDir } from "./db/plan-archive.ts";
-import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
 import { planUpdateStatusExecutor } from "./db/plan-update-status.ts";
 import {
@@ -30,10 +31,10 @@ import {
   listPlans,
   searchPlans,
 } from "./db/plans.ts";
+import { resolveProjectDir } from "./db/resolve-project-dir.ts";
+import { recordRollback } from "./db/rollbacks.ts";
 import { checkpointSession, endSession, listSessions, startSession } from "./db/sessions.ts";
 import { registerShutdownHandlers } from "./db/shutdown.ts";
-import { createIncident } from "./db/incidents.ts";
-import { recordRollback } from "./db/rollbacks.ts";
 import {
   createTasksBatch,
   listTasksByPlan,
@@ -387,7 +388,7 @@ export const NdomoPlugin: Plugin = async (
   }
 
   // Shared state — lives for the lifetime of the plugin instance
-  const db: Database = openDb(worktree || directory);
+  const db: Database = openDb(resolveProjectDir({ worktree, directory }));
   runMigrations(db);
   registerShutdownHandlers(db);
   const dispatcher = new BackgroundDispatcher(db);
@@ -958,10 +959,13 @@ export const NdomoPlugin: Plugin = async (
           const tasks = createTasksBatch(
             db,
             args.planId,
-            args.tasks.map((t, idx) => {
+            args.tasks.map((t) => {
               const typedMeta = (t.metadata ?? {}) as TaskMetadata;
               return {
-                orderIndex: idx,
+                // orderIndex intentionally omitted — createTasksBatch allocates
+                // dynamically via SELECT MAX+1 to avoid UNIQUE constraint collisions
+                // on retries/splits. Caller-provided idx was the root cause of the
+                // UNIQUE constraint bug (plan ca69222a).
                 description: t.description,
                 agent: t.agent,
                 files: t.files ?? [],
@@ -981,14 +985,17 @@ export const NdomoPlugin: Plugin = async (
       }),
 
       task_list: tool({
-        description: "List tasks for a plan, optionally filtered by status.",
+        description:
+          "List tasks for a plan, optionally filtered by status. Set includeArchived=true to include tasks from archived plans (archived_at IS NOT NULL).",
         args: {
           planId: tool.schema.string(),
           status: tool.schema.enum(["pending", "running", "done", "failed", "blocked"]).optional(),
+          includeArchived: tool.schema.boolean().optional(),
         },
         execute: async (args) => {
-          const opts: { status?: TaskStatus } = {};
+          const opts: { status?: TaskStatus; includeArchived?: boolean } = {};
           if (args.status) opts.status = args.status as TaskStatus;
+          if (args.includeArchived) opts.includeArchived = true;
           return JSON.stringify(listTasksByPlan(db, args.planId, opts));
         },
       }),
@@ -1164,9 +1171,11 @@ export const NdomoPlugin: Plugin = async (
             throw new Error(`ndomo: task_review requires status='done', got '${row.status}'`);
           const currentMeta = row.metadata ? JSON.parse(row.metadata) : {};
           const updatedMeta = { ...currentMeta, reviewedVerdict: args.verdict };
-          db.query(
-            "UPDATE plan_tasks SET reviewed_by = ?, metadata = ? WHERE id = ?",
-          ).run(args.reviewedBy, JSON.stringify(updatedMeta), args.taskId);
+          db.query("UPDATE plan_tasks SET reviewed_by = ?, metadata = ? WHERE id = ?").run(
+            args.reviewedBy,
+            JSON.stringify(updatedMeta),
+            args.taskId,
+          );
           const updatedRow = db.query("SELECT * FROM plan_tasks WHERE id = ?").get(args.taskId);
           return JSON.stringify({ task: updatedRow });
         },
@@ -1190,7 +1199,9 @@ export const NdomoPlugin: Plugin = async (
             severity: args.severity as IncidentSeverity,
             metadata: { ...(args.metadata ?? {}), created_by: ctx.agent ?? "unknown" },
             ...(args.summary !== undefined && { summary: args.summary }),
-            ...(args.triggeredByDeploymentId !== undefined && { triggeredByDeploymentId: args.triggeredByDeploymentId }),
+            ...(args.triggeredByDeploymentId !== undefined && {
+              triggeredByDeploymentId: args.triggeredByDeploymentId,
+            }),
           };
           const incident = createIncident(db, input);
           return JSON.stringify(incident);
