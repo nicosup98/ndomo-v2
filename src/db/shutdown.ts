@@ -1,26 +1,45 @@
 /**
  * ndomo DB — Graceful shutdown handler.
  *
- * Registers process signal handlers to close the database
- * connection cleanly on SIGTERM, SIGINT, or beforeExit.
+ * Tracks every Database returned by openDb() in a module-level Set so each
+ * connection gets SIGTERM/SIGINT/beforeExit cleanup. Replaces the previous
+ * module-level `registered` boolean which silently skipped every call after
+ * the first (resulting in leaked file handles on hot-reload, smoke tests,
+ * and CLI tools running alongside the plugin).
+ *
+ * Signal handlers use `process.once` so listeners self-remove after firing —
+ * prevents listener accumulation when multiple dbs register in sequence.
  */
 
 import type { Database } from "bun:sqlite";
 import { closeDb } from "./client.ts";
 
-let registered = false;
+const registeredDbs = new Set<Database>();
 
 export function registerShutdownHandlers(db: Database): void {
-  if (registered) return;
-  registered = true;
+  if (registeredDbs.has(db)) return;
+  registeredDbs.add(db);
+
   const cleanup = (): void => {
-    try {
-      closeDb(db);
-    } catch {
-      /* ignore — already closed or never opened */
+    for (const tracked of registeredDbs) {
+      try {
+        closeDb(tracked);
+      } catch {
+        /* ignore — already closed or never opened */
+      }
     }
+    registeredDbs.clear();
   };
-  process.on("SIGTERM", cleanup);
-  process.on("SIGINT", cleanup);
+
+  process.once("SIGTERM", cleanup);
+  process.once("SIGINT", cleanup);
   process.once("beforeExit", cleanup);
+}
+
+export function unregister(db: Database): void {
+  registeredDbs.delete(db);
+}
+
+export function getRegisteredDbCount(): number {
+  return registeredDbs.size;
 }
