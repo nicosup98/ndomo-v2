@@ -509,12 +509,58 @@ export function rollbackFromRow(row: unknown): RollbackExecution {
 
 // ── v14: Analyses ───────────────────────────────────────────────
 
+/**
+ * Severity classification for analysis findings.
+ * Mirrors the existing observed convention in stored findings_json.
+ */
+export type FindingSeverity = "high" | "medium" | "low" | "info";
+
+/**
+ * Agent boundary contract for analysis findings (v15):
+ *
+ * - `observation` (REQUIRED): a factual, descriptive statement. Every
+ *   agent — ranger, foreman, craftsman, smiths — MAY emit observation.
+ *   Observations do not prescribe action; they describe what exists.
+ *
+ * - `proposedAction` (OPTIONAL): a prescriptive recommendation only
+ *   decision-capable agents may emit. Concretely:
+ *     • ranger is EXCLUDED. Validated at write time by
+ *       `validateAnalysisFindings()` in src/db/analyses.ts.
+ *     • foreman, craftsman, warden, smiths, sage, etc. MAY emit it
+ *       when they have explicit decision/architectural authority.
+ *
+ * The boundary enforces ranger's "observation-only" role and keeps
+ * prescriptive planning in the hands of decision-capable agents.
+ */
+export interface Finding {
+  severity: FindingSeverity;
+  /** Optional file:line or code location the finding refers to. */
+  location?: string;
+  /** Factual statement. Required for all agents. */
+  observation: string;
+  /**
+   * Prescriptive recommendation. OPTIONAL — and FORBIDDEN when agent === 'ranger'.
+   * See agent boundary contract above.
+   */
+  proposedAction?: string;
+  /** Optional effort estimate (e.g. 'small', 'medium', 'large'). */
+  effort?: string;
+  /** Optional impact estimate (e.g. 'low', 'medium', 'high'). */
+  impact?: string;
+}
+
+/**
+ * Analysis row. `findingsJson` is the serialized JSON array of {@link Finding}
+ * entries stored in the analyses table (TEXT column). The DB layer keeps it
+ * as a string for query/index flexibility; consumers parse on read.
+ */
 export interface Analysis {
   id: string;
   slug: string;
   title: string;
   projectPath: string;
   summary: string;
+  /** JSON array of {@link Finding}. Parse with JSON.parse(findingsJson) before use. */
   findingsJson: string;
   sourcePlanId: string | null;
   agent: string;

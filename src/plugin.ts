@@ -27,6 +27,7 @@ import {
   searchAnalyses,
   unlinkAnalysisFromPlan,
   updateAnalysis,
+  validateAnalysisFindings,
 } from "./db/analyses.ts";
 import { createIncident } from "./db/incidents.ts";
 import { runMigrations } from "./db/migrations.ts";
@@ -1413,6 +1414,9 @@ export const NdomoPlugin: Plugin = async (
           } catch {
             throw new Error("ndomo: findingsJson must be valid JSON");
           }
+          // Agent boundary contract (v15): ranger emits observation-only findings.
+          // Throws if ctx.agent === 'ranger' AND findings carry proposedAction.
+          validateAnalysisFindings(args.findingsJson, ctx.agent);
           const input = {
             slug: args.slug,
             title: args.title,
@@ -1508,13 +1512,16 @@ export const NdomoPlugin: Plugin = async (
           summary: tool.schema.string().optional(),
           findingsJson: tool.schema.string().optional(),
         },
-        execute: async (args) => {
+        execute: async (args, ctx) => {
           if (args.findingsJson !== undefined) {
             try {
               JSON.parse(args.findingsJson);
             } catch {
               throw new Error("ndomo: findingsJson must be valid JSON");
             }
+            // Agent boundary contract (v15): same check as analysis_create.
+            // Only triggered when findingsJson is being mutated (no-op otherwise).
+            validateAnalysisFindings(args.findingsJson, ctx.agent);
           }
           const patch: Record<string, unknown> = {};
           if (args.title !== undefined) patch.title = args.title;

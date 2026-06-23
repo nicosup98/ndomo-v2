@@ -805,6 +805,21 @@ CREATE TRIGGER IF NOT EXISTS analyses_au AFTER UPDATE ON analyses BEGIN
 END;
 `;
 
+/**
+ * v15: rename analysis finding keys — data-only backfill.
+ *
+ * Pure data migration: no DDL. The actual rename of description→observation
+ * and recommendation→proposedAction happens in runMigrations() (migrations.ts)
+ * via backfillAnalysisFindings(). This SQL string is intentionally empty
+ * because:
+ *  - SQLite lacks JSON key rename via DDL
+ *  - The backfill needs TypeScript control flow for idempotency checks
+ *
+ * See: backfillAnalysisFindings() in src/db/migrations.ts
+ */
+export const SCHEMA_V15_SQL =
+  "-- v15: data-only backfill (description→observation, recommendation→proposedAction) executed in runMigrations()";
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -882,5 +897,11 @@ export const MIGRATIONS: Array<{
     version: 14,
     description: "analyses table + FTS5 (standalone, linkable to plans)",
     sql: SCHEMA_V14_SQL,
+  },
+  {
+    version: 15,
+    description:
+      "rename analysis finding keys: description→observation, recommendation→proposedAction (data-only backfill)",
+    sql: SCHEMA_V15_SQL,
   },
 ];

@@ -10,6 +10,7 @@ import {
   searchAnalyses,
   unlinkAnalysisFromPlan,
   updateAnalysis,
+  validateAnalysisFindings,
 } from "./analyses.ts";
 import { createPlan } from "./plans.ts";
 import { runMigrations } from "./migrations.ts";
@@ -375,6 +376,91 @@ describe("analyses.ts", () => {
 
     test("throws on non-existent analysis", () => {
       expect(() => unlinkAnalysisFromPlan(db, "nonexistent")).toThrow("not found");
+    });
+  });
+
+  // ── validateAnalysisFindings (v15 agent boundary contract) ──────────────
+
+  describe("validateAnalysisFindings", () => {
+    test("no-op when findingsJson is undefined", () => {
+      expect(() => validateAnalysisFindings(undefined, "ranger")).not.toThrow();
+      expect(() => validateAnalysisFindings(undefined, "foreman")).not.toThrow();
+    });
+
+    test("no-op for non-ranger agents even with proposedAction present", () => {
+      const findings = JSON.stringify([
+        { severity: "high", observation: "x", proposedAction: "y" },
+      ]);
+      expect(() => validateAnalysisFindings(findings, "foreman")).not.toThrow();
+      expect(() => validateAnalysisFindings(findings, "craftsman")).not.toThrow();
+      expect(() => validateAnalysisFindings(findings, "inspector")).not.toThrow();
+      expect(() => validateAnalysisFindings(findings, undefined)).not.toThrow();
+    });
+
+    test("no-op when findingsJson is not valid JSON (defers to tool layer)", () => {
+      expect(() => validateAnalysisFindings("not-json{{", "ranger")).not.toThrow();
+    });
+
+    test("no-op when JSON is empty array", () => {
+      expect(() => validateAnalysisFindings("[]", "ranger")).not.toThrow();
+    });
+
+    test("no-op when JSON is not an array", () => {
+      expect(() => validateAnalysisFindings("{}", "ranger")).not.toThrow();
+      expect(() => validateAnalysisFindings("\"hello\"", "ranger")).not.toThrow();
+      expect(() => validateAnalysisFindings("null", "ranger")).not.toThrow();
+    });
+
+    test("ranger with observation-only findings is allowed", () => {
+      const findings = JSON.stringify([
+        { severity: "high", observation: "auth missing on /admin" },
+        { severity: "medium", observation: "N+1 query in listUsers" },
+      ]);
+      expect(() => validateAnalysisFindings(findings, "ranger")).not.toThrow();
+    });
+
+    test("ranger with proposedAction key throws clear validation error", () => {
+      const findings = JSON.stringify([
+        { severity: "high", observation: "auth missing", proposedAction: "add guard" },
+      ]);
+      expect(() => validateAnalysisFindings(findings, "ranger")).toThrow(
+        /ranger cannot emit proposedAction/i,
+      );
+    });
+
+    test("ranger throws even if only one finding has proposedAction", () => {
+      const findings = JSON.stringify([
+        { severity: "high", observation: "ok" },
+        { severity: "low", observation: "fine", proposedAction: "do X" },
+      ]);
+      expect(() => validateAnalysisFindings(findings, "ranger")).toThrow(
+        /ranger cannot emit proposedAction/i,
+      );
+    });
+
+    test("ranger throwing preserves error message mentioning both agent roles", () => {
+      const findings = JSON.stringify([
+        { severity: "high", observation: "x", proposedAction: "y" },
+      ]);
+      let err: Error | null = null;
+      try {
+        validateAnalysisFindings(findings, "ranger");
+      } catch (e) {
+        err = e as Error;
+      }
+      expect(err).not.toBeNull();
+      expect(err!.message).toContain("ranger");
+      expect(err!.message).toContain("foreman");
+    });
+
+    test("non-object items in array are tolerated", () => {
+      const findings = JSON.stringify([
+        "string-finding",
+        null,
+        42,
+        { severity: "high", observation: "real finding" },
+      ]);
+      expect(() => validateAnalysisFindings(findings, "ranger")).not.toThrow();
     });
   });
 });

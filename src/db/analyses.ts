@@ -25,6 +25,50 @@ function validateProjectPath(projectPath: string): void {
   }
 }
 
+/**
+ * Agent-aware validation of analysis findings JSON.
+ *
+ * Boundary policy (ndomo agent contract):
+ *  - `ranger` emits observation-only findings (factual, descriptive).
+ *    Rangers MUST NOT include `proposedAction` because they lack decision authority.
+ *  - `foreman` and other decision-capable agents MAY include `proposedAction`.
+ *
+ * Behavior:
+ *  - If findingsJson is undefined → no-op (field not being set).
+ *  - If findingsJson is not valid JSON → no-op (let the existing JSON.parse
+ *    in the tool layer surface the parse error). This helper focuses on the
+ *    semantic boundary check, not syntax.
+ *  - If findingsJson parses to a non-array (or empty array) → no-op.
+ *  - If agent === 'ranger' AND any parsed finding has a `proposedAction` key
+ *    → throw a clear validation error.
+ *
+ * Pure: no DB access. Safe to call from plugin.ts tool handlers before write.
+ */
+export function validateAnalysisFindings(
+  findingsJson: string | undefined,
+  agent: string | undefined,
+): void {
+  if (findingsJson === undefined) return;
+  if (agent !== "ranger") return;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(findingsJson);
+  } catch {
+    // Defer parse errors to the JSON.parse call in the tool handler.
+    return;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return;
+
+  for (const item of parsed) {
+    if (item !== null && typeof item === "object" && "proposedAction" in item) {
+      throw new Error(
+        "ndomo: ranger cannot emit proposedAction on analysis findings (observation-only contract); foreman/decision-capable agents only",
+      );
+    }
+  }
+}
+
 // ─── CRUD ───────────────────────────────────────────────────────────────────
 
 /**
