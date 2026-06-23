@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 (2026-06-23)
+
+
+### Features
+
+* **analyses:** v15 findings_json observation/proposedAction split ([eeefcd9](https://github.com/nicosup98/ndomo-v2/commit/eeefcd90e04a3066c043f3a2da95f24f79d49192))
+* **craftsman:** apply 7 medium-priority fixes + bun skill for js-smith ([7229e47](https://github.com/nicosup98/ndomo-v2/commit/7229e47c78fb9d56d0e7dabc9e6b2064c5222f8e))
+* **craftsman:** introduce primary craftsman agent with plan_db audit trail ([7f9f8f4](https://github.com/nicosup98/ndomo-v2/commit/7f9f8f4acc8b9c3f51f8a8988461cfd46f1fe0d8))
+* custom tools, hot-swap, reasoning_effort, bundled skills, security ([215b01a](https://github.com/nicosup98/ndomo-v2/commit/215b01a6178850cdf4dceef017a5fca19554c46a))
+* DB module, install.sh curl+provider, docs refresh ([1463736](https://github.com/nicosup98/ndomo-v2/commit/1463736d0e202e8995d57c43dd4239de33e8ccd2))
+* **db:** Issue 2 - getPlan/getPlanBySlug/listPlans JOIN con plan_files ([b172675](https://github.com/nicosup98/ndomo-v2/commit/b1726753eac3e55a415ddc36359cd58db4586ab5))
+* **db:** PRAGMA WAL/NORMAL/INCREMENTAL + vacuum CLI subcommand ([f5f5f19](https://github.com/nicosup98/ndomo-v2/commit/f5f5f19600ee17701d772fe10efc1aa2ae647a7d))
+* **db:** t3 unified close flow + v13 ops tables + auto-checkpoint ([6bab95b](https://github.com/nicosup98/ndomo-v2/commit/6bab95bac5173db22be3dfbdea83b96ec0f04eab))
+* **ops:** add release-please, commitlint/husky, CI lint+cache, Dockerfile ([44ded1f](https://github.com/nicosup98/ndomo-v2/commit/44ded1f4a9511cd05318725e7bc3a7f53de9571e))
+* **orchestrator:** BackgroundDispatcher.finalize for retention sweep ([39d8e85](https://github.com/nicosup98/ndomo-v2/commit/39d8e851b325b115701943e7b7d9742ff1aadf8b))
+* **release:** ranger agent + analyses module new files ([bffe69d](https://github.com/nicosup98/ndomo-v2/commit/bffe69d7bbd83d4c747d43d00b739d500d5f1561))
+* **release:** ranger agent + analyses table + tools ([2bd2c20](https://github.com/nicosup98/ndomo-v2/commit/2bd2c20e231cd3e1432f2656f558d1e95c5fa64b))
+
+
+### Bug Fixes
+
+* **db:** collision-safe task batch order_index + openDb path hardening + craftsman docs ([a195b29](https://github.com/nicosup98/ndomo-v2/commit/a195b29a154e8bdd98e2fdce2c008cc799948e9b))
+* **db:** shutdown.ts multi-instance cleanup with Set&lt;Database&gt; ([af42ce2](https://github.com/nicosup98/ndomo-v2/commit/af42ce2bf9b6165fe8fdd8c2b1e90e6c0c98d8e0))
+* **merge:** resolve CHANGELOG.md + plugin.test.ts conflicts ([8508259](https://github.com/nicosup98/ndomo-v2/commit/85082599d9882a4e2905b8d73e1b39e9a5f5ae5b))
+* per-project plan archive (drop global ~/.ndomo/mem/plans default) ([a20ea51](https://github.com/nicosup98/ndomo-v2/commit/a20ea51bf11cc0c3e7216091c55c4e0b4c2a1c14))
+* **plugin:** FileLock helper + activeWrites TTL + ndomo_write_unlock ([455ca19](https://github.com/nicosup98/ndomo-v2/commit/455ca19b5c9885fe3fcde787bcdc6fb944a499fa))
+* scoped session FK upsert (Fix [#1](https://github.com/nicosup98/ndomo-v2/issues/1) hybrid) + foreman Trivium-self ([d8c7c1e](https://github.com/nicosup98/ndomo-v2/commit/d8c7c1e1b4c5d527ec383a1e793408b1eeda6d68))
+
 ## [Unreleased]
 
 ### Added
