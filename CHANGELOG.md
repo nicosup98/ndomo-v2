@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ranger agent** — 4th primary agent (`mode: primary`, `model:
+  minimax/MiniMax-M3`, `temp: 0.3`) for analysis/cartography/onboarding
+  workflows. Read-write guard rails: `edit: deny` for source code,
+  `write: ask`, `bash: ask` with read-only allowlist. Delegates to
+  `scout` / `sage` / `scribe` for mapping and research.
+- **`analyses` table + FTS5** — standalone SQLite table for persisted
+  research output (slug, title, project_path, summary, findings_json,
+  source_plan_id, agent, session_id, archived_at). External-content
+  FTS5 index over `title` + `summary` + `findings_json` with sync
+  triggers. Migration v14.
+- **Analysis CRUD module** (`src/db/analyses.ts`) — `createAnalysis`,
+  `getAnalysis`, `getAnalysisBySlug`, `listAnalyses`, `searchAnalyses`
+  (FTS), `updateAnalysis`, `archiveAnalysis`, `linkAnalysisToPlan`,
+  `unlinkAnalysisFromPlan`. 40 unit tests covering FK validation,
+  FTS sync, soft-delete, and slug uniqueness.
+- **7 analysis tools** registered in the OpenCode plugin:
+  `analysis_create`, `analysis_get`, `analysis_list`,
+  `analysis_search`, `analysis_update`, `analysis_archive`,
+  `analysis_link_plan`.
+- **`ndomo-analyses` CLI** — `list` / `get` / `search` / `archive`
+  subcommands reading from the project-local `.ndomo/state.db`.
+- **Integration test suite** (`tests/integration/ranger-flow.test.ts`)
+  — 13 end-to-end tests covering create→link→search→archive→unlink
+  flows and FK CASCADE behavior on plan deletion.
+
+### Changed
+
+- Updated `docs/agents.md` from 21 agents (3 primaries) to 22 agents
+  (4 primaries), including cross-primary routing table for the new
+  ranger entry point.
+- Routing tables in `foreman.md`, `craftsman.md`, and `warden.md`
+  now list ranger alongside the existing primary peers.
+
 ### Fixed
 
 - DB hygiene: enable WAL journal mode, NORMAL synchronous, INCREMENTAL

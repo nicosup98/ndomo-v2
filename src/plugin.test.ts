@@ -8,6 +8,16 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
+import {
+  archiveAnalysis,
+  createAnalysis,
+  getAnalysis,
+  linkAnalysisToPlan,
+  listAnalyses,
+  searchAnalyses,
+  unlinkAnalysisFromPlan,
+  updateAnalysis,
+} from "./db/analyses.ts";
 import { createIncident } from "./db/incidents.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
@@ -2454,5 +2464,111 @@ describe("FileLock", () => {
     expect(lock.size()).toBe(2);
     lock.release("/tmp/a.ts", "k1");
     expect(lock.size()).toBe(1);
+  });
+});
+
+// ─── analysis tools (v14) ────────────────────────────────────────────────────
+
+describe("analysis tools", () => {
+  function makeAnalysis(overrides?: Record<string, unknown>) {
+    return createAnalysis(db, {
+      slug: "test-analysis",
+      title: "Test Analysis",
+      projectPath: "/test/project",
+      summary: "A test analysis",
+      findingsJson: JSON.stringify([{ id: 1, text: "finding one" }]),
+      agent: "ranger",
+      createdBy: "test",
+      ...overrides,
+    });
+  }
+
+  test("analysis_create — happy path, returns shape with id", () => {
+    const result = makeAnalysis();
+    expect(result.id).toBeTruthy();
+    expect(result.slug).toBe("test-analysis");
+    expect(result.title).toBe("Test Analysis");
+    expect(result.projectPath).toBe("/test/project");
+    expect(result.agent).toBe("ranger");
+    expect(result.createdBy).toBe("test");
+  });
+
+  test("analysis_list — returns created row, excludes archived by default", () => {
+    makeAnalysis({ slug: "list-a" });
+    makeAnalysis({ slug: "list-b" });
+    archiveAnalysis(db, getAnalysis(db, getAnalysis(db, (listAnalyses(db, { limit: 10 }).find(a => a.slug === "list-b")!).id)!.id)!.id);
+
+    const results = listAnalyses(db);
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.every((r) => r.archivedAt === null)).toBe(true);
+  });
+
+  test("analysis_get — returns single row, throws on missing", () => {
+    const created = makeAnalysis({ slug: "get-test" });
+    const fetched = getAnalysis(db, created.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.id).toBe(created.id);
+
+    const missing = getAnalysis(db, "nonexistent-id");
+    expect(missing).toBeNull();
+  });
+
+  test("analysis_search — finds by title word", () => {
+    makeAnalysis({ slug: "search-test", title: "Architecture Review Q3" });
+    const results = searchAnalyses(db, "Architecture");
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.some((r) => r.title.includes("Architecture"))).toBe(true);
+  });
+
+  test("analysis_update — bumps updated_at", () => {
+    const created = makeAnalysis({ slug: "update-test" });
+
+    const updated = updateAnalysis(db, created.id, { title: "Updated Title" });
+    expect(updated.title).toBe("Updated Title");
+    // updated_at should be a valid ISO string (datetime('now'))
+    expect(updated.updatedAt).toBeTruthy();
+  });
+
+  test("analysis_archive — sets archived_at, then list excludes by default", () => {
+    const created = makeAnalysis({ slug: "archive-test" });
+    expect(created.archivedAt).toBeNull();
+
+    const archived = archiveAnalysis(db, created.id);
+    expect(archived.archivedAt).not.toBeNull();
+
+    const results = listAnalyses(db);
+    expect(results.every((r) => r.id !== created.id || r.archivedAt !== null)).toBe(true);
+  });
+
+  test("analysis_link_plan — sets source_plan_id, then unlink clears it", () => {
+    const analysis = makeAnalysis({ slug: "link-test" });
+    const plan = createPlan(db, {
+      id: "plan-for-link",
+      slug: "plan-link",
+      title: "Plan for Link",
+      status: "draft",
+      priority: 1,
+      overview: "test",
+      complexity: 3,
+      createdBy: "test",
+      updatedBy: "test",
+      sessionId: null,
+      approvedAt: null,
+      completedAt: null,
+      approach: null,
+      sourceSessionId: null,
+      sourceMessageId: null,
+      category: null,
+      metadata: {},
+      archivedAt: null,
+    });
+
+    // Link
+    const linked = linkAnalysisToPlan(db, analysis.id, plan.id);
+    expect(linked.sourcePlanId).toBe(plan.id);
+
+    // Unlink
+    const unlinked = unlinkAnalysisFromPlan(db, analysis.id);
+    expect(unlinked.sourcePlanId).toBeNull();
   });
 });
