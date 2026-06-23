@@ -33,6 +33,20 @@ export function openDb(projectDir: string): Database {
   const db = new Database(path, { create: true });
   // Enable foreign key enforcement (OFF by default in SQLite/bun:sqlite)
   db.exec("PRAGMA foreign_keys = ON");
+  // INCREMENTAL auto_vacuum — reclaims space from deleted rows on demand via
+  // PRAGMA incremental_vacuum (run by `ndomo vacuum` CLI). Prevents unbounded
+  // growth of .ndomo/state.db on long-running installs (audit fcb12dc5 #4).
+  // NOTE: must be set BEFORE journal_mode = WAL — SQLite/bun:sqlite silently
+  // ignores auto_vacuum when set after WAL is enabled on a fresh DB. Empirically
+  // confirmed via /tmp/test-combo.ts (2026-06-23, plan fcb12dc5).
+  db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+  // WAL journal mode — better concurrency, persistent across opens (sticky
+  // in DB file). For long-running installs this prevents the .ndomo/state.db
+  // from blocking readers while a writer is active.
+  db.exec("PRAGMA journal_mode = WAL");
+  // NORMAL synchronous — safe with WAL (durability on checkpoint, not on every
+  // commit). Faster than FULL on write-heavy workloads.
+  db.exec("PRAGMA synchronous = NORMAL");
   return db;
 }
 
