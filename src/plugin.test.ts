@@ -7,19 +7,23 @@
 
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { runMigrations } from "./db/migrations.ts";
-import { getPlan } from "./db/plans.ts";
-import { getSession, startSession } from "./db/sessions.ts";
-import { listTasksByPlan } from "./db/tasks.ts";
-import { createPlan } from "./db/plans.ts";
-import { createTasksBatch, nextTaskForAgent, resolveTaskDependencies, updateTaskStatus } from "./db/tasks.ts";
-import { planCreateExecutor } from "./db/plan-create.ts";
-import { createIncident } from "./db/incidents.ts";
-import { recordRollback } from "./db/rollbacks.ts";
-import type { Plan } from "./db/types.ts";
-import { escalateToForeman, reconcileAbandonedPlans } from "./plugin.ts";
-import { planUpdateStatusExecutor } from "./db/plan-update-status.ts";
 import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
+import { createIncident } from "./db/incidents.ts";
+import { runMigrations } from "./db/migrations.ts";
+import { planCreateExecutor } from "./db/plan-create.ts";
+import { planUpdateStatusExecutor } from "./db/plan-update-status.ts";
+import { createPlan, getPlan } from "./db/plans.ts";
+import { recordRollback } from "./db/rollbacks.ts";
+import { getSession, startSession } from "./db/sessions.ts";
+import {
+  createTasksBatch,
+  listTasksByPlan,
+  nextTaskForAgent,
+  resolveTaskDependencies,
+  updateTaskStatus,
+} from "./db/tasks.ts";
+import type { Plan } from "./db/types.ts";
+import { escalateToForeman, FileLock, reconcileAbandonedPlans } from "./plugin.ts";
 
 let db: Database;
 
@@ -333,9 +337,9 @@ describe("plan_create — created_by_agent default (T1)", () => {
       { agent: "craftsman" },
     );
 
-    const fetched = db
-      .query("SELECT created_by_agent FROM plans WHERE id = ?")
-      .get(plan.id) as { created_by_agent: string | null };
+    const fetched = db.query("SELECT created_by_agent FROM plans WHERE id = ?").get(plan.id) as {
+      created_by_agent: string | null;
+    };
     expect(fetched.created_by_agent).toBe("craftsman");
   });
 
@@ -346,9 +350,9 @@ describe("plan_create — created_by_agent default (T1)", () => {
       {},
     );
 
-    const fetched = db
-      .query("SELECT created_by_agent FROM plans WHERE id = ?")
-      .get(plan.id) as { created_by_agent: string | null };
+    const fetched = db.query("SELECT created_by_agent FROM plans WHERE id = ?").get(plan.id) as {
+      created_by_agent: string | null;
+    };
     expect(fetched.created_by_agent).toBeNull();
   });
 
@@ -361,9 +365,9 @@ describe("plan_create — created_by_agent default (T1)", () => {
       { agent: "unknown" },
     );
 
-    const fetched = db
-      .query("SELECT created_by_agent FROM plans WHERE id = ?")
-      .get(plan.id) as { created_by_agent: string | null };
+    const fetched = db.query("SELECT created_by_agent FROM plans WHERE id = ?").get(plan.id) as {
+      created_by_agent: string | null;
+    };
     expect(fetched.created_by_agent).toBe("unknown");
   });
 });
@@ -377,8 +381,40 @@ describe("task_peek_for_agent logic (T1)", () => {
   test("returns pending tasks for agent without claiming", () => {
     const plan = makePlan({ slug: "peek-1" });
     createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task a", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
-      { orderIndex: 1, description: "task b", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task a",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
+      {
+        orderIndex: 1,
+        description: "task b",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
     const rows = db.query(PEEK_SQL).all("js-smith") as Array<{ status: string }>;
@@ -391,13 +427,47 @@ describe("task_peek_for_agent logic (T1)", () => {
     const plan1 = makePlan({ slug: "peek-plan-1" });
     const plan2 = makePlan({ slug: "peek-plan-2" });
     createTasksBatch(db, plan1.id, [
-      { orderIndex: 0, description: "task 1", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task 1",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     createTasksBatch(db, plan2.id, [
-      { orderIndex: 0, description: "task 2", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task 2",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
-    const rows = db.query(PEEK_SQL_WITH_PLAN).all("js-smith", plan1.id) as Array<{ plan_id: string }>;
+    const rows = db.query(PEEK_SQL_WITH_PLAN).all("js-smith", plan1.id) as Array<{
+      plan_id: string;
+    }>;
     expect(rows).toHaveLength(1);
     expect(rows[0]!.plan_id).toBe(plan1.id);
   });
@@ -405,7 +475,23 @@ describe("task_peek_for_agent logic (T1)", () => {
   test("excludes archived tasks", () => {
     const plan = makePlan({ slug: "peek-archived" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "archived task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "archived task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     const taskId = tasks[0]!.id;
     db.query("UPDATE plan_tasks SET archived_at = ? WHERE id = ?").run(Date.now(), taskId);
@@ -417,7 +503,23 @@ describe("task_peek_for_agent logic (T1)", () => {
   test("excludes non-pending tasks", () => {
     const plan = makePlan({ slug: "peek-running" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "running task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "running task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     updateTaskStatus(db, tasks[0]!.id, "running", {}, "test", { agent: "js-smith" });
 
@@ -446,9 +548,7 @@ describe("task_peek_for_agent logic (T1)", () => {
     }));
     createTasksBatch(db, plan.id, tasks);
 
-    const rows = db
-      .query(`${PEEK_SQL} LIMIT ?`)
-      .all("js-smith", 2) as Array<unknown>;
+    const rows = db.query(`${PEEK_SQL} LIMIT ?`).all("js-smith", 2) as Array<unknown>;
     expect(rows).toHaveLength(2);
   });
 });
@@ -457,9 +557,9 @@ describe("task_peek_for_agent logic (T1)", () => {
 
 describe("task_add_artifact logic (T1)", () => {
   function addArtifact(taskId: string, artifact: string, role?: string) {
-    const row = db
-      .query("SELECT artifacts, plan_id FROM plan_tasks WHERE id = ?")
-      .get(taskId) as { artifacts: string; plan_id: string } | undefined;
+    const row = db.query("SELECT artifacts, plan_id FROM plan_tasks WHERE id = ?").get(taskId) as
+      | { artifacts: string; plan_id: string }
+      | undefined;
     if (!row) throw new Error(`ndomo: task ${taskId} not found`);
     const current = JSON.parse(row.artifacts) as string[];
     if (current.includes(artifact)) {
@@ -484,34 +584,82 @@ describe("task_add_artifact logic (T1)", () => {
   test("appends artifact to existing empty array", () => {
     const plan = makePlan({ slug: "artifact-1" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
     const result = addArtifact(tasks[0]!.id, "output.ts");
     expect(result.added).toBe(true);
-    const task = db
-      .query("SELECT artifacts FROM plan_tasks WHERE id = ?")
-      .get(tasks[0]!.id) as { artifacts: string };
+    const task = db.query("SELECT artifacts FROM plan_tasks WHERE id = ?").get(tasks[0]!.id) as {
+      artifacts: string;
+    };
     expect(JSON.parse(task.artifacts)).toEqual(["output.ts"]);
   });
 
   test("appends to non-empty array", () => {
     const plan = makePlan({ slug: "artifact-2" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: ["a.ts"], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: ["a.ts"],
+        metadata: {},
+      },
     ]);
 
     addArtifact(tasks[0]!.id, "b.ts");
-    const task = db
-      .query("SELECT artifacts FROM plan_tasks WHERE id = ?")
-      .get(tasks[0]!.id) as { artifacts: string };
+    const task = db.query("SELECT artifacts FROM plan_tasks WHERE id = ?").get(tasks[0]!.id) as {
+      artifacts: string;
+    };
     expect(JSON.parse(task.artifacts)).toEqual(["a.ts", "b.ts"]);
   });
 
   test("dedup — returns added:false if artifact exists", () => {
     const plan = makePlan({ slug: "artifact-3" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: ["a.ts"], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: ["a.ts"],
+        metadata: {},
+      },
     ]);
 
     const result = addArtifact(tasks[0]!.id, "a.ts");
@@ -522,7 +670,23 @@ describe("task_add_artifact logic (T1)", () => {
   test("with role — inserts into plan_files", () => {
     const plan = makePlan({ slug: "artifact-4" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
     addArtifact(tasks[0]!.id, "src/x.ts", "output");
@@ -541,9 +705,9 @@ describe("task_add_artifact logic (T1)", () => {
 
 describe("task_review logic (T1)", () => {
   function reviewTask(taskId: string, reviewedBy: string, verdict: string) {
-    const row = db
-      .query("SELECT status, metadata FROM plan_tasks WHERE id = ?")
-      .get(taskId) as { status: string; metadata: string | null } | undefined;
+    const row = db.query("SELECT status, metadata FROM plan_tasks WHERE id = ?").get(taskId) as
+      | { status: string; metadata: string | null }
+      | undefined;
     if (!row) throw new Error(`ndomo: task ${taskId} not found`);
     if (row.status !== "done")
       throw new Error(`ndomo: task_review requires status='done', got '${row.status}'`);
@@ -560,28 +724,60 @@ describe("task_review logic (T1)", () => {
   test("sets reviewed_by on done task", () => {
     const plan = makePlan({ slug: "review-1" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     updateTaskStatus(db, tasks[0]!.id, "done", { result: "ok" }, "test", { agent: "js-smith" });
 
     reviewTask(tasks[0]!.id, "inspector", "approved");
-    const row = db
-      .query("SELECT reviewed_by FROM plan_tasks WHERE id = ?")
-      .get(tasks[0]!.id) as { reviewed_by: string | null };
+    const row = db.query("SELECT reviewed_by FROM plan_tasks WHERE id = ?").get(tasks[0]!.id) as {
+      reviewed_by: string | null;
+    };
     expect(row.reviewed_by).toBe("inspector");
   });
 
   test("stores reviewedVerdict in metadata", () => {
     const plan = makePlan({ slug: "review-2" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     updateTaskStatus(db, tasks[0]!.id, "done", { result: "ok" }, "test", { agent: "js-smith" });
 
     reviewTask(tasks[0]!.id, "inspector", "approved");
-    const row = db
-      .query("SELECT metadata FROM plan_tasks WHERE id = ?")
-      .get(tasks[0]!.id) as { metadata: string };
+    const row = db.query("SELECT metadata FROM plan_tasks WHERE id = ?").get(tasks[0]!.id) as {
+      metadata: string;
+    };
     const meta = JSON.parse(row.metadata);
     expect(meta.reviewedVerdict).toBe("approved");
   });
@@ -589,14 +785,30 @@ describe("task_review logic (T1)", () => {
   test("preserves existing metadata", () => {
     const plan = makePlan({ slug: "review-3" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: { tokensUsed: 42 } },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: { tokensUsed: 42 },
+      },
     ]);
     updateTaskStatus(db, tasks[0]!.id, "done", { result: "ok" }, "test", { agent: "js-smith" });
 
     reviewTask(tasks[0]!.id, "inspector", "approved");
-    const row = db
-      .query("SELECT metadata FROM plan_tasks WHERE id = ?")
-      .get(tasks[0]!.id) as { metadata: string };
+    const row = db.query("SELECT metadata FROM plan_tasks WHERE id = ?").get(tasks[0]!.id) as {
+      metadata: string;
+    };
     const meta = JSON.parse(row.metadata);
     expect(meta.tokensUsed).toBe(42);
     expect(meta.reviewedVerdict).toBe("approved");
@@ -605,7 +817,23 @@ describe("task_review logic (T1)", () => {
   test("rejects non-done task", () => {
     const plan = makePlan({ slug: "review-4" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "task", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "task",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
     expect(() => reviewTask(tasks[0]!.id, "inspector", "approved")).toThrow(
@@ -625,11 +853,59 @@ describe("plan_progress logic (T1)", () => {
     const plan1 = makePlan({ slug: "prog-1" });
     const plan2 = makePlan({ slug: "prog-2" });
     createTasksBatch(db, plan1.id, [
-      { orderIndex: 0, description: "t1", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "t1",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     createTasksBatch(db, plan2.id, [
-      { orderIndex: 0, description: "t2", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
-      { orderIndex: 1, description: "t3", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "t2",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
+      {
+        orderIndex: 1,
+        description: "t3",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
     const rows = db.query("SELECT * FROM plan_progress_active").all() as Array<{
@@ -646,7 +922,23 @@ describe("plan_progress logic (T1)", () => {
   test("filters by planId", () => {
     const plan = makePlan({ slug: "prog-filter" });
     createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "t", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "t",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
 
     const rows = db
@@ -657,8 +949,14 @@ describe("plan_progress logic (T1)", () => {
   });
 
   test("filters by owner via json_extract", () => {
-    makePlan({ slug: "prog-owner-c", metadata: { category: "feature", ownedBy: "craftsman" } as never });
-    makePlan({ slug: "prog-owner-w", metadata: { category: "feature", ownedBy: "warden" } as never });
+    makePlan({
+      slug: "prog-owner-c",
+      metadata: { category: "feature", ownedBy: "craftsman" } as never,
+    });
+    makePlan({
+      slug: "prog-owner-w",
+      metadata: { category: "feature", ownedBy: "warden" } as never,
+    });
 
     const rows = db
       .query(
@@ -676,14 +974,48 @@ describe("plan_progress logic (T1)", () => {
   test("progress_pct calculation", () => {
     const plan = makePlan({ slug: "prog-pct" });
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "t1", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
-      { orderIndex: 1, description: "t2", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "t1",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
+      {
+        orderIndex: 1,
+        description: "t2",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     updateTaskStatus(db, tasks[0]!.id, "done", { result: "ok" }, "test", { agent: "js-smith" });
 
-    const row = db
-      .query("SELECT * FROM plan_progress_active WHERE plan_id = ?")
-      .get(plan.id) as { progress_pct: number; done: number; pending: number };
+    const row = db.query("SELECT * FROM plan_progress_active WHERE plan_id = ?").get(plan.id) as {
+      progress_pct: number;
+      done: number;
+      pending: number;
+    };
     expect(row.done).toBe(1);
     expect(row.pending).toBe(1);
     expect(row.progress_pct).toBe(50);
@@ -692,7 +1024,23 @@ describe("plan_progress logic (T1)", () => {
   test("excludes archived plans", () => {
     const plan = makePlan({ slug: "prog-archived" });
     createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "t", agent: "js-smith", files: [], complexity: 1, dependencies: [], createdBy: "test", updatedBy: "test", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "t",
+        agent: "js-smith",
+        files: [],
+        complexity: 1,
+        dependencies: [],
+        createdBy: "test",
+        updatedBy: "test",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     db.query("UPDATE plans SET archived_at = ? WHERE id = ?").run(Date.now(), plan.id);
 
@@ -786,8 +1134,40 @@ describe("integration — task_create_batch → task_add_artifact → task_revie
 
     // 2. Create 2 tasks
     const tasks = createTasksBatch(db, plan.id, [
-      { orderIndex: 0, description: "implement feature", agent: "js-smith", files: [], complexity: 2, dependencies: [], createdBy: "craftsman", updatedBy: "craftsman", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
-      { orderIndex: 1, description: "write tests", agent: "js-smith", files: [], complexity: 2, dependencies: [], createdBy: "craftsman", updatedBy: "craftsman", sourceSessionId: null, sourceMessageId: null, reviewedBy: null, tokensUsed: null, durationMs: null, artifacts: [], metadata: {} },
+      {
+        orderIndex: 0,
+        description: "implement feature",
+        agent: "js-smith",
+        files: [],
+        complexity: 2,
+        dependencies: [],
+        createdBy: "craftsman",
+        updatedBy: "craftsman",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
+      {
+        orderIndex: 1,
+        description: "write tests",
+        agent: "js-smith",
+        files: [],
+        complexity: 2,
+        dependencies: [],
+        createdBy: "craftsman",
+        updatedBy: "craftsman",
+        sourceSessionId: null,
+        sourceMessageId: null,
+        reviewedBy: null,
+        tokensUsed: null,
+        durationMs: null,
+        artifacts: [],
+        metadata: {},
+      },
     ]);
     expect(tasks).toHaveLength(2);
 
@@ -820,9 +1200,11 @@ describe("integration — task_create_batch → task_add_artifact → task_revie
     expect(doneRow.status).toBe("done");
     const currentMeta = doneRow.metadata ? JSON.parse(doneRow.metadata) : {};
     const updatedMeta = { ...currentMeta, reviewedVerdict: "approved" };
-    db.query(
-      "UPDATE plan_tasks SET reviewed_by = ?, metadata = ? WHERE id = ?",
-    ).run("inspector", JSON.stringify(updatedMeta), tasks[0]!.id);
+    db.query("UPDATE plan_tasks SET reviewed_by = ?, metadata = ? WHERE id = ?").run(
+      "inspector",
+      JSON.stringify(updatedMeta),
+      tasks[0]!.id,
+    );
 
     // 6. Query plan_progress_active
     const progress = db
@@ -864,9 +1246,18 @@ describe("integration — task_create_batch → task_add_artifact → task_revie
 // ─── T2 helpers ──────────────────────────────────────────────────────────────
 
 function createTestDeployment(db: Database): string {
-  db.query("INSERT INTO environments (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run("e1", "prod", "prod", Date.now(), Date.now());
-  db.query("INSERT INTO releases (id, version, title, created_at) VALUES (?, ?, ?, ?)").run("r1", "1.0.0", "rel", Date.now());
-  db.query("INSERT INTO deployments (id, release_id, environment_id, status, created_at) VALUES (?, ?, ?, ?, ?)").run("d1", "r1", "e1", "planned", Date.now());
+  db.query(
+    "INSERT INTO environments (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("e1", "prod", "prod", Date.now(), Date.now());
+  db.query("INSERT INTO releases (id, version, title, created_at) VALUES (?, ?, ?, ?)").run(
+    "r1",
+    "1.0.0",
+    "rel",
+    Date.now(),
+  );
+  db.query(
+    "INSERT INTO deployments (id, release_id, environment_id, status, created_at) VALUES (?, ?, ?, ?, ?)",
+  ).run("d1", "r1", "e1", "planned", Date.now());
   return "d1";
 }
 
@@ -1016,11 +1407,27 @@ describe("rollback_record tool logic (T2)", () => {
   });
 
   test("valid newDeploymentId FK", () => {
-    db.query("INSERT INTO environments (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run("e1", "prod", "prod", Date.now(), Date.now());
-    db.query("INSERT INTO releases (id, version, title, created_at) VALUES (?, ?, ?, ?)").run("r1", "1.0.0", "rel", Date.now());
-    db.query("INSERT INTO releases (id, version, title, created_at) VALUES (?, ?, ?, ?)").run("r2", "1.0.1", "rel2", Date.now());
-    db.query("INSERT INTO deployments (id, release_id, environment_id, status, created_at) VALUES (?, ?, ?, ?, ?)").run("d1", "r1", "e1", "planned", Date.now());
-    db.query("INSERT INTO deployments (id, release_id, environment_id, status, created_at) VALUES (?, ?, ?, ?, ?)").run("d2", "r2", "e1", "planned", Date.now());
+    db.query(
+      "INSERT INTO environments (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("e1", "prod", "prod", Date.now(), Date.now());
+    db.query("INSERT INTO releases (id, version, title, created_at) VALUES (?, ?, ?, ?)").run(
+      "r1",
+      "1.0.0",
+      "rel",
+      Date.now(),
+    );
+    db.query("INSERT INTO releases (id, version, title, created_at) VALUES (?, ?, ?, ?)").run(
+      "r2",
+      "1.0.1",
+      "rel2",
+      Date.now(),
+    );
+    db.query(
+      "INSERT INTO deployments (id, release_id, environment_id, status, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("d1", "r1", "e1", "planned", Date.now());
+    db.query(
+      "INSERT INTO deployments (id, release_id, environment_id, status, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("d2", "r2", "e1", "planned", Date.now());
     const rb = recordRollback(db, {
       deploymentId: "d1",
       plan: "rollback to new deploy",
@@ -1077,7 +1484,9 @@ describe("integration — incident_create → rollback_record flow (T2)", () => 
     expect(rb.status).toBe("executing");
 
     // 4. Verify cross-links
-    const incidentCheck = db.query("SELECT * FROM incidents WHERE id = ?").get(incident.id) as { triggered_by_deployment_id: string | null };
+    const incidentCheck = db.query("SELECT * FROM incidents WHERE id = ?").get(incident.id) as {
+      triggered_by_deployment_id: string | null;
+    };
     expect(incidentCheck.triggered_by_deployment_id).toBe("d1");
   });
 });
@@ -1122,7 +1531,14 @@ describe("plan_update_status extended (T3.1)", () => {
       for (let i = 0; i < tasks.length; i++) {
         const st = opts.taskStatuses[i]!;
         if (st !== "pending") {
-          updateTaskStatus(db, tasks[i]!.id, st as "running" | "done" | "failed" | "blocked", {}, "test", { agent: "js-smith" });
+          updateTaskStatus(
+            db,
+            tasks[i]!.id,
+            st as "running" | "done" | "failed" | "blocked",
+            {},
+            "test",
+            { agent: "js-smith" },
+          );
         }
       }
     }
@@ -1158,30 +1574,67 @@ describe("plan_update_status extended (T3.1)", () => {
 
   test("completed_at set on terminal status — completed, failed, abandoned", () => {
     // completed
-    const plan1 = setupPlan({ status: "executing", taskStatuses: ["done"], slug: "t3-term-completed" });
-    const r1 = planUpdateStatusExecutor(db, { id: plan1.id, status: "completed" }, { agent: "craftsman" }, ARCHIVE_DIR);
+    const plan1 = setupPlan({
+      status: "executing",
+      taskStatuses: ["done"],
+      slug: "t3-term-completed",
+    });
+    const r1 = planUpdateStatusExecutor(
+      db,
+      { id: plan1.id, status: "completed" },
+      { agent: "craftsman" },
+      ARCHIVE_DIR,
+    );
     expect(r1.plan!.completedAt).not.toBeNull();
     expect(r1.plan!.completedAt!).toBeGreaterThan(0);
 
     // failed
-    const plan2 = setupPlan({ status: "executing", taskStatuses: ["pending"], slug: "t3-term-failed" });
-    const r2 = planUpdateStatusExecutor(db, { id: plan2.id, status: "failed" }, { agent: "craftsman" }, ARCHIVE_DIR);
+    const plan2 = setupPlan({
+      status: "executing",
+      taskStatuses: ["pending"],
+      slug: "t3-term-failed",
+    });
+    const r2 = planUpdateStatusExecutor(
+      db,
+      { id: plan2.id, status: "failed" },
+      { agent: "craftsman" },
+      ARCHIVE_DIR,
+    );
     expect(r2.plan!.completedAt).not.toBeNull();
     expect(r2.plan!.completedAt!).toBeGreaterThan(0);
 
     // abandoned
-    const plan3 = setupPlan({ status: "executing", taskStatuses: ["done"], slug: "t3-term-abandoned" });
-    const r3 = planUpdateStatusExecutor(db, { id: plan3.id, status: "abandoned" }, { agent: "craftsman" }, ARCHIVE_DIR);
+    const plan3 = setupPlan({
+      status: "executing",
+      taskStatuses: ["done"],
+      slug: "t3-term-abandoned",
+    });
+    const r3 = planUpdateStatusExecutor(
+      db,
+      { id: plan3.id, status: "abandoned" },
+      { agent: "craftsman" },
+      ARCHIVE_DIR,
+    );
     expect(r3.plan!.completedAt).not.toBeNull();
     expect(r3.plan!.completedAt!).toBeGreaterThan(0);
   });
 
   test("completed_at NOT set on non-terminal status — approved, executing", () => {
     const plan = setupPlan({ status: "draft", taskStatuses: [], slug: "t3-nonterm" });
-    const r1 = planUpdateStatusExecutor(db, { id: plan.id, status: "approved" }, { agent: "craftsman" }, ARCHIVE_DIR);
+    const r1 = planUpdateStatusExecutor(
+      db,
+      { id: plan.id, status: "approved" },
+      { agent: "craftsman" },
+      ARCHIVE_DIR,
+    );
     expect(r1.plan!.completedAt).toBeNull();
 
-    const r2 = planUpdateStatusExecutor(db, { id: plan.id, status: "executing" }, { agent: "craftsman" }, ARCHIVE_DIR);
+    const r2 = planUpdateStatusExecutor(
+      db,
+      { id: plan.id, status: "executing" },
+      { agent: "craftsman" },
+      ARCHIVE_DIR,
+    );
     expect(r2.plan!.completedAt).toBeNull();
   });
 
@@ -1245,9 +1698,10 @@ describe("plan_update_status extended (T3.1)", () => {
     expect(result.archived).toBeTruthy();
 
     // Verify plan_audit row
-    const audit = db
-      .query("SELECT * FROM plan_audit WHERE plan_id = ?")
-      .get(plan.id) as { trigger: string; snapshot: string } | null;
+    const audit = db.query("SELECT * FROM plan_audit WHERE plan_id = ?").get(plan.id) as {
+      trigger: string;
+      snapshot: string;
+    } | null;
     expect(audit).not.toBeNull();
     expect(audit!.trigger).toBe("force_close");
     const snapshot = JSON.parse(audit!.snapshot);
@@ -1360,9 +1814,7 @@ describe("plan_update_status extended (T3.1)", () => {
 
 describe("task_dependency_resolver + task_next_for_agent deps (T3.2)", () => {
   /** Helper: create a plan with tasks that have explicit dependencies. */
-  function setupDepsPlan(
-    taskDefs: Array<{ orderIndex: number; deps: string[]; agent?: string }>,
-  ) {
+  function setupDepsPlan(taskDefs: Array<{ orderIndex: number; deps: string[]; agent?: string }>) {
     const plan = makePlan({ slug: "deps-test" });
     db.query("UPDATE plans SET status = ? WHERE id = ?").run("executing", plan.id);
     const tasks = createTasksBatch(
@@ -1707,8 +2159,8 @@ describe("task_dependency_resolver + task_next_for_agent deps (T3.2)", () => {
 describe("auto_checkpoint hook (T3.3)", () => {
   /** Helper: create a plan with N tasks, return plan + tasks. */
   function setupPlanWithTasks(taskCount: number) {
-    const plan = makePlan({ slug: `acp-${crypto.randomUUID().slice(0, 8)}` })
-    db.query("UPDATE plans SET status = ? WHERE id = ?").run("executing", plan.id)
+    const plan = makePlan({ slug: `acp-${crypto.randomUUID().slice(0, 8)}` });
+    db.query("UPDATE plans SET status = ? WHERE id = ?").run("executing", plan.id);
 
     const taskDescs = Array.from({ length: taskCount }, (_, i) => ({
       orderIndex: i,
@@ -1726,183 +2178,281 @@ describe("auto_checkpoint hook (T3.3)", () => {
       durationMs: null as number | null,
       artifacts: [] as string[],
       metadata: {},
-    }))
-    const tasks = createTasksBatch(db, plan.id, taskDescs)
-    return { plan, tasks }
+    }));
+    const tasks = createTasksBatch(db, plan.id, taskDescs);
+    return { plan, tasks };
   }
 
   test("trigger fires on phase_transition — checkpointSession updates session", async () => {
-    const { plan } = setupPlanWithTasks(1)
-    startSession(db, { id: "ses_acp_1", goal: "test auto-checkpoint" })
+    const { plan } = setupPlanWithTasks(1);
+    startSession(db, { id: "ses_acp_1", goal: "test auto-checkpoint" });
     // mark task done so plan can transition to completed
-    const tasks = listTasksByPlan(db, plan.id)
-    updateTaskStatus(db, tasks[0]!.id, "done", {}, "test")
+    const tasks = listTasksByPlan(db, plan.id);
+    updateTaskStatus(db, tasks[0]!.id, "done", {}, "test");
 
-    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 })
+    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 });
     dispatcher.dispatch("phase_transition", {
       planId: plan.id,
       sessionId: "ses_acp_1",
       blockers: ["tasks_pending"],
-    })
+    });
 
     // Flush microtask
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_1")
-    expect(sess).not.toBeNull()
-    const state = sess!.state
-    expect(state.trigger).toBe("phase_transition")
-    expect(state.completedTasks).toBe(1)
-    expect(state.currentPhase).toBe("executing")
-    expect(state.blockers).toEqual(["tasks_pending"])
-  })
+    const sess = getSession(db, "ses_acp_1");
+    expect(sess).not.toBeNull();
+    const state = sess!.state;
+    expect(state.trigger).toBe("phase_transition");
+    expect(state.completedTasks).toBe(1);
+    expect(state.currentPhase).toBe("executing");
+    expect(state.blockers).toEqual(["tasks_pending"]);
+  });
 
   test("debounce works — two rapid calls produce only one checkpoint", async () => {
-    const { plan } = setupPlanWithTasks(1)
-    startSession(db, { id: "ses_acp_deb", goal: "debounce test" })
+    const { plan } = setupPlanWithTasks(1);
+    startSession(db, { id: "ses_acp_deb", goal: "debounce test" });
 
-    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 5000 })
+    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 5000 });
 
     // First call — should fire
-    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_deb" })
+    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_deb" });
     // Second call immediately — should be debounced
-    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_deb" })
+    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_deb" });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_deb")
-    expect(sess).not.toBeNull()
+    const sess = getSession(db, "ses_acp_deb");
+    expect(sess).not.toBeNull();
     // Only one checkpoint written — state should reflect the first call
-    const state = sess!.state
-    expect(state.trigger).toBe("phase_transition")
-  })
+    const state = sess!.state;
+    expect(state.trigger).toBe("phase_transition");
+  });
 
   test("disabled config = no-op — no checkpoint written", async () => {
-    startSession(db, { id: "ses_acp_dis", goal: "disabled test" })
-    const { plan } = setupPlanWithTasks(1)
+    startSession(db, { id: "ses_acp_dis", goal: "disabled test" });
+    const { plan } = setupPlanWithTasks(1);
 
-    const dispatcher = new AutoCheckpointDispatcher(db, { enabled: false, minIntervalMs: 0 })
-    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_dis" })
+    const dispatcher = new AutoCheckpointDispatcher(db, { enabled: false, minIntervalMs: 0 });
+    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_dis" });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_dis")
-    expect(sess).not.toBeNull()
+    const sess = getSession(db, "ses_acp_dis");
+    expect(sess).not.toBeNull();
     // state should be the default empty object (no checkpoint written)
-    expect(sess!.state).toEqual({})
-  })
+    expect(sess!.state).toEqual({});
+  });
 
   test("no loop — checkpointSession does NOT trigger plan_update_status", async () => {
-    const { plan } = setupPlanWithTasks(1)
-    startSession(db, { id: "ses_acp_loop", goal: "loop test" })
+    const { plan } = setupPlanWithTasks(1);
+    startSession(db, { id: "ses_acp_loop", goal: "loop test" });
 
     // Record plan status before
-    const before = getPlan(db, plan.id)
-    const statusBefore = before!.status
+    const before = getPlan(db, plan.id);
+    const statusBefore = before!.status;
 
-    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 })
-    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_loop" })
+    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 });
+    dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_loop" });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
     // Plan status must NOT have changed — checkpointSession only touches sessions table
-    const after = getPlan(db, plan.id)
-    expect(after!.status).toBe(statusBefore)
-  })
+    const after = getPlan(db, plan.id);
+    expect(after!.status).toBe(statusBefore);
+  });
 
   test("task_batch_complete fires when last task done", async () => {
-    const { plan, tasks } = setupPlanWithTasks(2)
-    startSession(db, { id: "ses_acp_batch", goal: "batch test" })
+    const { plan, tasks } = setupPlanWithTasks(2);
+    startSession(db, { id: "ses_acp_batch", goal: "batch test" });
 
     // Complete both tasks
-    updateTaskStatus(db, tasks[0]!.id, "done", {}, "test")
-    updateTaskStatus(db, tasks[1]!.id, "done", {}, "test")
+    updateTaskStatus(db, tasks[0]!.id, "done", {}, "test");
+    updateTaskStatus(db, tasks[1]!.id, "done", {}, "test");
 
     // Verify no pending tasks remain
-    const pending = listTasksByPlan(db, plan.id, { status: "pending" })
-    expect(pending.length).toBe(0)
+    const pending = listTasksByPlan(db, plan.id, { status: "pending" });
+    expect(pending.length).toBe(0);
 
     // Simulate what plugin does: dispatch task_batch_complete
-    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 })
-    dispatcher.dispatch("task_batch_complete", { planId: plan.id, sessionId: "ses_acp_batch" })
+    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 });
+    dispatcher.dispatch("task_batch_complete", { planId: plan.id, sessionId: "ses_acp_batch" });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_batch")
-    expect(sess).not.toBeNull()
-    const state = sess!.state
-    expect(state.trigger).toBe("task_batch_complete")
-    expect(state.completedTasks).toBe(2)
-  })
+    const sess = getSession(db, "ses_acp_batch");
+    expect(sess).not.toBeNull();
+    const state = sess!.state;
+    expect(state.trigger).toBe("task_batch_complete");
+    expect(state.completedTasks).toBe(2);
+  });
 
   test("task_batch_complete does NOT fire when non-last task done", async () => {
-    const { plan, tasks } = setupPlanWithTasks(2)
-    startSession(db, { id: "ses_acp_partial", goal: "partial batch test" })
+    const { plan, tasks } = setupPlanWithTasks(2);
+    startSession(db, { id: "ses_acp_partial", goal: "partial batch test" });
 
     // Complete only the first task
-    updateTaskStatus(db, tasks[0]!.id, "done", {}, "test")
+    updateTaskStatus(db, tasks[0]!.id, "done", {}, "test");
 
     // There IS still a pending task — so batch is NOT complete
-    const pending = listTasksByPlan(db, plan.id, { status: "pending" })
-    expect(pending.length).toBe(1)
+    const pending = listTasksByPlan(db, plan.id, { status: "pending" });
+    expect(pending.length).toBe(1);
 
     // Simulate what plugin does: do NOT dispatch because pending > 0
     // (In real code, the trigger is conditional on pending.length === 0)
     // We verify here that the session was NOT checkpointed
-    const sess = getSession(db, "ses_acp_partial")
-    expect(sess).not.toBeNull()
-    expect(sess!.state).toEqual({})
-  })
+    const sess = getSession(db, "ses_acp_partial");
+    expect(sess).not.toBeNull();
+    expect(sess!.state).toEqual({});
+  });
 
   test("no sessionId = skip — no checkpoint written", async () => {
-    const { plan } = setupPlanWithTasks(1)
-    startSession(db, { id: "ses_acp_nosess", goal: "no-session test" })
+    const { plan } = setupPlanWithTasks(1);
+    startSession(db, { id: "ses_acp_nosess", goal: "no-session test" });
 
-    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 })
+    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 });
     // dispatch without sessionId
-    dispatcher.dispatch("phase_transition", { planId: plan.id })
+    dispatcher.dispatch("phase_transition", { planId: plan.id });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_nosess")
-    expect(sess!.state).toEqual({})
-  })
+    const sess = getSession(db, "ses_acp_nosess");
+    expect(sess!.state).toEqual({});
+  });
 
   test("unknown trigger = skip — no checkpoint written", async () => {
-    startSession(db, { id: "ses_acp_unknown", goal: "unknown trigger test" })
+    startSession(db, { id: "ses_acp_unknown", goal: "unknown trigger test" });
 
-    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 })
-    dispatcher.dispatch("some_random_trigger", { sessionId: "ses_acp_unknown" })
+    const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 });
+    dispatcher.dispatch("some_random_trigger", { sessionId: "ses_acp_unknown" });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_unknown")
-    expect(sess!.state).toEqual({})
-  })
+    const sess = getSession(db, "ses_acp_unknown");
+    expect(sess!.state).toEqual({});
+  });
 
   test("captureState options — selective capture", async () => {
-    const { plan } = setupPlanWithTasks(1)
-    startSession(db, { id: "ses_acp_sel", goal: "selective capture test" })
-    updateTaskStatus(db, listTasksByPlan(db, plan.id)[0]!.id, "done", {}, "test")
+    const { plan } = setupPlanWithTasks(1);
+    startSession(db, { id: "ses_acp_sel", goal: "selective capture test" });
+    updateTaskStatus(db, listTasksByPlan(db, plan.id)[0]!.id, "done", {}, "test");
 
     const dispatcher = new AutoCheckpointDispatcher(db, {
       minIntervalMs: 0,
       captureState: { completedTasks: true, currentPhase: false, blockers: false },
-    })
+    });
     dispatcher.dispatch("phase_transition", {
       planId: plan.id,
       sessionId: "ses_acp_sel",
       blockers: ["some_blocker"],
-    })
+    });
 
-    await new Promise((r) => setTimeout(r, 10))
+    await new Promise((r) => setTimeout(r, 10));
 
-    const sess = getSession(db, "ses_acp_sel")
-    const state = sess!.state
-    expect(state.trigger).toBe("phase_transition")
-    expect(state.completedTasks).toBe(1)
+    const sess = getSession(db, "ses_acp_sel");
+    const state = sess!.state;
+    expect(state.trigger).toBe("phase_transition");
+    expect(state.completedTasks).toBe(1);
     // currentPhase and blockers should NOT be captured
-    expect(state.currentPhase).toBeUndefined()
-    expect(state.blockers).toBeUndefined()
-  })
+    expect(state.currentPhase).toBeUndefined();
+    expect(state.blockers).toBeUndefined();
+  });
+});
+
+// ─── FileLock (activeWrites TTL — plan fcb12dc5 #3) ──────────────────────────
+
+describe("FileLock", () => {
+  test("acquire returns null when filepath is unlocked", () => {
+    const lock = new FileLock(60_000);
+    expect(lock.acquire("/tmp/a.ts", "k1")).toBeNull();
+    expect(lock.has("/tmp/a.ts")).toBe(true);
+  });
+
+  test("acquire returns existing key when filepath is locked by another", () => {
+    const lock = new FileLock(60_000);
+    lock.acquire("/tmp/a.ts", "k1");
+    expect(lock.acquire("/tmp/a.ts", "k2")).toBe("k1");
+    // k2 should NOT have overwritten
+    expect(lock.acquire("/tmp/a.ts", "k1")).toBeNull();
+  });
+
+  test("release with matching key removes the lock", () => {
+    const lock = new FileLock(60_000);
+    lock.acquire("/tmp/a.ts", "k1");
+    lock.release("/tmp/a.ts", "k1");
+    expect(lock.has("/tmp/a.ts")).toBe(false);
+    expect(lock.acquire("/tmp/a.ts", "k2")).toBeNull();
+  });
+
+  test("release with non-matching key is a no-op (defensive)", () => {
+    const lock = new FileLock(60_000);
+    lock.acquire("/tmp/a.ts", "k1");
+    lock.release("/tmp/a.ts", "k2");
+    expect(lock.has("/tmp/a.ts")).toBe(true);
+  });
+
+  test("forceRelease drops any lock regardless of key (admin recovery)", () => {
+    const lock = new FileLock(60_000);
+    lock.acquire("/tmp/a.ts", "k1");
+    expect(lock.forceRelease("/tmp/a.ts")).toBe(true);
+    expect(lock.has("/tmp/a.ts")).toBe(false);
+    // Releasing an unheld path returns false
+    expect(lock.forceRelease("/tmp/missing.ts")).toBe(false);
+  });
+
+  test("TTL sweep releases expired locks (regression: SDK hook-miss leak)", () => {
+    const lock = new FileLock(10);
+    lock.acquire("/tmp/a.ts", "k1");
+    expect(lock.has("/tmp/a.ts")).toBe(true);
+
+    // Wait past TTL — Date.now() advances
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        const swept = lock.sweep();
+        expect(swept).toBe(1);
+        expect(lock.has("/tmp/a.ts")).toBe(false);
+        // Subsequent acquire succeeds (regression: must not leak across SDK failures)
+        expect(lock.acquire("/tmp/a.ts", "k2")).toBeNull();
+        resolve();
+      }, 25);
+    });
+  });
+
+  test("TTL sweep keeps fresh locks intact", () => {
+    const lock = new FileLock(60_000);
+    lock.acquire("/tmp/a.ts", "k1");
+    const swept = lock.sweep();
+    expect(swept).toBe(0);
+    expect(lock.has("/tmp/a.ts")).toBe(true);
+  });
+
+  test("acquire auto-sweeps expired entries before checking (lazy cleanup)", () => {
+    const lock = new FileLock(10);
+    lock.acquire("/tmp/a.ts", "k1");
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Even without explicit sweep(), acquire auto-sweeps and proceeds
+        expect(lock.acquire("/tmp/a.ts", "k2")).toBeNull();
+        resolve();
+      }, 25);
+    });
+  });
+
+  test("keys() returns all currently-locked filepaths (compaction context)", () => {
+    const lock = new FileLock(60_000);
+    lock.acquire("/tmp/a.ts", "k1");
+    lock.acquire("/tmp/b.ts", "k2");
+    expect(lock.keys().sort()).toEqual(["/tmp/a.ts", "/tmp/b.ts"]);
+  });
+
+  test("size() reflects current lock count", () => {
+    const lock = new FileLock(60_000);
+    expect(lock.size()).toBe(0);
+    lock.acquire("/tmp/a.ts", "k1");
+    lock.acquire("/tmp/b.ts", "k2");
+    expect(lock.size()).toBe(2);
+    lock.release("/tmp/a.ts", "k1");
+    expect(lock.size()).toBe(1);
+  });
 });

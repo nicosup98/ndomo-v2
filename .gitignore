@@ -24,6 +24,10 @@ bun.lockb
 *.sqlite-shm
 *.sqlite-wal
 
+# SQLite WAL sidecars (any .db file — ndomo state.db etc.)
+*.db-wal
+*.db-shm
+
 # DCP data
 .dcp/
 dcp-prompts/
