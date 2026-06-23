@@ -187,6 +187,74 @@ describe("BackgroundDispatcher", () => {
     expect(task!.worktree).toBe("/tmp/wt/nav-redesign");
   });
 
+  // 15. finalize deletes terminal tasks older than threshold
+  test("finalize deletes terminal tasks older than threshold", () => {
+    const now = Date.now();
+    const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+    const thirtyMinAgo = now - 30 * 60 * 1000;
+    const insertSql = `INSERT INTO background_tasks
+      (id, agent, description, status, started_at, completed_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    db.prepare(insertSql).run(
+      "old1",
+      "a",
+      "t1",
+      "completed",
+      twoHoursAgo,
+      twoHoursAgo,
+      twoHoursAgo,
+    );
+    db.prepare(insertSql).run("old2", "a", "t2", "failed", twoHoursAgo, twoHoursAgo, twoHoursAgo);
+    db.prepare(insertSql).run(
+      "old3",
+      "a",
+      "t3",
+      "cancelled",
+      twoHoursAgo,
+      twoHoursAgo,
+      twoHoursAgo,
+    );
+    db.prepare(insertSql).run(
+      "fresh",
+      "a",
+      "t4",
+      "completed",
+      thirtyMinAgo,
+      thirtyMinAgo,
+      thirtyMinAgo,
+    );
+    db.prepare(insertSql).run("live", "a", "t5", "running", thirtyMinAgo, null, thirtyMinAgo);
+
+    const deleted = dispatcher.finalize(60 * 60 * 1000); // 1h cutoff
+    expect(deleted).toBe(3);
+
+    expect(dispatcher.getStatus("old1")).toBeUndefined();
+    expect(dispatcher.getStatus("old2")).toBeUndefined();
+    expect(dispatcher.getStatus("old3")).toBeUndefined();
+    expect(dispatcher.getStatus("fresh")?.status).toBe("completed");
+    expect(dispatcher.getStatus("live")?.status).toBe("running");
+  });
+
+  test("finalize is a no-op when no terminal tasks exceed threshold", () => {
+    const id = dispatcher.dispatch({ agent: "a", description: "fresh" });
+    dispatcher.markComplete(id, "done");
+
+    const deleted = dispatcher.finalize(60 * 60 * 1000);
+    expect(deleted).toBe(0);
+    expect(dispatcher.getStatus(id)).toBeDefined();
+  });
+
+  test("finalize does NOT delete pending or running tasks regardless of age", () => {
+    const id = dispatcher.dispatch({ agent: "a", description: "stale pending" });
+    // Manually backdate created_at to long ago — finalize must not touch it
+    const longAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    db.prepare("UPDATE background_tasks SET created_at = ? WHERE id = ?").run(longAgo, id);
+
+    const deleted = dispatcher.finalize(1000); // 1 second cutoff
+    expect(deleted).toBe(0);
+    expect(dispatcher.getStatus(id)?.status).toBe("pending");
+  });
+
   // 14. Persistence: new BackgroundDispatcher with SAME db → task still exists
   test("new BackgroundDispatcher with same db sees existing tasks", () => {
     const id = dispatcher.dispatch({ agent: "scout", description: "persist me" });

@@ -255,6 +255,30 @@ export class BackgroundDispatcher {
   }
 
   /**
+   * Delete terminal (completed/failed/cancelled) tasks older than `maxAgeMs`.
+   * Prevents unbounded growth of background_tasks on long-running installs.
+   *
+   * Pending and running tasks are NEVER finalized regardless of age — they're
+   * still live work. `maxAgeMs` is measured from `completed_at`, so a task that
+   * just finished a moment ago is safe.
+   *
+   * @param maxAgeMs - Maximum age in milliseconds for terminal tasks.
+   * @returns Number of rows deleted.
+   */
+  finalize(maxAgeMs: number): number {
+    const cutoff = Date.now() - maxAgeMs;
+    const result = this.db
+      .query(
+        `DELETE FROM background_tasks
+         WHERE status IN ('completed', 'failed', 'cancelled')
+           AND completed_at IS NOT NULL
+           AND completed_at < ?`,
+      )
+      .run(cutoff);
+    return result.changes;
+  }
+
+  /**
    * List all tasks for a specific agent, newest first.
    *
    * @param agent - Agent name to filter by.
