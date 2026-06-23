@@ -46,6 +46,7 @@ Example:
 | scribe | opencode-go/minimax-m2.7 | 0.3 |
 | painter | opencode-go/kimi-k2.6 | 0.2 |
 | smith | opencode-go/deepseek-v4-flash | 0.1 |
+| ranger | minimax/MiniMax-M3 | 0.3 |
 | sage | opencode-go/deepseek-v4-pro | 0.2 |
 | guild | opencode-go/deepseek-v4-pro | 0.3 |
 | go-smith | xiaomi/mimo-v2.5-pro | 0.1 |
@@ -130,7 +131,9 @@ The provider override is a one-time install operation. To change providers after
 
 ## Agent Routing
 
-The `agentRouting` field defines the delegation graph. Only the `foreman` agent is defined as `mode: "primary"` — all other agents are subagents. The foreman's `delegates_to` array lists all 13 subagents.
+The `agentRouting` field defines the delegation graph. Four agents are defined as `mode: "primary"` peer primaries: `foreman` (planner/orchestrator), `craftsman` (implementer), `warden` (ops custodian), and `ranger` (analyst/cartographer/onboarding). All other agents are subagents reachable via the primaries' `delegates_to` arrays. The foreman's `delegates_to` array lists all subagents it can dispatch.
+
+**Ranger** is the 4th primary, registered separately with `mode: "primary"` and its own delegation graph (`scout`, `sage`, `scribe`). Unlike foreman/craftsman/warden, ranger does not create plans — it produces rows in the `analyses` DB table linkable retroactively via `analysis_link_plan`.
 
 Routing decisions are made by the scheduler (`src/orchestrator/scheduler.ts`):
 
@@ -180,7 +183,8 @@ Per-agent context limits for the DCP plugin. Only takes effect when `@tarquinen/
     "foreman": { "minContextLimit": 50000, "maxContextLimit": 100000 },
     "sage": { "minContextLimit": 50000, "maxContextLimit": 100000 },
     "guild": { "minContextLimit": 50000, "maxContextLimit": 100000 },
-    "inspector": { "minContextLimit": 40000, "maxContextLimit": 90000 }
+    "inspector": { "minContextLimit": 40000, "maxContextLimit": 90000 },
+    "ranger": { "minContextLimit": 50000, "maxContextLimit": 100000 }
   }
 }
 ```

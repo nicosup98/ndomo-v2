@@ -58,6 +58,13 @@ AGENTS=(
   "rust-smith.md"
   "inspector.md"
   "chronicler.md"
+  "ci-smith.md"
+  "craftsman.md"
+  "deploy-smith.md"
+  "ops-scout.md"
+  "ranger.md"
+  "release-smith.md"
+  "warden.md"
 )
 
 # ── Skill directories to remove ───────────────────────────────────────────────

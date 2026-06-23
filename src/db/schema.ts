@@ -748,6 +748,63 @@ CREATE INDEX IF NOT EXISTS idx_rollbacks_status ON rollback_executions(status);
 CREATE INDEX IF NOT EXISTS idx_rollbacks_created ON rollback_executions(created_at DESC);
 `;
 
+// ── v14: analyses table ─────────────────────────────────────────────────────
+
+export const SCHEMA_V14_SQL = `
+-- v14: standalone analyses table (linkable to plans)
+CREATE TABLE IF NOT EXISTS analyses (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  findings_json TEXT NOT NULL DEFAULT '[]',
+  source_plan_id TEXT,
+  agent TEXT NOT NULL DEFAULT 'ranger',
+  session_id TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  archived_at TEXT,
+  FOREIGN KEY (source_plan_id) REFERENCES plans(id) ON DELETE SET NULL,
+  UNIQUE (slug, project_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analyses_slug ON analyses(slug);
+CREATE INDEX IF NOT EXISTS idx_analyses_project ON analyses(project_path);
+CREATE INDEX IF NOT EXISTS idx_analyses_archived ON analyses(archived_at);
+CREATE INDEX IF NOT EXISTS idx_analyses_source_plan ON analyses(source_plan_id);
+CREATE INDEX IF NOT EXISTS idx_analyses_agent ON analyses(agent);
+
+-- FTS5 virtual table for full-text search
+CREATE VIRTUAL TABLE IF NOT EXISTS analyses_fts USING fts5(
+  title,
+  summary,
+  findings_json,
+  content='analyses',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 1'
+);
+
+-- Sync triggers: keep analyses_fts in sync with analyses
+CREATE TRIGGER IF NOT EXISTS analyses_ai AFTER INSERT ON analyses BEGIN
+  INSERT INTO analyses_fts(rowid, title, summary, findings_json)
+  VALUES (new.rowid, new.title, new.summary, new.findings_json);
+END;
+
+CREATE TRIGGER IF NOT EXISTS analyses_ad AFTER DELETE ON analyses BEGIN
+  INSERT INTO analyses_fts(analyses_fts, rowid, title, summary, findings_json)
+  VALUES ('delete', old.rowid, old.title, old.summary, old.findings_json);
+END;
+
+CREATE TRIGGER IF NOT EXISTS analyses_au AFTER UPDATE ON analyses BEGIN
+  INSERT INTO analyses_fts(analyses_fts, rowid, title, summary, findings_json)
+  VALUES ('delete', old.rowid, old.title, old.summary, old.findings_json);
+  INSERT INTO analyses_fts(rowid, title, summary, findings_json)
+  VALUES (new.rowid, new.title, new.summary, new.findings_json);
+END;
+`;
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -820,5 +877,10 @@ export const MIGRATIONS: Array<{
     version: 13,
     description: "ops tables: environments, releases, deployments, incidents, rollback_executions",
     sql: SCHEMA_V13_SQL,
+  },
+  {
+    version: 14,
+    description: "analyses table + FTS5 (standalone, linkable to plans)",
+    sql: SCHEMA_V14_SQL,
   },
 ];

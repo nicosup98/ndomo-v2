@@ -18,6 +18,16 @@ import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import { openDb } from "./db/client.ts";
+import {
+  archiveAnalysis,
+  createAnalysis,
+  getAnalysis,
+  linkAnalysisToPlan,
+  listAnalyses,
+  searchAnalyses,
+  unlinkAnalysisFromPlan,
+  updateAnalysis,
+} from "./db/analyses.ts";
 import { createIncident } from "./db/incidents.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { resolveArchiveDir } from "./db/plan-archive.ts";
@@ -1379,6 +1389,180 @@ export const NdomoPlugin: Plugin = async (
           if (args.suggestedApproach !== undefined)
             escalateArgs.suggestedApproach = args.suggestedApproach;
           return JSON.stringify(escalateToForeman(db, ctx, escalateArgs));
+        },
+      }),
+
+      // ── Analyses (v14) ────────────────────────────────────────────
+
+      analysis_create: tool({
+        description:
+          "Create a new analysis record in the standalone analyses table. Use for analyst findings, architecture audits, onboarding notes, or cartography outputs. Optionally link to a source plan via sourcePlanId.",
+        args: {
+          slug: tool.schema.string(),
+          title: tool.schema.string(),
+          projectPath: tool.schema.string(),
+          summary: tool.schema.string(),
+          findingsJson: tool.schema.string(),
+          sourcePlanId: tool.schema.string().optional(),
+          agent: tool.schema.string().optional(),
+          sessionId: tool.schema.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          try {
+            JSON.parse(args.findingsJson);
+          } catch {
+            throw new Error("ndomo: findingsJson must be valid JSON");
+          }
+          const input = {
+            slug: args.slug,
+            title: args.title,
+            projectPath: args.projectPath,
+            summary: args.summary,
+            findingsJson: args.findingsJson,
+            agent: args.agent ?? "ranger",
+            createdBy: ctx.agent ?? "ranger",
+            ...(args.sourcePlanId !== undefined && { sourcePlanId: args.sourcePlanId }),
+            ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
+          };
+          const result = createAnalysis(db, input);
+          return JSON.stringify(result, null, 2);
+        },
+      }),
+
+      analysis_get: tool({
+        description:
+          "Get a single analysis by id. Returns the analysis with parsed findingsJson.",
+        args: {
+          id: tool.schema.string(),
+        },
+        execute: async (args) => {
+          const result = getAnalysis(db, args.id);
+          if (!result) {
+            throw new Error(`ndomo: analysis '${args.id}' not found`);
+          }
+          return JSON.stringify(
+            { ...result, findingsJson: JSON.parse(result.findingsJson) },
+            null,
+            2,
+          );
+        },
+      }),
+
+      analysis_list: tool({
+        description:
+          "List analyses with optional filters: sourcePlanId, agent, projectPath, archived, limit.",
+        args: {
+          sourcePlanId: tool.schema.string().optional(),
+          agent: tool.schema.string().optional(),
+          projectPath: tool.schema.string().optional(),
+          archived: tool.schema.boolean().optional(),
+          limit: tool.schema.number().optional(),
+        },
+        execute: async (args) => {
+          const opts: {
+            sourcePlanId?: string;
+            agent?: string;
+            projectPath?: string;
+            archived?: boolean;
+            limit?: number;
+          } = {};
+          if (args.sourcePlanId !== undefined) opts.sourcePlanId = args.sourcePlanId;
+          if (args.agent !== undefined) opts.agent = args.agent;
+          if (args.projectPath !== undefined) opts.projectPath = args.projectPath;
+          if (args.archived !== undefined) opts.archived = args.archived;
+          if (args.limit !== undefined) opts.limit = args.limit;
+          const results = listAnalyses(db, opts);
+          return JSON.stringify(
+            results.map((r) => ({ ...r, findingsJson: JSON.parse(r.findingsJson) })),
+            null,
+            2,
+          );
+        },
+      }),
+
+      analysis_search: tool({
+        description:
+          "Full-text search over analyses (title + summary + findings) using FTS5. Returns matching analyses.",
+        args: {
+          query: tool.schema.string(),
+          limit: tool.schema.number().optional(),
+        },
+        execute: async (args) => {
+          const opts: { limit?: number } = {};
+          if (args.limit !== undefined) opts.limit = args.limit;
+          const results = searchAnalyses(db, args.query, opts);
+          return JSON.stringify(
+            results.map((r) => ({ ...r, findingsJson: JSON.parse(r.findingsJson) })),
+            null,
+            2,
+          );
+        },
+      }),
+
+      analysis_update: tool({
+        description:
+          "Update an existing analysis. Only provided fields are changed. Bumps updated_at.",
+        args: {
+          id: tool.schema.string(),
+          title: tool.schema.string().optional(),
+          summary: tool.schema.string().optional(),
+          findingsJson: tool.schema.string().optional(),
+        },
+        execute: async (args) => {
+          if (args.findingsJson !== undefined) {
+            try {
+              JSON.parse(args.findingsJson);
+            } catch {
+              throw new Error("ndomo: findingsJson must be valid JSON");
+            }
+          }
+          const patch: Record<string, unknown> = {};
+          if (args.title !== undefined) patch.title = args.title;
+          if (args.summary !== undefined) patch.summary = args.summary;
+          if (args.findingsJson !== undefined) patch.findingsJson = args.findingsJson;
+          const result = updateAnalysis(db, args.id, patch);
+          return JSON.stringify(result, null, 2);
+        },
+      }),
+
+      analysis_archive: tool({
+        description:
+          "Soft-delete an analysis by setting archived_at. Idempotent. The row is preserved but excluded from default list queries.",
+        args: {
+          id: tool.schema.string(),
+        },
+        execute: async (args) => {
+          const result = archiveAnalysis(db, args.id);
+          return JSON.stringify(
+            { ok: true, id: result.id, archivedAt: result.archivedAt },
+            null,
+            2,
+          );
+        },
+      }),
+
+      analysis_link_plan: tool({
+        description:
+          "Link an existing analysis to a source plan (set source_plan_id). Pass null to unlink.",
+        args: {
+          id: tool.schema.string(),
+          planId: tool.schema.string().nullable(),
+        },
+        execute: async (args) => {
+          if (args.planId === null) {
+            const result = unlinkAnalysisFromPlan(db, args.id);
+            return JSON.stringify(
+              { ok: true, id: result.id, sourcePlanId: null },
+              null,
+              2,
+            );
+          }
+          const result = linkAnalysisToPlan(db, args.id, args.planId);
+          return JSON.stringify(
+            { ok: true, id: result.id, sourcePlanId: result.sourcePlanId },
+            null,
+            2,
+          );
         },
       }),
 

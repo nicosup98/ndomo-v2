@@ -506,3 +506,68 @@ export function rollbackFromRow(row: unknown): RollbackExecution {
     metadata: r.metadata != null ? JSON.parse(r.metadata) : null,
   }
 }
+
+// ── v14: Analyses ───────────────────────────────────────────────
+
+export interface Analysis {
+  id: string;
+  slug: string;
+  title: string;
+  projectPath: string;
+  summary: string;
+  findingsJson: string;
+  sourcePlanId: string | null;
+  agent: string;
+  sessionId: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface InsertAnalysis {
+  slug: string;
+  title: string;
+  projectPath: string;
+  summary?: string;
+  findingsJson?: string;
+  sourcePlanId?: string | null;
+  agent?: string;
+  sessionId?: string | null;
+  createdBy?: string | null;
+}
+
+export interface AnalysisRow {
+  id: string;
+  slug: string;
+  title: string;
+  project_path: string;
+  summary: string;
+  findings_json: string;
+  source_plan_id: string | null;
+  agent: string;
+  session_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export function analysisFromRow(row: unknown): Analysis {
+  const r = row as AnalysisRow;
+  return {
+    id: r.id,
+    slug: r.slug,
+    title: r.title,
+    projectPath: r.project_path,
+    summary: r.summary,
+    findingsJson: r.findings_json,
+    sourcePlanId: r.source_plan_id ?? null,
+    agent: r.agent,
+    sessionId: r.session_id ?? null,
+    createdBy: r.created_by ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    archivedAt: r.archived_at ?? null,
+  };
+}

@@ -8,17 +8,8 @@
       "mode": "primary",
       "delegates_to": [
         "scout",
-        "scribe",
-        "painter",
-        "smith",
         "sage",
         "guild",
-        "go-smith",
-        "js-smith",
-        "python-smith",
-        "vue-smith",
-        "zig-smith",
-        "rust-smith",
         "chronicler",
         "inspector"
       ]
@@ -52,6 +43,11 @@
         "sage",
         "inspector"
       ]
+    },
+    "ranger": {
+      "description": "Project analyst/cartographer/onboarding — hybrid scout+sage+scribe via DB analyses",
+      "mode": "primary",
+      "delegates_to": ["scout", "sage", "scribe"]
     }
   },
   "protectedTools": ["memory", "compress", "task", "todowrite", "skill"],
@@ -77,6 +73,11 @@
       "painter": {
         "model": "opencode-go/qwen3.7-plus",
         "temperature": 0.2,
+        "reasoning_effort": "high"
+      },
+      "ranger": {
+        "model": "minimax/MiniMax-M3",
+        "temperature": 0.3,
         "reasoning_effort": "high"
       },
       "smith": {
@@ -154,6 +155,11 @@
       "painter": {
         "model": "opencode-go/deepseek-v4-flash",
         "temperature": 0.2,
+        "reasoning_effort": "low"
+      },
+      "ranger": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
         "reasoning_effort": "low"
       },
       "smith": {
@@ -237,6 +243,10 @@
     "inspector": {
       "minContextLimit": 40000,
       "maxContextLimit": 90000
+    },
+    "ranger": {
+      "minContextLimit": 50000,
+      "maxContextLimit": 100000
     }
   },
   "mem": {

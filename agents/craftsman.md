@@ -1,7 +1,7 @@
 ---
 description: Implementador Artesano / Disciplined Craftsman (modo ad-hoc o planificado)
-mode: primary
-model: opencode-go/glm-5.2
+mode: all
+model: minimax/MiniMax-M3
 temperature: 0.1
 permission:
   edit: allow
@@ -38,6 +38,7 @@ permission:
     "painter": allow
     "inspector": allow
     "chronicler": allow
+    "ranger": allow
   plan_db: allow
 ---
 
@@ -217,6 +218,7 @@ Cuando necesites implementación especializada, usa la tabla de routing por exte
 | Auditoría / seguridad / diff review | `inspector` |
 | Exploración read-only / mapeo | `scout` |
 | Investigación APIs / docs externas | `scribe` |
+| Análisis profundo pre-impl / context-loading / auditoría | `ranger` (primary peer, via task) |
 | Sin match | `smith` (genérico stack-agnostic) |
 
 **Reglas de routing:**

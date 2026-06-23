@@ -2,11 +2,11 @@
 
 ## Overview
 
-ndomo defines 21 agents grouped by function (3 primaries + 18 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
+ndomo defines 22 agents grouped by function (4 primaries + 18 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
 
 ## Primaries
 
-Three primary agents operate independently. The user switches between them manually via TUI.
+Four primary agents operate independently. The user switches between them manually via TUI.
 
 ### foreman
 
@@ -81,6 +81,39 @@ Flow (4 pasos):
 - **Dispatched:** Foreman crea plan code+ops, dispatcha warden para portions ops. Warden hereda `plan_id` via session.
 
 **Regla de oro:** Warden NUNCA dispatcha a craftsman/smith/foreman. Si la tarea es code+ops → pedir al usuario que foreman planifique primero.
+
+### ranger
+
+**Analyst / Cartographer / Onboarding.** Primary agent para análisis profundo, mapeo estructural y context-loading. NO implementa lógica de negocio. NO crea planes — produce filas en tabla `analyses` (linkable a planes via `source_plan_id`).
+
+- **Model:** minimax/MiniMax-M3
+- **Temperature:** 0.3
+- **Permissions:** edit (deny código fuente, allow `docs/analyses/**`), write (ask), bash (ask con read-only allow), webfetch (ask), question (allow), task (scout/sage/scribe)
+- **Delegates to:** scout, sage, scribe (exploración y análisis únicamente)
+- **File:** `agents/ranger.md`
+
+**Cuándo usar:**
+- **Ad-hoc:** Análisis directo sin plan — onboarding de proyecto, auditoría exploratoria, context-loading rápido. Cambiar a ranger en TUI sin pasar por foreman.
+- **Plan-mode (consumidor):** Foreman/craftsman/warden crea plan con task agent="ranger". Ranger hereda plan_id y produce analysis linkeada a `source_plan_id`.
+- **Dispatched:** Analysis standalone consultable por otros primaries via `analysis_get`/`analysis_search`.
+
+**Tres roles híbridos:**
+| Rol | Output típico |
+|---|---|
+| Analyst | Auditoría arquitectura, deuda técnica, security review, performance hotspots — findings con severity + location + recommendation |
+| Cartographer | Dependency graphs, module maps, convention detection, symbol indexes |
+| Onboarding | Stack detection, conventions extraction, entry points, context-load denso para humanos/AI nuevos |
+
+**Routing interno (sub-agentes permitidos):**
+| Sub-agente | Uso |
+|---|---|
+| `scout` | Mapear repo, localizar archivos, dependency graphs |
+| `sage` | Evaluar arquitectura, trade-offs, debugging complejo |
+| `scribe` | Research docs externas, APIs, versiones |
+
+**NO delega a:** smiths, painter, chronicler, inspector, foreman, craftsman, warden, guild.
+
+**Regla de oro:** ranger analiza y mapea. Craftsman implementa. Warden opera. Foreman planifica.
 
 ## Explorers
 
@@ -297,7 +330,7 @@ Foreman delegates exclusively to exploration/analysis agents:
 | Arquitectura / debugging difícil / trade-offs | `sage` |
 | Consenso multi-modelo / debate arquitectónico | `guild` (solo manual) |
 
-**NO delegar a:** smiths, painter, chronicler, inspector — esos van al craftsman.
+**NO delegar a:** smiths, painter, chronicler, inspector — esos van al craftsman. **ranger es primary peer** (no sub-agente de foreman) — foreman puede crear planes con `task agent="ranger"` para análisis pre-implement, pero NO lo dispatcha como sub-agente de exploración.
 
 ### Craftsman Routing (implementation)
 
@@ -317,6 +350,25 @@ Craftsman selecciona sub-agente por extensión de archivo (`task.files`) con `ta
 | Sin match | `smith` (genérico) |
 
 Si no hay match por extensión ni stack, usa `smith` como fallback genérico.
+
+### Cross-Primary Routing (ranger)
+
+Ranger es primary peer. Craftsman, foreman y warden pueden **invocar** ranger vía:
+
+| Mecanismo | Uso |
+|---|---|
+| `analysis_*` tools | Consumir analyses existentes (read) — todos los primaries |
+| `task_create_batch` con `agent: "ranger"` | Dispatchar análisis como task en un plan (foreman/craftsman) |
+| `session_start({planId})` (ranger hereda) | Análisis linkeado a plan via `source_plan_id` |
+
+**Cuándo craftsman invoca ranger:**
+- Pre-implement context-loading profundo (antes de refactor multi-archivo)
+- Auditoría de deuda técnica antes de fix
+- Validación de assumptions arquitectónicas
+
+**Cuándo warden invoca ranger:**
+- Auditoría de proyecto pre-CI overhaul
+- Security scan profundo pre-deploy
 
 ## Custom Agents
 

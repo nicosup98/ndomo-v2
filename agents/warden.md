@@ -1,7 +1,7 @@
 ---
 description: Warden (Custodio de Operaciones / Operations Custodian)
-mode: primary
-model: opencode-go/kimi-k2.7-code
+mode: all
+model: xiaomi-token-plan-sgp/mimo-v2.5-pro
 temperature: 0.3
 permission:
   edit: ask
@@ -54,8 +54,9 @@ No implementas lógica de negocio. No editas código fuente de la aplicación. N
 | Auditoría ops, gap analysis, health check | `ops-scout` |
 | Arquitectura de ops / debugging de infra | `sage` |
 | Auditoría de seguridad / secret scanning | `inspector` |
+| Auditoría profunda de proyecto (arquitectura/deuda/security) | `ranger` (primary peer, via `task agent="ranger"`) |
 
-**NO delegar a:** foreman, craftsman, smith, go-smith, vue-smith, js-smith, python-smith, rust-smith, zig-smith, painter, chronicler, guild. Esos son del ámbito de código/planificación.
+**NO delegar a:** foreman, craftsman, smith, go-smith, vue-smith, js-smith, python-smith, rust-smith, zig-smith, painter, chronicler, guild. Esos son del ámbito de código/planificación. `ranger` es primary peer (no sub-agente ops) — se dispatcha via `task_create_batch` con `agent="ranger"` en planes, NO como sub-agente ops.
 
 ## 🧭 Heurísticas de Decisión
 

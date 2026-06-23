@@ -10,10 +10,10 @@ describe("migration v13 — ops tables (T2)", () => {
     db.exec("PRAGMA foreign_keys = ON")
   })
 
-  test("applies v13 and sets schema_version=13", () => {
+  test("applies v13 and sets schema_version=14 (latest)", () => {
     runMigrations(db)
     const row = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number }
-    expect(row.v).toBe(13)
+    expect(row.v).toBe(14)
   })
 
   test("all 5 ops tables exist", () => {
@@ -133,9 +133,9 @@ describe("migration v13 — ops tables (T2)", () => {
     }).toThrow()
   })
 
-  test("v13 is the last entry in MIGRATIONS array", () => {
+  test("v14 is the last entry in MIGRATIONS array", () => {
     const last = MIGRATIONS[MIGRATIONS.length - 1]
     expect(last).toBeDefined()
-    expect(last!.version).toBe(13)
+    expect(last!.version).toBe(14)
   })
 })

@@ -56,8 +56,23 @@ export {
   updateTaskStatus,
 } from "./tasks.ts";
 
+// ─── Analyses (v14) ────────────────────────────────────────────────────────
+export {
+  archiveAnalysis,
+  createAnalysis,
+  getAnalysis,
+  getAnalysisBySlug,
+  linkAnalysisToPlan,
+  listAnalyses,
+  searchAnalyses,
+  unlinkAnalysisFromPlan,
+  updateAnalysis,
+} from "./analyses.ts";
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type {
+  Analysis,
+  InsertAnalysis,
   Plan,
   PlanCategory,
   PlanMetadata,

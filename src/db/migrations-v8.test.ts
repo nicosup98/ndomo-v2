@@ -241,12 +241,12 @@ describe("v8: executed_by_agent/session", () => {
 // ─── Critical 2: v9 migration — plan_progress excludes archived ─────────────
 
 describe("v9: plan_progress view fix", () => {
-  test("DB with schema_version=5 → runMigrations → schema_version=13", () => {
-    // Fresh DB already runs all migrations up to v13
+  test("DB with schema_version=5 → runMigrations → schema_version=14", () => {
+    // Fresh DB already runs all migrations up to v14
     const row = db.query("SELECT MAX(version) as version FROM schema_version").get() as {
       version: number;
     };
-    expect(row.version).toBe(13);
+    expect(row.version).toBe(14);
   });
 
   test("plan_progress excludes archived plans", () => {
