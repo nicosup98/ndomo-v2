@@ -82,6 +82,69 @@ function extractFilePath(args: unknown): string | undefined {
   return typeof fp === "string" ? fp : undefined;
 }
 
+/**
+ * File lock registry for write/edit tools — replaces the raw `Map<string, string>`
+ * that previously held activeWrites. Each entry is stamped with the time it was
+ * acquired so a TTL sweep can recover from SDK hook-chain breaks where
+ * `tool.execute.after` never fires (regression: leaked write locks blocked
+ * subsequent writes indefinitely).
+ *
+ * Public API:
+ *  - acquire(fp, key): null if can lock, or the existing holder's key.
+ *  - release(fp, key): drop the lock IF caller is the holder (else no-op).
+ *  - forceRelease(fp): admin override — drops the lock regardless of holder.
+ *  - sweep(): prune entries older than ttlMs. Returns count removed.
+ *
+ * `acquire` auto-sweeps before checking so a stale lock never blocks a fresh
+ * caller — covers the "SDK never fired after-hook" scenario.
+ */
+export class FileLock {
+  private map = new Map<string, { key: string; setAt: number }>();
+
+  constructor(private readonly ttlMs: number) {}
+
+  acquire(filepath: string, key: string): string | null {
+    this.sweep();
+    const existing = this.map.get(filepath);
+    if (existing != null && existing.key !== key) return existing.key;
+    this.map.set(filepath, { key, setAt: Date.now() });
+    return null;
+  }
+
+  release(filepath: string, key: string): void {
+    const existing = this.map.get(filepath);
+    if (existing?.key === key) this.map.delete(filepath);
+  }
+
+  forceRelease(filepath: string): boolean {
+    return this.map.delete(filepath);
+  }
+
+  sweep(): number {
+    const cutoff = Date.now() - this.ttlMs;
+    let swept = 0;
+    for (const [fp, entry] of this.map) {
+      if (entry.setAt < cutoff) {
+        this.map.delete(fp);
+        swept++;
+      }
+    }
+    return swept;
+  }
+
+  has(filepath: string): boolean {
+    return this.map.has(filepath);
+  }
+
+  size(): number {
+    return this.map.size;
+  }
+
+  keys(): string[] {
+    return Array.from(this.map.keys());
+  }
+}
+
 // ─── Escalation helper (M2) ──────────────────────────────────────────────────
 
 /**
@@ -230,6 +293,14 @@ export type NdomoConfig = {
       currentPhase?: boolean;
       blockers?: boolean;
     };
+  };
+  backgroundRetention?: {
+    softCap?: number;
+    maxAgeMs?: number;
+  };
+  fileLock?: {
+    /** TTL for write/edit locks in ms. Stale entries auto-release via sweep. */
+    ttlMs?: number;
   };
 };
 
@@ -393,8 +464,31 @@ export const NdomoPlugin: Plugin = async (
   registerShutdownHandlers(db);
   const dispatcher = new BackgroundDispatcher(db);
 
+  // Background task retention — auto-finalize terminal tasks when row count
+  // exceeds soft cap. Defaults: soft cap 1000 rows, max age 24h. Prevents
+  // unbounded growth of background_tasks on long-running installs (audit
+  // finding fcb12dc5 #1).
+  const retentionSoftCap = ndomoConfig?.backgroundRetention?.softCap ?? 1000;
+  const retentionMaxAgeMs = ndomoConfig?.backgroundRetention?.maxAgeMs ?? 24 * 60 * 60 * 1000;
+  const totalRows =
+    dispatcher.stats().pending +
+    dispatcher.stats().running +
+    dispatcher.stats().completed +
+    dispatcher.stats().failed +
+    dispatcher.stats().cancelled;
+  if (totalRows > retentionSoftCap) {
+    const deleted = dispatcher.finalize(retentionMaxAgeMs);
+    if (deleted > 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[ndomo] background retention: pruned ${deleted} terminal tasks older than ${retentionMaxAgeMs}ms (rows were ${totalRows} > soft cap ${retentionSoftCap})`,
+      );
+    }
+  }
+
   /** filepath → `${sessionID}:${callID}` of the task that locked it. */
-  const activeWrites = new Map<string, string>();
+  const fileLockTtlMs = ndomoConfig?.fileLock?.ttlMs ?? 60_000;
+  const activeWrites = new FileLock(fileLockTtlMs);
 
   // Auto-checkpoint dispatcher (T3.3)
   const autoCheckpoint = new AutoCheckpointDispatcher(db, ndomoConfig?.autoCheckpoint);
@@ -404,8 +498,15 @@ export const NdomoPlugin: Plugin = async (
   const hooks: Hooks = {
     // (a) Inject orchestrator state into session compaction context
     "experimental.session.compacting": async (input, output) => {
+      // Sweep stale write locks before snapshotting state — surfaces the
+      // true current lock count after any prior SDK hook-miss leaks.
+      const swept = activeWrites.sweep();
       const count = dispatcher.getActive().length;
-      const paths = Array.from(activeWrites.keys()).join(", ");
+      const paths = activeWrites.keys().join(", ");
+      if (swept > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[ndomo] file-lock: swept ${swept} stale entries during compaction`);
+      }
       output.context.push(
         [
           "",
@@ -469,20 +570,26 @@ export const NdomoPlugin: Plugin = async (
       if (!filepath) return;
 
       const key = `${input.sessionID}:${input.callID}`;
-      const existing = activeWrites.get(filepath);
-      if (existing != null && existing !== key) {
-        throw new Error(`ndomo: file locked by active task ${existing}`);
+      const blockedBy = activeWrites.acquire(filepath, key);
+      if (blockedBy != null) {
+        throw new Error(`ndomo: file locked by active task ${blockedBy}`);
       }
-      activeWrites.set(filepath, key);
     },
 
-    // (c) Remove filepath from activeWrites after tool completes
+    // (c) Remove filepath from activeWrites after tool completes — wrapped in
+    //     try/finally so the lock releases even if downstream hook logic throws
+    //     or the SDK aborts the chain mid-way (regression: lock leaks blocked
+    //     subsequent writes indefinitely).
     "tool.execute.after": async (input) => {
-      if (input.tool !== "write" && input.tool !== "edit") return;
-
-      const filepath = extractFilePath(input.args);
-      if (filepath) {
-        activeWrites.delete(filepath);
+      try {
+        // (future) post-write hooks (audit, git staging) go here
+      } finally {
+        if (input.tool !== "write" && input.tool !== "edit") return;
+        const filepath = extractFilePath(input.args);
+        if (filepath) {
+          const key = `${input.sessionID}:${input.callID}`;
+          activeWrites.release(filepath, key);
+        }
       }
     },
 
@@ -684,6 +791,22 @@ export const NdomoPlugin: Plugin = async (
       }),
 
       // ── Health ─────────────────────────────────────────────────────────
+
+      ndomo_write_unlock: tool({
+        description:
+          "Admin: force-release a write/edit lock on a filepath. Use when a prior tool execution crashed or its SDK hook chain broke before `tool.execute.after` fired, leaving a stale lock. TTL sweep also handles this automatically — this tool is for manual recovery.",
+        args: {
+          filepath: tool.schema.string(),
+        },
+        execute: async (args) => {
+          const released = activeWrites.forceRelease(args.filepath);
+          return JSON.stringify({
+            filepath: args.filepath,
+            released,
+            activeWritesRemaining: activeWrites.size,
+          });
+        },
+      }),
 
       status: tool({
         description: "Plugin health check — returns ndomo state summary.",
