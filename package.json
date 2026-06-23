@@ -30,6 +30,8 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "1.17.7",
+    "elysia": "^1.4.29",
     "opencode-mem": "^2.17.1"
   },
   "peerDependencies": {
