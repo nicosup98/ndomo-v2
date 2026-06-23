@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- DB hygiene: enable WAL journal mode, NORMAL synchronous, INCREMENTAL
+  auto_vacuum to prevent unbounded `.ndomo/state.db` growth on long-running
+  installs. Sticky one-time migration per DB on first open after upgrade.
+  New `ndomo vacuum` CLI subcommand (or `bun run src/cli/vacuum.ts`) for
+  manual space reclaim via `PRAGMA incremental_vacuum` + `wal_checkpoint(TRUNCATE)`.
+  WAL sidecars (`*.db-wal`, `*.db-shm`) added to `.gitignore`.
+- Shutdown cleanup: `src/db/shutdown.ts` now tracks every `openDb()` call in
+  a `Set<Database>` so each connection gets `SIGTERM`/`SIGINT`/`beforeExit`
+  cleanup. Replaces the module-level `registered` boolean that silently
+  skipped every call after the first (leaked file handles on hot-reload,
+  CLI tools alongside plugin, smoke tests).
+- Background task retention: `BackgroundDispatcher.finalize(maxAgeMs)` prunes
+  terminal tasks (completed/failed/cancelled) older than the threshold; auto-
+  called from plugin init when row count exceeds `backgroundRetention.softCap`
+  (default 1000). Stops unbounded growth of `background_tasks` on long-running
+  installs.
+- Write-tool lock leaks: replaced raw `Map<string, string>` for active writes
+  with a `FileLock` class that stamps each entry with `setAt` and prunes stale
+  locks via TTL sweep. SDK hook-chain breaks (where `tool.execute.after` never
+  fires) no longer block subsequent writes indefinitely. Admin tool
+  `ndomo_write_unlock` exposed for manual recovery.
+
 ## [0.1.0] - 2026-06-20
 
 ### Added
