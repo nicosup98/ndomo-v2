@@ -10,6 +10,7 @@
  *   serve     Start the HTTP server
  *   vacuum    Reclaim disk space from .ndomo/state.db
  *   smoke     Run smoke tests
+ *   install   Install agents, skills, and config into ~/.config/opencode/
  *   help      Show this help
  *
  * Each subcommand can also be run directly:
@@ -54,6 +55,13 @@ const COMMANDS: Record<
     run: async () => {
       // smoke.ts runs on import — just import it
       await import("./smoke.ts");
+    },
+  },
+  install: {
+    description: "Install agents, skills, and config into ~/.config/opencode/",
+    run: async (args) => {
+      const { runInstall } = await import("./install.ts");
+      await runInstall(args);
     },
   },
 };
