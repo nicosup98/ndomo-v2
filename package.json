@@ -38,7 +38,10 @@
     "dev:reset": "bash scripts/dev-bust-cache.sh --apply --kill",
     "status:plans": "bun run src/cli/status.ts --plans",
     "clean": "rm -rf dist .slim/worktrees",
-    "prepare": "husky"
+    "prepare": "husky",
+    "web:dev": "vite --config web/vite.config.ts",
+    "web:build": "vite build --config web/vite.config.ts",
+    "web:typecheck": "vue-tsc --noEmit -p web/tsconfig.json"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.17.7",
@@ -58,8 +61,14 @@
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
     "@types/bun": "latest",
+    "@vitejs/plugin-vue": "^5.1.0",
+    "@vueuse/core": "^11.0.0",
     "husky": "^9.0.0",
-    "typescript": "^6.0.0"
+    "typescript": "^6.0.0",
+    "vite": "^6.0.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0",
+    "vue-tsc": "^2.1.0"
   },
   "keywords": [
     "opencode",
