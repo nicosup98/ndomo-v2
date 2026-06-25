@@ -34,6 +34,30 @@ const die = (msg: string): never => {
   process.exit(1);
 };
 
+/** Stream a child process, returning stdout/stderr. On non-zero exit, die() with truncated output. */
+async function streamSpawn(
+  cmd: string[],
+  opts: { cwd?: string; label?: string; nothrow?: boolean } = {},
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const spawnOpts: { cwd?: string; stdout: "pipe"; stderr: "pipe" } = {
+    stdout: "pipe",
+    stderr: "pipe",
+  };
+  if (opts.cwd !== undefined) spawnOpts.cwd = opts.cwd;
+  const proc = Bun.spawn(cmd, spawnOpts);
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (exitCode !== 0 && !opts.nothrow) {
+    const truncate = (s: string) => (s.length > 1024 ? s.slice(0, 1024) + "\n... [truncated]" : s);
+    const label = opts.label ?? cmd.join(" ");
+    die(`${label} failed (exit ${exitCode})\nstderr:\n${truncate(stderr)}\nstdout:\n${truncate(stdout)}`);
+  }
+  return { exitCode, stdout, stderr };
+}
+
 // ─── Path traversal protection ────────────────────────────────────────────────
 const SAFE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -181,59 +205,23 @@ export async function stepInstallDeps(projectRoot: string, dryRun: boolean): Pro
     info("[dry-run] would run: bun install --frozen-lockfile");
     return;
   }
-  const proc = Bun.spawn(["bun", "install", "--frozen-lockfile"], {
+  const frozen = await streamSpawn(["bun", "install", "--frozen-lockfile"], {
     cwd: projectRoot,
-    stdout: "pipe",
-    stderr: "pipe",
+    label: "bun install --frozen-lockfile",
+    nothrow: true,
   });
-  await proc.exited;
-  if (proc.exitCode !== 0) {
+  if (frozen.exitCode !== 0) {
     // Fallback to non-frozen
     warn("frozen lockfile failed, retrying without --frozen-lockfile...");
-    const proc2 = Bun.spawn(["bun", "install"], {
+    await streamSpawn(["bun", "install"], {
       cwd: projectRoot,
-      stdout: "pipe",
-      stderr: "pipe",
+      label: "bun install",
     });
-    await proc2.exited;
-    if (proc2.exitCode !== 0) {
-      die("bun install failed");
-    }
   }
   ok("Dependencies installed");
 }
 
-/** Step 2: Build TypeScript. */
-export async function stepBuild(projectRoot: string, dryRun: boolean): Promise<void> {
-  info("Building TypeScript...");
-  if (dryRun) {
-    info("[dry-run] would run: bun run build (or tsc)");
-    return;
-  }
-  // Check for build script in package.json
-  const pkgPath = join(projectRoot, "package.json");
-  let hasBuild = false;
-  try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-    hasBuild = typeof pkg.scripts?.build === "string";
-  } catch {
-    // no package.json — try tsc
-  }
-
-  const cmd = hasBuild ? ["bun", "run", "build"] : ["bun", "run", "--bun", "tsc"];
-  const proc = Bun.spawn(cmd, {
-    cwd: projectRoot,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  await proc.exited;
-  if (proc.exitCode !== 0) {
-    die(`Build failed (exit ${proc.exitCode})`);
-  }
-  ok("Build complete");
-}
-
-/** Step 3+4: Copy agents with timestamped backup. */
+/** Step 2: Copy agents with timestamped backup. */
 export function stepCopyAgents(
   projectRoot: string,
   configDir: string,
@@ -289,7 +277,7 @@ export function stepCopyAgents(
   return copied;
 }
 
-/** Step 5: Copy skills with timestamped backup. */
+/** Step 3: Copy skills with timestamped backup. */
 export function stepCopySkills(
   projectRoot: string,
   configDir: string,
@@ -522,7 +510,7 @@ export function applyProviderPrefix(
   return updated;
 }
 
-/** Step 5.5: Apply preset + optional provider prefix override. */
+/** Step 3.5: Apply preset + optional provider prefix override. */
 export function stepApplyPreset(
   configDir: string,
   configJson: NdomoConfig,
@@ -583,7 +571,7 @@ export function stepApplyPreset(
   }
 }
 
-// ─── Step 6: Copy config files ───────────────────────────────────────────────
+// ─── Step 4: Copy config files ───────────────────────────────────────────────
 export function stepCopyConfig(
   projectRoot: string,
   configDir: string,
@@ -632,7 +620,7 @@ export function stepCopyConfig(
   }
 }
 
-// ─── Step 6.5: Register plugins in opencode.json ─────────────────────────────
+// ─── Step 4.5: Register plugins in opencode.json ─────────────────────────────
 export function stepRegisterPlugins(
   configDir: string,
   configJson: NdomoConfig,
@@ -694,7 +682,7 @@ export function stepRegisterPlugins(
   ok(`Registered ${allPlugins.length} ndomo plugin(s) in opencode.json`);
 }
 
-// ─── Step 6.6: Install ndomo package (3 strategies) ──────────────────────────
+// ─── Step 4.6: Install ndomo package (3 strategies) ──────────────────────────
 
 function isSymlink(p: string): boolean {
   try {
@@ -732,14 +720,13 @@ async function strategyFileDep(
     writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
 
     // Run bun install
-    const proc = Bun.spawn(["bun", "install", "--no-frozen-lockfile"], {
+    const result = await streamSpawn(["bun", "install", "--no-frozen-lockfile"], {
       cwd: configDir,
-      stdout: "pipe",
-      stderr: "pipe",
+      label: "bun install (file: dep)",
+      nothrow: true,
     });
-    await proc.exited;
 
-    if (proc.exitCode === 0 && existsSync(nmNdomo) && !isSymlink(nmNdomo)) {
+    if (result.exitCode === 0 && existsSync(nmNdomo) && !isSymlink(nmNdomo)) {
       ok("ndomo installed via bun (file: dep) — real copy, no symlink");
       return true;
     }
@@ -759,28 +746,26 @@ async function strategyBunLink(projectRoot: string, configDir: string): Promise<
 
   try {
     // bun link in project root (registers package)
-    const proc1 = Bun.spawn(["bun", "link"], {
+    const linkResult = await streamSpawn(["bun", "link"], {
       cwd: projectRoot,
-      stdout: "pipe",
-      stderr: "pipe",
+      label: "bun link",
+      nothrow: true,
     });
-    await proc1.exited;
 
-    if (proc1.exitCode !== 0) {
+    if (linkResult.exitCode !== 0) {
       warn("bun link in project root failed");
       return false;
     }
 
     // bun link ndomo in config dir (links package)
-    const proc2 = Bun.spawn(["bun", "link", "ndomo"], {
+    const linkNdomo = await streamSpawn(["bun", "link", "ndomo"], {
       cwd: configDir,
-      stdout: "pipe",
-      stderr: "pipe",
+      label: "bun link ndomo",
+      nothrow: true,
     });
-    await proc2.exited;
 
     const nmNdomo = join(configDir, "node_modules", "ndomo");
-    if (proc2.exitCode === 0 && existsSync(nmNdomo)) {
+    if (linkNdomo.exitCode === 0 && existsSync(nmNdomo)) {
       ok("ndomo linked via bun link (managed symlink)");
       warn("bun link uses symlinks — run 'bun run dev:bust' if cache goes stale");
       return true;
@@ -867,7 +852,7 @@ export async function stepInstallPackage(
   }
 }
 
-// ─── Step 6.7: Copy custom tools ─────────────────────────────────────────────
+// ─── Step 4.7: Copy custom tools ─────────────────────────────────────────────
 // npm distribution: tools live inside the installed ndomo package, so symlink
 // dance (used in old repo-based install) is obsolete. Copy .ts files directly.
 export function stepCopyTools(
@@ -924,7 +909,7 @@ export function stepCopyTools(
   return copied;
 }
 
-// ─── Step 7: Inject preset name into ndomo.json ──────────────────────────────
+// ─── Step 5: Inject preset name into ndomo.json ──────────────────────────────
 export function stepInjectPreset(configDir: string, preset: string, dryRun: boolean): void {
   const ndomoJsonPath = join(configDir, "ndomo.json");
 
@@ -947,7 +932,7 @@ export function stepInjectPreset(configDir: string, preset: string, dryRun: bool
   }
 }
 
-// ─── Step 8: Optional DCP install ────────────────────────────────────────────
+// ─── Step 6: Optional DCP install ────────────────────────────────────────────
 export async function stepInstallDcp(dryRun: boolean): Promise<void> {
   info("Installing @tarquinen/opencode-dcp (AGPL-3.0)...");
   if (dryRun) {
@@ -955,12 +940,11 @@ export async function stepInstallDcp(dryRun: boolean): Promise<void> {
     return;
   }
 
-  const proc = Bun.spawn(["opencode", "plugin", "@tarquinen/opencode-dcp", "--global"], {
-    stdout: "pipe",
-    stderr: "pipe",
+  const result = await streamSpawn(["opencode", "plugin", "@tarquinen/opencode-dcp", "--global"], {
+    label: "opencode plugin dcp",
+    nothrow: true,
   });
-  await proc.exited;
-  if (proc.exitCode === 0) {
+  if (result.exitCode === 0) {
     ok("DCP plugin installed");
   } else {
     warn("DCP plugin install failed (non-fatal)");
@@ -1231,24 +1215,21 @@ export async function runInstall(args: string[]): Promise<void> {
     info("Skipping dependency installation (--skip-deps)");
   }
 
-  // Step 2: Build
-  await stepBuild(projectRoot, flags.dryRun);
-
-  // Step 3+4: Copy agents
+  // Step 2: Copy agents
   mkdirSync(join(configDir, "agent"), { recursive: true });
   mkdirSync(join(configDir, "skills"), { recursive: true });
   stepCopyAgents(projectRoot, configDir, backupDir, flags.dryRun);
 
-  // Step 5: Copy skills
+  // Step 3: Copy skills
   stepCopySkills(projectRoot, configDir, backupDir, flags.dryRun);
 
-  // Step 5.5: Apply preset
+  // Step 3.5: Apply preset
   stepApplyPreset(configDir, configJson, flags.preset, flags.provider, flags.dryRun);
 
-  // Step 6: Copy config
+  // Step 4: Copy config
   stepCopyConfig(projectRoot, configDir, backupDir, flags.dryRun);
 
-  // Step 6.5: Register plugins
+  // Step 4.5: Register plugins
   // Reload config from configDir (just copied)
   let installedConfig: NdomoConfig = {};
   const ndomoJsonPath = join(configDir, "ndomo.json");
@@ -1260,16 +1241,16 @@ export async function runInstall(args: string[]): Promise<void> {
   }
   stepRegisterPlugins(configDir, installedConfig, backupDir, flags.dryRun);
 
-  // Step 6.6: Install package
+  // Step 4.6: Install package
   await stepInstallPackage(projectRoot, configDir, flags.dryRun);
 
-  // Step 6.7: Copy tools (npm distribution — no symlink)
+  // Step 4.7: Copy tools (npm distribution — no symlink)
   stepCopyTools(projectRoot, configDir, flags.dryRun);
 
-  // Step 7: Inject preset
+  // Step 5: Inject preset
   stepInjectPreset(configDir, flags.preset, flags.dryRun);
 
-  // Step 8: Optional DCP
+  // Step 6: Optional DCP
   if (flags.withDcp) {
     await stepInstallDcp(flags.dryRun);
   }
