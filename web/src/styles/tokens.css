@@ -1,0 +1,77 @@
+:root {
+  /* backgrounds */
+  --bg-base: #0d0f12;
+  --bg-surface: #161a20;
+  --bg-elevated: #1c2128;
+  --bg-overlay: #232830;
+
+  /* borders */
+  --border-subtle: #2a2f37;
+  --border-strong: #3a414b;
+  --border-focus: #4a525e;
+
+  /* text */
+  --text-primary: #e6e6e6;
+  --text-secondary: #b0b8c2;
+  --text-muted: #8b95a3;
+  --text-disabled: #5a6470;
+
+  /* status accents (used ONLY for status badges, not chrome) */
+  --status-pending: #8b95a3;
+  --status-running: #5eb3ff;
+  --status-done: #6ee7b7;
+  --status-failed: #ef4444;
+  --status-blocked: #f59e0b;
+  --status-draft: #6b7280;
+  --status-approved: #a78bfa;
+  --status-executing: #5eb3ff;
+  --status-completed: #6ee7b7;
+  --status-abandoned: #5a6470;
+
+  /* typography */
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-xxl: 28px;
+
+  --lh-tight: 1.25;
+  --lh-base: 1.5;
+  --lh-relaxed: 1.7;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* radii (small — dense UI) */
+  --r-sm: 2px;
+  --r-md: 4px;
+  --r-lg: 6px;
+  --r-pill: 999px;
+
+  /* transitions */
+  --t-fast: 80ms ease-out;
+  --t-base: 150ms ease-out;
+  --t-slow: 240ms ease-out;
+
+  /* layout */
+  --sidebar-w: 200px;
+  --header-h: 44px;
+  --content-max-w: 1200px;
+}
