@@ -134,6 +134,36 @@
         "model": "opencode-go/kimi-k2.7-code",
         "temperature": 0.2,
         "reasoning_effort": "high"
+      },
+      "craftsman": {
+        "model": "minimax/MiniMax-M3",
+        "temperature": 0.3,
+        "reasoning_effort": "high"
+      },
+      "warden": {
+        "model": "minimax/MiniMax-M3",
+        "temperature": 0.3,
+        "reasoning_effort": "high"
+      },
+      "ci-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "deploy-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "release-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "ops-scout": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "medium"
       }
     },
     "budget": {
@@ -213,6 +243,36 @@
         "reasoning_effort": "low"
       },
       "inspector": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.2,
+        "reasoning_effort": "low"
+      },
+      "craftsman": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
+        "reasoning_effort": "low"
+      },
+      "warden": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.3,
+        "reasoning_effort": "low"
+      },
+      "ci-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "deploy-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "release-smith": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
+      "ops-scout": {
         "model": "opencode-go/deepseek-v4-flash",
         "temperature": 0.2,
         "reasoning_effort": "low"

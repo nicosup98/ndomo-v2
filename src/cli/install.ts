@@ -342,125 +342,60 @@ export function stepCopySkills(
 // ─── Preset application ──────────────────────────────────────────────────────
 
 /**
- * Parse YAML frontmatter from an agent .md file.
- * Returns { frontmatter: Record<string, string>, body: string, raw: string }.
- * Frontmatter is between the first two '---' lines.
- */
-export function parseFrontmatter(content: string): {
-  frontmatter: Record<string, string>;
-  body: string;
-  startIdx: number;
-  endIdx: number;
-} {
-  const lines = content.split("\n");
-  let startIdx = -1;
-  let endIdx = -1;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line !== undefined && line.trim() === "---") {
-      if (startIdx === -1) {
-        startIdx = i;
-      } else {
-        endIdx = i;
-        break;
-      }
-    }
-  }
-
-  if (startIdx === -1 || endIdx === -1) {
-    return { frontmatter: {}, body: content, startIdx: -1, endIdx: -1 };
-  }
-
-  const fm: Record<string, string> = {};
-  for (let i = startIdx + 1; i < endIdx; i++) {
-    const line = lines[i];
-    if (line === undefined) continue;
-    const colonIdx = line.indexOf(":");
-    if (colonIdx > 0) {
-      const key = line.slice(0, colonIdx).trim();
-      const value = line.slice(colonIdx + 1).trim();
-      fm[key] = value;
-    }
-  }
-
-  const body = lines.slice(endIdx + 1).join("\n");
-  return { frontmatter: fm, body, startIdx, endIdx };
-}
-
-/**
- * Serialize frontmatter + body back to a string.
- */
-export function serializeFrontmatter(frontmatter: Record<string, string>, body: string): string {
-  const fmLines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`);
-  return `---\n${fmLines.join("\n")}\n---\n${body}`;
-}
-
-/**
- * Apply preset values to an agent .md file's frontmatter.
- * Handles reasoningEffort 3-tier insert fallback:
- *   1. Update existing reasoningEffort line
- *   2. Insert after temperature (if present)
- *   3. Insert after model (if present)
- *   4. Insert after opening ---
+ * Apply preset values to an agent .md file's frontmatter using regex-targeted
+ * line replacement. Preserves YAML structure 100% (including nested permission
+ * blocks) by only touching top-level (0-indent) key lines.
  */
 export function applyPresetToFile(
   filePath: string,
   preset: PresetEntry,
   dryRun: boolean,
 ): "updated" | "skipped" {
-  const content = readFileSync(filePath, "utf-8");
-  const { frontmatter, body, startIdx, endIdx } = parseFrontmatter(content);
+  let content = readFileSync(filePath, "utf-8");
 
-  if (startIdx === -1 || endIdx === -1) {
+  // Find frontmatter bounds (first --- block at file start)
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!fmMatch || !fmMatch[1] || !fmMatch[2]) {
     warn(`No frontmatter found in ${basename(filePath)}, skipping`);
     return "skipped";
   }
-
+  const fmBody = fmMatch[1];
+  const body = fmMatch[2];
+  let newFmBody = fmBody;
   let changed = false;
 
-  // Apply model
-  if (preset.model) {
-    frontmatter["model"] = preset.model;
-    changed = true;
-  }
+  // Update or insert each preset field at top-level (0 indent)
+  const fields: Array<{ yamlName: string; value: string | undefined }> = [
+    { yamlName: "model", value: preset.model },
+    { yamlName: "temperature", value: preset.temperature !== undefined ? String(preset.temperature) : undefined },
+    { yamlName: "reasoningEffort", value: preset.reasoning_effort },
+  ];
 
-  // Apply temperature
-  if (preset.temperature !== undefined) {
-    frontmatter["temperature"] = String(preset.temperature);
-    changed = true;
-  }
-
-  // Apply reasoningEffort (snake_case → camelCase)
-  if (preset.reasoning_effort) {
-    frontmatter["reasoningEffort"] = preset.reasoning_effort;
-    changed = true;
+  for (const field of fields) {
+    if (field.value === undefined) continue;
+    // Match line at start-of-line (no indent), so we don't touch nested keys
+    const lineRegex = new RegExp(`^${field.yamlName}:.*$`, "m");
+    if (lineRegex.test(newFmBody)) {
+      newFmBody = newFmBody.replace(lineRegex, `${field.yamlName}: ${field.value}`);
+      changed = true;
+    } else {
+      // Append at end of frontmatter (top-level, 0 indent)
+      const sep = newFmBody.endsWith("\n") ? "" : "\n";
+      newFmBody = newFmBody + sep + `${field.yamlName}: ${field.value}\n`;
+      changed = true;
+    }
   }
 
   if (!changed) {
     return "skipped";
   }
 
-  // Serialize back preserving order: model, temperature, reasoningEffort, then others
-  const ordered: Record<string, string> = {};
-  const priority = ["model", "temperature", "reasoningEffort"];
-  for (const key of priority) {
-    if (frontmatter[key] !== undefined) {
-      ordered[key] = frontmatter[key];
-    }
-  }
-  for (const [key, value] of Object.entries(frontmatter)) {
-    if (!(key in ordered)) {
-      ordered[key] = value;
-    }
-  }
-
+  const newContent = `---\n${newFmBody}---\n${body}`;
   if (dryRun) {
-    info(`[dry-run] would update ${basename(filePath)}: model=${preset.model ?? "(keep)"}, temp=${preset.temperature ?? "(keep)"}, effort=${preset.reasoning_effort ?? "(keep)"}`);
+    info(`[dry-run] would update ${basename(filePath)}`);
   } else {
-    writeFileSync(filePath, serializeFrontmatter(ordered, body));
+    writeFileSync(filePath, newContent);
   }
-
   return "updated";
 }
 
@@ -1000,6 +935,10 @@ export function writeHttpBlock(projectRoot: string, httpConfig: HttpConfig, dryR
  * Returns true if user accepts, false otherwise.
  */
 export async function promptHttpEnable(): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    info("Non-TTY stdin — skipping HTTP prompt (use --enable-http to enable)");
+    return false;
+  }
   console.log("");
   console.log("[?] Enable ndomo HTTP server? Allows programmatic plan/task control via API.");
   console.log("    Recommended for users integrating ndomo with other tools (port 4097, auth required).");

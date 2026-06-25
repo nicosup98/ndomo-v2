@@ -25,6 +25,7 @@ import {
   writeHttpBlock,
   applyPresetToFile,
   applyProviderPrefix,
+  promptHttpEnable,
   stepRegisterPlugins,
   stepCopyAgents,
   stepCopySkills,
@@ -729,5 +730,59 @@ describe("stepCopyTools", () => {
     // projectRoot has no tools/ (default setup in beforeEach)
     const copied = stepCopyTools(projectRoot, configDir, false);
     expect(copied).toBe(0);
+  });
+});
+
+// ─── Regex-based preset preserves nested YAML ──────────────────────────────
+
+describe("applyPresetToFile — nested permission preservation", () => {
+  test("preserves nested permission structure byte-for-byte", () => {
+    const testFile = join(tmpDir, "test-agent.md");
+    const original = `---
+description: Test Agent
+mode: subagent
+model: old/model
+temperature: 0.5
+permission:
+  edit: allow
+  write: ask
+  bash:
+    "*": ask
+    "ls *": allow
+---
+body content here
+`;
+    writeFileSync(testFile, original);
+    const result = applyPresetToFile(
+      testFile,
+      { model: "new/model", temperature: 0.3 } as PresetEntry,
+      false,
+    );
+    expect(result).toBe("updated");
+    const updated = readFileSync(testFile, "utf-8");
+    expect(updated).toContain("model: new/model");
+    expect(updated).toContain("temperature: 0.3");
+    // CRITICAL: permission block intact byte-for-byte
+    expect(updated).toContain("permission:");
+    expect(updated).toContain("  edit: allow");
+    expect(updated).toContain("  write: ask");
+    expect(updated).toContain("  bash:");
+    expect(updated).toContain('    "*": ask');
+    expect(updated).toContain('    "ls *": allow');
+  });
+});
+
+// ─── Non-TTY promptHttpEnable ──────────────────────────────────────────────
+
+describe("promptHttpEnable — non-TTY fallback", () => {
+  test("returns false immediately when stdin not TTY", async () => {
+    const originalIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    try {
+      const result = await promptHttpEnable();
+      expect(result).toBe(false);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+    }
   });
 });
