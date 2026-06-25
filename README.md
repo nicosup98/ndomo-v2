@@ -158,6 +158,20 @@ ndomo bundles 7 skills under `skills/`:
 
 See [docs/integrations.md](docs/integrations.md) for details.
 
+## Optional HTTP server
+
+Expose ndomo's SQLite state and OpenCode SDK event stream over HTTP+SSE via an embedded Elysia server. Phase 1 ships read-only REST endpoints (`/api/plans`, `/api/tasks`, `/api/sessions`) and a live SSE relay (`/api/events`).
+
+```bash
+export NDOMO_HTTP_ENABLED=true
+export OPENCODE_SERVER_PASSWORD='pick-a-strong-passphrase'
+bun run src/cli/serve.ts                       # binds 4097 by default
+```
+
+- **Default:** disabled (`NDOMO_HTTP_ENABLED=false`).
+- **Auth:** HTTP Basic via `OPENCODE_SERVER_PASSWORD` (timing-safe compare). `503 auth_not_configured` if password unset when required.
+- **Endpoints:** `GET /health` (public) + `/api/{plans,tasks,sessions,events}` (auth). See [docs/http-server.md](docs/http-server.md) for full API reference, CLI flags, CORS, security headers, and troubleshooting.
+
 ## Token Savings
 
 The Caveman output protocol reduces token usage by ~60-75% vs standard prose by stripping articles, filler words, conjunctions, and pleasantries while preserving all technical content. The DCP plugin adds further context pruning by removing low-value tool output from the conversation history.
