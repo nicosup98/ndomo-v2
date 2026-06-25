@@ -196,6 +196,52 @@ describe("SPA does NOT swallow /api/*", () => {
   });
 });
 
+describe("SPA is public (no auth required for non-/api paths)", () => {
+  test("GET / returns 200 WITHOUT auth when auth.required=true", async () => {
+    const { app } = await buildHttpServer({
+      db,
+      httpConfig: AUTH_CONFIG,
+      webDistDir: webDir,
+    });
+    const res = await app.handle(new Request("http://localhost/"));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain('<div id="app"></div>');
+  });
+
+  test("GET /plans/<any-id> returns 200 WITHOUT auth (SPA fallback)", async () => {
+    const { app } = await buildHttpServer({
+      db,
+      httpConfig: AUTH_CONFIG,
+      webDistDir: webDir,
+    });
+    const res = await app.handle(
+      new Request("http://localhost/plans/some-uuid"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain('<div id="app"></div>');
+  });
+
+  test("GET /assets/*.js returns 200 WITHOUT auth", async () => {
+    const { app } = await buildHttpServer({
+      db,
+      httpConfig: AUTH_CONFIG,
+      webDistDir: webDir,
+    });
+    const res = await app.handle(
+      new Request("http://localhost/assets/index-abc123.js"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("application/javascript");
+  });
+});
+
 describe("SPA path traversal defense", () => {
   test("path traversal attempt does not serve /etc/passwd", async () => {
     const { app } = await buildHttpServer({

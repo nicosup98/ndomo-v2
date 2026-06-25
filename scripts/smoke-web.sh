@@ -199,15 +199,15 @@ assert() {
   fi
 }
 
-# ─── SPA index served at / ──────────────────────────────────────────────────
-# Note: Elysia onRequest hook for httpBasicAuth propagates across .use() boundaries,
-# so the SPA root is behind auth (same as /api/*). Only /health is exempt.
-curl -fsS -u "user:${SMOKE_PASSWORD}" -o /tmp/smoke-index.html "localhost:${PORT}/" || true
+# ─── SPA index served at / (PUBLIC — no auth required) ──────────────────────
+# SPA root + static assets + history fallback are exempt from auth. Only /api/*
+# requires the OPENCODE_SERVER_PASSWORD.
+curl -fsS -o /tmp/smoke-index.html "localhost:${PORT}/" || true
 JS_ASSET_PATH="$(grep -oE 'assets/[A-Za-z0-9_./-]+\.js' /tmp/smoke-index.html | head -1 || true)"
 CSS_ASSET_PATH="$(grep -oE 'assets/[A-Za-z0-9_./-]+\.css' /tmp/smoke-index.html | head -1 || true)"
 
-assert "SPA index served: GET / → 200 text/html (auth)" \
-  "[ \"\$(curl -s -u \"user:${SMOKE_PASSWORD}\" -o /dev/null -w '%{http_code}' localhost:${PORT}/)\" = '200' ] && [ \"\$(curl -s -u \"user:${SMOKE_PASSWORD}\" -o /dev/null -w '%{content_type}' localhost:${PORT}/ | cut -d';' -f1)\" = 'text/html' ]"
+assert "SPA index served: GET / → 200 text/html (no auth, public)" \
+  "[ \"\$(curl -s -o /dev/null -w '%{http_code}' localhost:${PORT}/)\" = '200' ] && [ \"\$(curl -s -o /dev/null -w '%{content_type}' localhost:${PORT}/ | cut -d';' -f1)\" = 'text/html' ]"
 
 assert "SPA index body references hashed asset" \
   "[ -n \"${JS_ASSET_PATH}\" ]"
@@ -226,26 +226,26 @@ assert "API: GET /api/plans with auth → 200 JSON array" \
 
 # ─── SPA history fallback (non-/api path → index.html, NOT 404) ─────────────
 RANDOM_UUID="$(cat /proc/sys/kernel/random/uuid)"
-curl -s -u "user:${SMOKE_PASSWORD}" -o /tmp/smoke-spa.html -w '%{http_code}|%{content_type}' "localhost:${PORT}/plans/${RANDOM_UUID}" > /tmp/smoke-spa-meta.txt || true
-assert "SPA fallback: GET /plans/<random-uuid> → 200 text/html (not 404)" \
+curl -s -o /tmp/smoke-spa.html -w '%{http_code}|%{content_type}' "localhost:${PORT}/plans/${RANDOM_UUID}" > /tmp/smoke-spa-meta.txt || true
+assert "SPA fallback: GET /plans/<random-uuid> → 200 text/html (not 404, no auth)" \
   "[ \"\$(cut -d'|' -f1 /tmp/smoke-spa-meta.txt)\" = '200' ] && [ \"\$(cut -d'|' -f2 /tmp/smoke-spa-meta.txt | cut -d';' -f1)\" = 'text/html' ] && grep -q '<div id=\"app\"' /tmp/smoke-spa.html"
 
 # ─── /api/* unknown → 404 JSON (SPA fallback does NOT swallow /api) ─────────
 assert "API: GET /api/plans/<bad-uuid> → 404 JSON error" \
   "[ \"\$(curl -s -o /tmp/smoke-404.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" localhost:${PORT}/api/plans/does-not-exist-zzz)\" = '404' ] && [ \"\$(grep -o '\"[^\"]*\"' /tmp/smoke-404.json | head -1 | cut -d'\"' -f2)\" = 'error' ]"
 
-# ─── Static JS asset served ──────────────────────────────────────────────────
+# ─── Static JS asset served (PUBLIC, no auth) ───────────────────────────────
 if [ -n "${JS_ASSET_PATH}" ]; then
-  assert "Static: GET /${JS_ASSET_PATH} → 200 application/javascript" \
-    "[ \"\$(curl -fsS -u \"user:${SMOKE_PASSWORD}\" -o /tmp/smoke-asset.js -w '%{http_code}' localhost:${PORT}/${JS_ASSET_PATH})\" = '200' ] && [ \"\$(curl -s -u \"user:${SMOKE_PASSWORD}\" -o /dev/null -w '%{content_type}' localhost:${PORT}/${JS_ASSET_PATH} | cut -d';' -f1)\" = 'application/javascript' ] && [ \"\$(wc -c < /tmp/smoke-asset.js)\" -gt 100 ]"
+  assert "Static: GET /${JS_ASSET_PATH} → 200 application/javascript (no auth)" \
+    "[ \"\$(curl -fsS -o /tmp/smoke-asset.js -w '%{http_code}' localhost:${PORT}/${JS_ASSET_PATH})\" = '200' ] && [ \"\$(curl -s -o /dev/null -w '%{content_type}' localhost:${PORT}/${JS_ASSET_PATH} | cut -d';' -f1)\" = 'application/javascript' ] && [ \"\$(wc -c < /tmp/smoke-asset.js)\" -gt 100 ]"
 else
   assert "Static: GET /assets/<hashed>.js → 200 application/javascript" "false"
 fi
 
-# ─── Static CSS asset served ─────────────────────────────────────────────────
+# ─── Static CSS asset served (PUBLIC, no auth) ──────────────────────────────
 if [ -n "${CSS_ASSET_PATH}" ]; then
-  assert "Static: GET /${CSS_ASSET_PATH} → 200 text/css" \
-    "[ \"\$(curl -fsS -u \"user:${SMOKE_PASSWORD}\" -o /tmp/smoke-style.css -w '%{http_code}' localhost:${PORT}/${CSS_ASSET_PATH})\" = '200' ] && [ \"\$(curl -s -u \"user:${SMOKE_PASSWORD}\" -o /dev/null -w '%{content_type}' localhost:${PORT}/${CSS_ASSET_PATH} | cut -d';' -f1)\" = 'text/css' ]"
+  assert "Static: GET /${CSS_ASSET_PATH} → 200 text/css (no auth)" \
+    "[ \"\$(curl -fsS -o /tmp/smoke-style.css -w '%{http_code}' localhost:${PORT}/${CSS_ASSET_PATH})\" = '200' ] && [ \"\$(curl -s -o /dev/null -w '%{content_type}' localhost:${PORT}/${CSS_ASSET_PATH} | cut -d';' -f1)\" = 'text/css' ]"
 else
   # Vue SPA often inlines CSS — skip if no external CSS asset.
   assert "Static: GET /assets/<hashed>.css → 200 text/css (skipped: no external CSS asset in build)" "true"
@@ -276,7 +276,7 @@ else
   FAILED_NAMES+=("typecheck")
 fi
 
-echo "[suite] running bun test..."
+echo "[suite] running bun test (src/)..."
 # Unset smoke env vars so they don't pollute tests that check default config behavior.
 unset NDOMO_HTTP_ENABLED
 unset NDOMO_HTTP_PORT
@@ -284,15 +284,28 @@ unset NDOMO_HTTP_AUTH_REQUIRED
 unset NDOMO_HTTP_CORS_ORIGINS
 unset OPENCODE_SERVER_PASSWORD
 unset OPENCODE_SERVER_URL
-if bun test >/tmp/smoke-buntest.log 2>&1; then
+# web/__tests__/ uses vitest (vi.mocked etc.) — not bun:test. Scope bun test to src/.
+if bun test src/ >/tmp/smoke-buntest.log 2>&1; then
   TLINE="$(grep -oE '[0-9]+ pass' /tmp/smoke-buntest.log | head -1 || echo 'all pass')"
-  echo "[PASS] bun test: ${TLINE}"
+  echo "[PASS] bun test src/: ${TLINE}"
   PASS=$((PASS + 1))
 else
-  echo "[FAIL] bun test had failures:" >&2
+  echo "[FAIL] bun test src/ had failures:" >&2
   tail -40 /tmp/smoke-buntest.log >&2
   FAIL=$((FAIL + 1))
-  FAILED_NAMES+=("bun test")
+  FAILED_NAMES+=("bun test src/")
+fi
+
+echo "[suite] running bun run web:test (vitest)..."
+if bun run web:test >/tmp/smoke-webtest.log 2>&1; then
+  TLINE="$(grep -oE 'Tests *[0-9]+ passed' /tmp/smoke-webtest.log | head -1 || echo 'all pass')"
+  echo "[PASS] web:test (vitest): ${TLINE}"
+  PASS=$((PASS + 1))
+else
+  echo "[FAIL] web:test (vitest) had failures:" >&2
+  tail -40 /tmp/smoke-webtest.log >&2
+  FAIL=$((FAIL + 1))
+  FAILED_NAMES+=("web:test")
 fi
 
 echo "[suite] running bun run web:typecheck..."
