@@ -14,14 +14,29 @@
     "ndomo": "./src/cli/index.ts"
   },
   "files": [
+    ".env.example",
+    "agents",
+    "bun.lock",
+    "config",
+    "docs",
+    "README.md",
+    "scripts/install.sh",
+    "scripts/smoke-http.sh",
+    "scripts/smoke-install.sh",
+    "scripts/smoke-web.sh",
+    "scripts/smoke.sh",
+    "skills",
     "src/cli",
     "src/config",
-    "agents",
-    "skills",
-    "config",
-    "README.md"
+    "src/db",
+    "src/http",
+    "src/sdk",
+    "tools"
   ],
-  "private": true,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "bun": ">=1.1.0"
   },
@@ -39,7 +54,6 @@
     "dev:reset": "bash scripts/dev-bust-cache.sh --apply --kill",
     "status:plans": "bun run src/cli/status.ts --plans",
     "clean": "rm -rf dist .slim/worktrees",
-    "prepare": "husky",
     "web:dev": "vite --config web/vite.config.ts",
     "web:build": "vite build --config web/vite.config.ts",
     "web:typecheck": "vue-tsc --noEmit -p web/tsconfig.json",

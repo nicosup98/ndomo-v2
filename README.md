@@ -93,6 +93,8 @@ bun run src/cli/install.ts --with-dcp          # include DCP plugin
 
 See [docs/installer.md](docs/installer.md) for detailed steps and full flag reference.
 
+> **Migration note:** `scripts/install.sh` is preserved in the published tarball as a **compat shim for users coming from `curl -fsSL ... | bash`** (the pre-0.2.0 install path). It is deprecated — new installs should use `bunx ndomo install`. The shim is not removed to avoid breaking legacy one-liners, but no new features will be added there.
+
 **Flags:**
 
 | Flag | Description |
