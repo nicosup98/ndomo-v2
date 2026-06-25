@@ -164,6 +164,30 @@ ndomo bundles 7 skills under `skills/`:
 
 See [docs/integrations.md](docs/integrations.md) for details.
 
+## Web UI
+
+The HTTP server includes a read-only Vue 3 SPA for browsing plans, tasks, and sessions in the browser. Single-port topology — the same Elysia process serves both the API (`/api/*`) and the SPA (everything else, with hash-mode fallback).
+
+See [docs/web-ui.md](docs/web-ui.md) for architecture, build pipeline, and extension guide.
+
+Quick start:
+
+```bash
+bun run web:build                                # build SPA -> src/http/web/
+NDOMO_HTTP_ENABLED=true OPENCODE_SERVER_PASSWORD=secret bun run src/cli/serve.ts
+# Open http://localhost:4097/
+```
+
+Vite dev mode (HMR):
+
+```bash
+# Terminal 1: server
+NDOMO_HTTP_ENABLED=true OPENCODE_SERVER_PASSWORD=secret bun run src/cli/serve.ts
+# Terminal 2: SPA dev
+bun run web:dev
+# Open http://localhost:5173/
+```
+
 ## Optional HTTP server
 
 Expose ndomo's SQLite state and OpenCode SDK event stream over HTTP+SSE via an embedded Elysia server. Phase 1 ships read-only REST endpoints (`/api/plans`, `/api/tasks`, `/api/sessions`) and a live SSE relay (`/api/events`).

@@ -6,11 +6,13 @@
  * Uses timing-safe comparison to prevent timing attacks.
  *
  * Uses onRequest so the hook propagates across Elysia .use() boundaries.
- * Exempts /health from auth (public liveness probe).
+ * Exempts from auth: /health (liveness probe) + non-/api paths (SPA static +
+ * SPA history fallback). Only /api/* requires auth.
  *
  * Behavior:
  * - auth.required === false → skip entirely
  * - /health path → skip (always public)
+ * - non-/api path (SPA) → skip (public — Vue SPA serves static + history fallback)
  * - Password unset/empty → 503 auth_not_configured
  * - Missing/malformed Authorization → 401 + WWW-Authenticate
  * - Wrong password → 401 + WWW-Authenticate
@@ -35,6 +37,11 @@ export function httpBasicAuth(httpConfig: HttpConfig) {
     // Exempt /health — public liveness probe
     const url = new URL(request.url);
     if (url.pathname === "/health") return;
+
+    // Exempt non-/api paths — SPA static assets + history fallback are public.
+    // Auth gates only the JSON API surface (/api/*). Users browse the SPA freely,
+    // then enter the password in the in-app AuthPrompt when fetching /api/*.
+    if (!url.pathname.startsWith("/api/")) return;
 
     const password = process.env.OPENCODE_SERVER_PASSWORD;
 

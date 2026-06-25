@@ -21,7 +21,7 @@ import { httpBasicAuth } from "../auth.ts";
 function buildTestApp(httpConfig: HttpConfig) {
   return new Elysia({ name: "test-auth" })
     .use(httpBasicAuth(httpConfig))
-    .get("/protected", () => ({ ok: true }))
+    .get("/api/protected", () => ({ ok: true }))
     .get("/health", () => ({ status: "ok" }));
 }
 
@@ -64,7 +64,7 @@ describe("httpBasicAuth — auth required", () => {
     process.env.OPENCODE_SERVER_PASSWORD = "test-secret";
     const app = buildTestApp(DEFAULT_CONFIG);
 
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: basicAuthHeader("test-secret") },
     });
     const res = await app.handle(req);
@@ -78,7 +78,7 @@ describe("httpBasicAuth — auth required", () => {
     process.env.OPENCODE_SERVER_PASSWORD = "correct-password";
     const app = buildTestApp(DEFAULT_CONFIG);
 
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: basicAuthHeader("wrong-password") },
     });
     const res = await app.handle(req);
@@ -93,7 +93,7 @@ describe("httpBasicAuth — auth required", () => {
     process.env.OPENCODE_SERVER_PASSWORD = "test-secret";
     const app = buildTestApp(DEFAULT_CONFIG);
 
-    const req = new Request("http://localhost/protected");
+    const req = new Request("http://localhost/api/protected");
     const res = await app.handle(req);
 
     expect(res.status).toBe(401);
@@ -106,7 +106,7 @@ describe("httpBasicAuth — auth required", () => {
     process.env.OPENCODE_SERVER_PASSWORD = "test-secret";
     const app = buildTestApp(DEFAULT_CONFIG);
 
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: "Bearer some-token" },
     });
     const res = await app.handle(req);
@@ -118,7 +118,7 @@ describe("httpBasicAuth — auth required", () => {
     delete process.env.OPENCODE_SERVER_PASSWORD;
     const app = buildTestApp(DEFAULT_CONFIG);
 
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: basicAuthHeader("any") },
     });
     const res = await app.handle(req);
@@ -147,7 +147,7 @@ describe("httpBasicAuth — auth required", () => {
 
     // "user:" → base64 → colonIdx=4, providedPassword=""
     const encoded = Buffer.from("user:").toString("base64");
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: `Basic ${encoded}` },
     });
     const res = await app.handle(req);
@@ -161,7 +161,7 @@ describe("httpBasicAuth — auth required", () => {
 
     // "nocolon" (no user:pass format) → colonIdx=-1, providedPassword="nocolon"
     const encoded = Buffer.from("nocolon").toString("base64");
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: `Basic ${encoded}` },
     });
     const res = await app.handle(req);
@@ -174,7 +174,7 @@ describe("httpBasicAuth — auth disabled", () => {
   test("no credentials → 200 (auth skipped)", async () => {
     const app = buildTestApp(DISABLED_AUTH_CONFIG);
 
-    const req = new Request("http://localhost/protected");
+    const req = new Request("http://localhost/api/protected");
     const res = await app.handle(req);
 
     expect(res.status).toBe(200);
@@ -186,7 +186,7 @@ describe("httpBasicAuth — auth disabled", () => {
     delete process.env.OPENCODE_SERVER_PASSWORD;
     const app = buildTestApp(DISABLED_AUTH_CONFIG);
 
-    const req = new Request("http://localhost/protected", {
+    const req = new Request("http://localhost/api/protected", {
       headers: { Authorization: basicAuthHeader("wrong") },
     });
     const res = await app.handle(req);
