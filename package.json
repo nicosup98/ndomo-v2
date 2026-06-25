@@ -30,7 +30,8 @@
     "src/config",
     "src/db",
     "src/http",
-    "src/sdk"
+    "src/sdk",
+    "tools"
   ],
   "publishConfig": {
     "access": "public",
