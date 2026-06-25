@@ -3,6 +3,7 @@ import vue from "@vitejs/plugin-vue";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+  root: fileURLToPath(new URL("./", import.meta.url)), // ./web/ — where index.html lives
   plugins: [vue()],
   // Output to src/http/web/ so Elysia can serve as static SPA (single-port topology)
   build: {
