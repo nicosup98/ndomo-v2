@@ -66,6 +66,9 @@ import type {
   TaskStatus,
 } from "./db/types.ts";
 import type { RoutingDecision } from "./lib.ts";
+import { loadHttpConfig } from "./config/schema.ts";
+import { startHttpServer, type HttpServerHandle } from "./http/server.ts";
+import { getSdkClient } from "./sdk/client.ts";
 import {
   BackgroundDispatcher,
   canRunParallel,
@@ -313,6 +316,8 @@ export type NdomoConfig = {
     /** TTL for write/edit locks in ms. Stale entries auto-release via sweep. */
     ttlMs?: number;
   };
+  /** HTTP server configuration. Loaded from environment variables if not set. */
+  http?: import("./config/schema.ts").HttpConfig;
 };
 
 /**
@@ -469,11 +474,62 @@ export const NdomoPlugin: Plugin = async (
     syncAgentFrontmatter(ndomoConfig, effectivePreset);
   }
 
+  // HTTP config — merge from ndomoConfig.http or load from environment variables
+  const httpConfig = ndomoConfig?.http ?? loadHttpConfig();
+  if (httpConfig.enabled) {
+    console.log(
+      `[ndomo] HTTP server enabled: port=${httpConfig.port} auth=${httpConfig.auth.required} cors_origins=${httpConfig.cors.origins.length}`,
+    );
+  }
+
   // Shared state — lives for the lifetime of the plugin instance
   const db: Database = openDb(resolveProjectDir({ worktree, directory }));
   runMigrations(db);
   registerShutdownHandlers(db);
   const dispatcher = new BackgroundDispatcher(db);
+
+  // ─── SDK Client (for SSE events) ─────────────────────────────────────────────
+  let sdkClient: import("@opencode-ai/sdk/client").OpencodeClient | null = null;
+  if (httpConfig.enabled) {
+    try {
+      const handle = await getSdkClient();
+      sdkClient = handle.client;
+      console.log(`[ndomo] OpenCode SDK client connected: ${handle.baseUrl}`);
+    } catch (err) {
+      console.warn(
+        `[ndomo] OpenCode SDK client unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.warn(`[ndomo] /api/events will return 503 until SDK becomes reachable`);
+    }
+  }
+
+  // ─── HTTP Server ──────────────────────────────────────────────────────────
+  let httpServerHandle: HttpServerHandle | null = null;
+  if (httpConfig.enabled) {
+    try {
+      httpServerHandle = await startHttpServer({
+        db,
+        httpConfig,
+        ...(sdkClient ? { sdkClient } : {}),
+      });
+      console.log(`[ndomo] HTTP server listening on port ${httpServerHandle.port}`);
+    } catch (err) {
+      console.error(
+        `[ndomo] HTTP server failed to start: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // HTTP shutdown — separate from DB shutdown (registerShutdownHandlers uses process.once
+  // which self-removes; adding our own listener avoids modifying shared shutdown module).
+  let httpStopped = false;
+  const stopHttpServer = (): void => {
+    if (httpStopped || !httpServerHandle) return;
+    httpStopped = true;
+    httpServerHandle.stop().catch(() => {});
+  };
+  process.on("SIGINT", stopHttpServer);
+  process.on("SIGTERM", stopHttpServer);
 
   // Background task retention — auto-finalize terminal tasks when row count
   // exceeds soft cap. Defaults: soft cap 1000 rows, max age 24h. Prevents
