@@ -36,25 +36,25 @@ ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/op
 ## Quick Start
 
 ```bash
-# Quick install (interactive, will prompt for provider)
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+# Quick install (interactive, will prompt for HTTP)
+bunx ndomo install
 
-# Non-interactive with provider preset
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+# Non-interactive with preset + HTTP enabled
+bunx ndomo install --preset=budget --enable-http
 
-# With budget preset + DCP
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+# With DCP
+bunx ndomo install --with-dcp
 ```
 
-By default the install applies `presets.default` from `config/ndomo.config.json`. Use `--preset=budget` for cheaper models, `--provider=ID` to override the provider prefix.
+By default the install applies `presets.default` from `config/ndomo.config.json`. Use `--preset=budget` for cheaper models, `--provider=ID` to override the provider prefix. See [docs/installer.md](docs/installer.md) for the full flag reference.
 
 Or from source:
 
 ```bash
-git clone <repo-url> ndomo
+git clone https://github.com/nicosup98/ndomo-v2 ndomo
 cd ndomo
 bun install
-opencode
+bun run src/cli/install.ts
 ```
 
 Inside OpenCode, verify all agents respond:
@@ -67,43 +67,49 @@ ping all agents
 
 **Prerequisites:** [bun](https://bun.sh) >= 1.1.0, OpenCode installed and configured with at least one authenticated provider.
 
-Install via curl (recommended):
+Install via bunx (recommended):
 
 ```bash
-# Interactive install (will prompt for provider)
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+# Interactive install (will prompt for HTTP)
+bunx ndomo install
 
 # With provider preset (non-interactive)
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+bunx ndomo install --provider=opencode --no-provider-prompt
 
 # With budget preset + DCP
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+bunx ndomo install --preset=budget --with-dcp
 ```
 
 Or from a local clone:
 
 ```bash
-git clone <repo-url> ndomo
+git clone https://github.com/nicosup98/ndomo-v2 ndomo
 cd ndomo
-./scripts/install.sh                 # with default preset
-./scripts/install.sh --preset=budget # with budget models
-./scripts/install.sh --with-dcp      # include DCP plugin
+bun install
+bun run src/cli/install.ts                     # default preset
+bun run src/cli/install.ts --preset=budget     # budget models
+bun run src/cli/install.ts --with-dcp          # include DCP plugin
 ```
 
-See [docs/installation.md](docs/installation.md) for detailed steps.
+See [docs/installer.md](docs/installer.md) for detailed steps and full flag reference.
 
 **Flags:**
 
 | Flag | Description |
 |---|---|
-| `--provider=ID` | Override the provider prefix for all agents. The model ID is taken from the active preset; only the `provider/` segment of the `model:` field is swapped. Example: preset gives `opencode-go/minimax-m2.7`, `--provider=opencode` rewrites to `opencode/minimax-m2.7`. |
+| `--provider=ID` | Override the provider prefix for all agents. The model ID is taken from the active preset; only the `provider/` segment of the `model:` field is swapped. |
 | `--no-provider-prompt` | Skip the interactive provider prompt. The preset is still applied; no provider prefix override is performed. |
-| `--preset=NAME` | Select preset from `config/ndomo.config.json::presets[NAME]`. The preset is the source of truth for agent models at install time. (default: `default`, options: `default`, `budget`) |
+| `--preset=NAME` | Select preset from `config/ndomo.config.json::presets[NAME]`. (default: `default`, options: `default`, `budget`) |
 | `--with-dcp` | Install and configure the DCP plugin. |
-| `--repo=URL` | Override repository URL (for piped installs from a fork). |
-| `--branch=NAME` | Override repository branch (for piped installs from dev branches). |
+| `--dry-run` | Print planned changes without writing files. |
+| `--skip-deps` | Skip the `bun install` dependency step. |
+| `--enable-http` | Auto-enable HTTP server (writes http block to `ndomo.config.json`). |
+| `--disable-http` | Skip the HTTP auto-prompt entirely (default in non-TTY / CI). |
+| `--port=N` | HTTP server port (default: `4097`). |
+| `--cors-origins=CSV` | HTTP CORS origins, comma-separated (default: `*`). |
+| `--auth-required=BOOL` | HTTP auth requirement (default: `true`). |
 
-**Uninstall:** `./scripts/uninstall.sh [--keep-data]`
+**Uninstall:** `bunx ndomo install --uninstall` or `./scripts/uninstall.sh [--keep-data]`
 
 ## Plans & Tasks DB
 
@@ -161,6 +167,14 @@ See [docs/integrations.md](docs/integrations.md) for details.
 ## Optional HTTP server
 
 Expose ndomo's SQLite state and OpenCode SDK event stream over HTTP+SSE via an embedded Elysia server. Phase 1 ships read-only REST endpoints (`/api/plans`, `/api/tasks`, `/api/sessions`) and a live SSE relay (`/api/events`).
+
+**Recommended: use the installer flag to enable HTTP:**
+
+```bash
+bunx ndomo install --enable-http
+```
+
+Or set env vars manually and start the server:
 
 ```bash
 export NDOMO_HTTP_ENABLED=true
