@@ -33,6 +33,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "bun test",
+    "test:web": "vitest run --config web/vitest.config.ts",
     "test:smoke": "bash scripts/smoke.sh",
     "dev:bust": "bash scripts/dev-bust-cache.sh --apply",
     "dev:reset": "bash scripts/dev-bust-cache.sh --apply --kill",

@@ -1,0 +1,4 @@
+[test]
+# Web/frontend tests use vitest (handles .vue SFCs + vi.waitFor + @vue/test-utils mount).
+# Exclude from bun:test to avoid runner collision.
+pathIgnorePatterns = ["web/__tests__/**"]
