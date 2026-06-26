@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 /**
  * ndomo install — TypeScript port of scripts/install.sh
  *
@@ -12,10 +13,21 @@
  * bun run src/cli/install.ts --dry-run --skip-deps
  */
 
-import { existsSync, mkdirSync, copyFileSync, symlinkSync, lstatSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { resolveConfigDir, type HttpConfig, type NdomoConfig } from "../config/schema.ts";
+import { basename, dirname, join } from "node:path";
+import { type HttpConfig, type NdomoConfig, resolveConfigDir } from "../config/schema.ts";
 
 // ─── ANSI colors (no external deps) ──────────────────────────────────────────
 const RED = "\x1b[0;31m";
@@ -51,9 +63,11 @@ async function streamSpawn(
     proc.exited,
   ]);
   if (exitCode !== 0 && !opts.nothrow) {
-    const truncate = (s: string) => (s.length > 1024 ? s.slice(0, 1024) + "\n... [truncated]" : s);
+    const truncate = (s: string) => (s.length > 1024 ? `${s.slice(0, 1024)}\n... [truncated]` : s);
     const label = opts.label ?? cmd.join(" ");
-    die(`${label} failed (exit ${exitCode})\nstderr:\n${truncate(stderr)}\nstdout:\n${truncate(stdout)}`);
+    die(
+      `${label} failed (exit ${exitCode})\nstderr:\n${truncate(stderr)}\nstdout:\n${truncate(stdout)}`,
+    );
   }
   return { exitCode, stdout, stderr };
 }
@@ -351,11 +365,11 @@ export function applyPresetToFile(
   preset: PresetEntry,
   dryRun: boolean,
 ): "updated" | "skipped" {
-  let content = readFileSync(filePath, "utf-8");
+  const content = readFileSync(filePath, "utf-8");
 
   // Find frontmatter bounds (first --- block at file start)
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!fmMatch || !fmMatch[1] || !fmMatch[2]) {
+  if (!fmMatch?.[1] || !fmMatch[2]) {
     warn(`No frontmatter found in ${basename(filePath)}, skipping`);
     return "skipped";
   }
@@ -367,7 +381,10 @@ export function applyPresetToFile(
   // Update or insert each preset field at top-level (0 indent)
   const fields: Array<{ yamlName: string; value: string | undefined }> = [
     { yamlName: "model", value: preset.model },
-    { yamlName: "temperature", value: preset.temperature !== undefined ? String(preset.temperature) : undefined },
+    {
+      yamlName: "temperature",
+      value: preset.temperature !== undefined ? String(preset.temperature) : undefined,
+    },
     { yamlName: "reasoningEffort", value: preset.reasoning_effort },
   ];
 
@@ -381,7 +398,7 @@ export function applyPresetToFile(
     } else {
       // Append at end of frontmatter (top-level, 0 indent)
       const sep = newFmBody.endsWith("\n") ? "" : "\n";
-      newFmBody = newFmBody + sep + `${field.yamlName}: ${field.value}\n`;
+      newFmBody = `${newFmBody + sep}${field.yamlName}: ${field.value}\n`;
       changed = true;
     }
   }
@@ -403,11 +420,7 @@ export function applyPresetToFile(
  * Apply provider prefix to model lines in agent .md files.
  * Replaces the provider/ prefix on model: lines (e.g., "opencode/gpt-4" → "anthropic/gpt-4").
  */
-export function applyProviderPrefix(
-  agentDir: string,
-  provider: string,
-  dryRun: boolean,
-): number {
+export function applyProviderPrefix(agentDir: string, provider: string, dryRun: boolean): number {
   const files = readdirSafe(agentDir).filter((f) => f.endsWith(".md"));
   let updated = 0;
 
@@ -461,7 +474,7 @@ export function stepApplyPreset(
   }
 
   const presets = configJson.presets;
-  if (!presets || !presets[preset]) {
+  if (!presets?.[preset]) {
     warn(`Preset '${preset}' not found in ndomo.config.json, skipping`);
     return;
   }
@@ -613,7 +626,7 @@ export function stepRegisterPlugins(
   const merged = [...new Set([...existingPlugins, ...allPlugins])];
   opencode.plugin = merged;
 
-  writeFileSync(opencodeJsonPath, JSON.stringify(opencode, null, 2) + "\n");
+  writeFileSync(opencodeJsonPath, `${JSON.stringify(opencode, null, 2)}\n`);
   ok(`Registered ${allPlugins.length} ndomo plugin(s) in opencode.json`);
 }
 
@@ -631,10 +644,7 @@ function isSymlink(p: string): boolean {
  * Strategy 1: file: dep + bun install → real copy (no symlink).
  * Mutates package.json to add ndomo as file: dep, then runs bun install.
  */
-async function strategyFileDep(
-  projectRoot: string,
-  configDir: string,
-): Promise<boolean> {
+async function strategyFileDep(projectRoot: string, configDir: string): Promise<boolean> {
   const pkgJsonPath = join(configDir, "package.json");
   const nmNdomo = join(configDir, "node_modules", "ndomo");
 
@@ -652,7 +662,7 @@ async function strategyFileDep(
     const deps = (pkg.dependencies as Record<string, string>) ?? {};
     deps.ndomo = `file://${projectRoot}`;
     pkg.dependencies = deps;
-    writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
+    writeFileSync(pkgJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
 
     // Run bun install
     const result = await streamSpawn(["bun", "install", "--no-frozen-lockfile"], {
@@ -790,11 +800,7 @@ export async function stepInstallPackage(
 // ─── Step 4.7: Copy custom tools ─────────────────────────────────────────────
 // npm distribution: tools live inside the installed ndomo package, so symlink
 // dance (used in old repo-based install) is obsolete. Copy .ts files directly.
-export function stepCopyTools(
-  projectRoot: string,
-  configDir: string,
-  dryRun: boolean,
-): number {
+export function stepCopyTools(projectRoot: string, configDir: string, dryRun: boolean): number {
   const src = join(projectRoot, "tools");
   const dst = join(configDir, "tools");
 
@@ -860,7 +866,7 @@ export function stepInjectPreset(configDir: string, preset: string, dryRun: bool
   try {
     const ndomo: Record<string, unknown> = JSON.parse(readFileSync(ndomoJsonPath, "utf-8"));
     ndomo.preset = preset;
-    writeFileSync(ndomoJsonPath, JSON.stringify(ndomo, null, 2) + "\n");
+    writeFileSync(ndomoJsonPath, `${JSON.stringify(ndomo, null, 2)}\n`);
     ok(`Preset '${preset}' written to ndomo.json`);
   } catch (e) {
     warn(`Failed to inject preset into ndomo.json: ${e}`);
@@ -921,9 +927,11 @@ export function writeHttpBlock(projectRoot: string, httpConfig: HttpConfig, dryR
       info(`[dry-run] would write http block to ${configPath}:`);
       console.log(JSON.stringify(httpConfig, null, 2));
     } else {
-      writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
       ok("HTTP server config written to config/ndomo.config.json");
-      info(`  port: ${httpConfig.port}, cors: ${httpConfig.cors.origins.join(",")}, auth: ${httpConfig.auth.required}`);
+      info(
+        `  port: ${httpConfig.port}, cors: ${httpConfig.cors.origins.join(",")}, auth: ${httpConfig.auth.required}`,
+      );
     }
   } catch (e) {
     warn(`Failed to write http block: ${e}`);
@@ -931,36 +939,71 @@ export function writeHttpBlock(projectRoot: string, httpConfig: HttpConfig, dryR
 }
 
 /**
- * Prompt user interactively to enable HTTP server (TTY only).
- * Returns true if user accepts, false otherwise.
+ * Generate a random password (16 chars, alphanumeric).
  */
-export async function promptHttpEnable(): Promise<boolean> {
+function generatePassword(): string {
+  return randomBytes(12).toString("base64url").slice(0, 16);
+}
+
+/**
+ * Combined interactive prompt: enable HTTP? → set password?
+ * Single stdin session avoids Bun deadlock from sequential resume/pause.
+ * Returns { enabled: boolean, password: string | null }
+ */
+export async function promptHttpCombined(): Promise<{ enabled: boolean; password: string | null }> {
   if (!process.stdin.isTTY) {
     info("Non-TTY stdin — skipping HTTP prompt (use --enable-http to enable)");
-    return false;
+    return { enabled: false, password: null };
   }
+
   console.log("");
   console.log("[?] Enable ndomo HTTP server? Allows programmatic plan/task control via API.");
-  console.log("    Recommended for users integrating ndomo with other tools (port 4097, auth required).");
+  console.log(
+    "    Recommended for users integrating ndomo with other tools (port 4097, auth required).",
+  );
   process.stdout.write("    Enable now? [Y/n]: ");
+
+  const defaultPassword = generatePassword();
 
   return new Promise((resolve) => {
     process.stdin.setEncoding("utf-8");
     process.stdin.resume();
 
+    let phase: "enable" | "password" = "enable";
     let input = "";
-    const onData = (chunk: string) => {
-      input += chunk;
-      if (input.includes("\n")) {
-        cleanup();
-        const answer = input.trim().toLowerCase();
-        resolve(answer === "" || answer === "y" || answer === "yes");
-      }
-    };
 
     const cleanup = () => {
       process.stdin.removeListener("data", onData);
       process.stdin.pause();
+    };
+
+    const onData = (chunk: string) => {
+      input += chunk;
+      if (!input.includes("\n")) return;
+
+      if (phase === "enable") {
+        const answer = input.trim().toLowerCase();
+        input = "";
+
+        if (answer !== "" && answer !== "y" && answer !== "yes") {
+          cleanup();
+          resolve({ enabled: false, password: null });
+          return;
+        }
+
+        // User accepted — ask password in same session
+        phase = "password";
+        console.log("");
+        console.log("[?] Set HTTP basic auth password.");
+        console.log("    Clients send this as Basic auth (any username, this password).");
+        process.stdout.write(`    Password [Enter for random: ${defaultPassword}]: `);
+        return;
+      }
+
+      // phase === "password"
+      const password = input.trim() || defaultPassword;
+      cleanup();
+      resolve({ enabled: true, password });
     };
 
     process.stdin.on("data", onData);
@@ -968,17 +1011,52 @@ export async function promptHttpEnable(): Promise<boolean> {
     // Timeout after 30s
     setTimeout(() => {
       cleanup();
-      console.log("\n(timeout — skipping HTTP enable)");
-      resolve(false);
+      console.log("\n(timeout — skipping HTTP setup)");
+      resolve({ enabled: false, password: null });
     }, 30_000);
   });
 }
 
 /**
+ * Write OPENCODE_SERVER_PASSWORD to .env file in project root.
+ * Preserves existing .env content, updates or appends the key.
+ */
+export function writeEnvPassword(projectRoot: string, password: string, dryRun: boolean): void {
+  const envPath = join(projectRoot, ".env");
+  const envLine = `OPENCODE_SERVER_PASSWORD=${password}`;
+
+  if (dryRun) {
+    info(`[dry-run] would write ${envLine} to ${envPath}`);
+    return;
+  }
+
+  if (existsSync(envPath)) {
+    const content = readFileSync(envPath, "utf-8");
+    if (content.includes("OPENCODE_SERVER_PASSWORD=")) {
+      // Update existing key
+      const updated = content.replace(/^OPENCODE_SERVER_PASSWORD=.*$/m, envLine);
+      writeFileSync(envPath, updated);
+      ok("Updated OPENCODE_SERVER_PASSWORD in .env");
+      return;
+    }
+    // Append
+    const separator = content.endsWith("\n") ? "" : "\n";
+    appendFileSync(envPath, `${separator}${envLine}\n`);
+    ok("Appended OPENCODE_SERVER_PASSWORD to .env");
+  } else {
+    writeFileSync(envPath, `${envLine}\n`);
+    ok("Created .env with OPENCODE_SERVER_PASSWORD");
+  }
+
+  console.log(`    ${BOLD}Password:${NC} ${password}`);
+  console.log(`    ${BOLD}File:${NC}     ${envPath}`);
+}
+
+/**
  * Handle HTTP auto-prompt logic:
- * - --enable-http → write block immediately
+ * - --enable-http → write block + password immediately
  * - --disable-http → skip entirely
- * - Otherwise → prompt in TTY, skip in non-TTY
+ * - Otherwise → single combined prompt in TTY, skip in non-TTY
  */
 export async function stepHttpPrompt(
   flags: InstallFlags,
@@ -988,6 +1066,40 @@ export async function stepHttpPrompt(
   if (flags.enableHttp) {
     const httpConfig = buildHttpConfig(flags);
     writeHttpBlock(projectRoot, httpConfig, dryRun);
+    // --enable-http in non-TTY: auto-generate password
+    if (!process.stdin.isTTY) {
+      const password = generatePassword();
+      info(`Non-TTY mode — auto-generated password: ${password}`);
+      writeEnvPassword(projectRoot, password, dryRun);
+    } else {
+      // TTY with --enable-http: still ask for password
+      console.log("");
+      console.log("[?] Set HTTP basic auth password.");
+      console.log("    Clients send this as Basic auth (any username, this password).");
+      const defaultPassword = generatePassword();
+      process.stdout.write(`    Password [Enter for random: ${defaultPassword}]: `);
+      const password = await new Promise<string>((resolve) => {
+        process.stdin.setEncoding("utf-8");
+        process.stdin.resume();
+        let input = "";
+        const onData = (chunk: string) => {
+          input += chunk;
+          if (input.includes("\n")) {
+            process.stdin.removeListener("data", onData);
+            process.stdin.pause();
+            resolve(input.trim() || defaultPassword);
+          }
+        };
+        process.stdin.on("data", onData);
+        setTimeout(() => {
+          process.stdin.removeListener("data", onData);
+          process.stdin.pause();
+          console.log(`\n(timeout — using random: ${defaultPassword})`);
+          resolve(defaultPassword);
+        }, 30_000);
+      });
+      writeEnvPassword(projectRoot, password, dryRun);
+    }
     return;
   }
 
@@ -1002,10 +1114,11 @@ export async function stepHttpPrompt(
     return;
   }
 
-  const accepted = await promptHttpEnable();
-  if (accepted) {
+  const { enabled, password } = await promptHttpCombined();
+  if (enabled) {
     const httpConfig = buildHttpConfig(flags);
     writeHttpBlock(projectRoot, httpConfig, dryRun);
+    if (password) writeEnvPassword(projectRoot, password, dryRun);
   } else {
     info("HTTP server not enabled (can be enabled later with --enable-http)");
   }

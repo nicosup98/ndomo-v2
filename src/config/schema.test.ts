@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { loadHttpConfig, SECURITY_HEADERS } from "./schema.ts";
 
 describe("loadHttpConfig", () => {
@@ -11,7 +11,7 @@ describe("loadHttpConfig", () => {
   test("returns defaults when no env vars set", () => {
     const config = loadHttpConfig();
     expect(config).toEqual({
-      enabled: false,
+      enabled: true,
       port: 4097,
       cors: {
         origins: ["*"],
@@ -77,7 +77,10 @@ describe("SECURITY_HEADERS", () => {
     expect(SECURITY_HEADERS).toHaveProperty("X-Frame-Options", "DENY");
     expect(SECURITY_HEADERS).toHaveProperty("X-XSS-Protection", "1; mode=block");
     expect(SECURITY_HEADERS).toHaveProperty("Referrer-Policy", "strict-origin-when-cross-origin");
-    expect(SECURITY_HEADERS).toHaveProperty("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    expect(SECURITY_HEADERS).toHaveProperty(
+      "Permissions-Policy",
+      "camera=(), microphone=(), geolocation=()",
+    );
   });
 
   test("is readonly", () => {

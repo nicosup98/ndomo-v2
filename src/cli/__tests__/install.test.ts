@@ -15,26 +15,26 @@
  * 9. Path traversal protection (unsafe agent names rejected)
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { NdomoConfig } from "../../config/schema.ts";
 import {
-  parseFlags,
-  buildHttpConfig,
-  writeHttpBlock,
   applyPresetToFile,
   applyProviderPrefix,
-  promptHttpEnable,
-  stepRegisterPlugins,
+  buildHttpConfig,
+  type InstallFlags,
+  type PresetEntry,
+  parseFlags,
+  promptHttpCombined,
   stepCopyAgents,
   stepCopySkills,
   stepCopyTools,
   stepInjectPreset,
-  type InstallFlags,
-  type PresetEntry,
+  stepRegisterPlugins,
+  writeHttpBlock,
 } from "../install.ts";
-import type { NdomoConfig } from "../../config/schema.ts";
 
 let tmpDir: string;
 let projectRoot: string;
@@ -281,12 +281,16 @@ describe("writeHttpBlock", () => {
 
   test("warns if config file missing", () => {
     // Should not throw
-    writeHttpBlock(projectRoot, {
-      enabled: true,
-      port: 4097,
-      cors: { origins: ["*"] },
-      auth: { required: true },
-    }, false);
+    writeHttpBlock(
+      projectRoot,
+      {
+        enabled: true,
+        port: 4097,
+        cors: { origins: ["*"] },
+        auth: { required: true },
+      },
+      false,
+    );
   });
 });
 
@@ -382,7 +386,10 @@ describe("applyPresetToFile", () => {
 describe("applyProviderPrefix", () => {
   test("replaces provider prefix on model lines", () => {
     mkdirSync(join(tmpDir, "agents"), { recursive: true });
-    writeFileSync(join(tmpDir, "agents", "foreman.md"), makeAgentMd("foreman", "opencode/gpt-4", 0.3));
+    writeFileSync(
+      join(tmpDir, "agents", "foreman.md"),
+      makeAgentMd("foreman", "opencode/gpt-4", 0.3),
+    );
     writeFileSync(join(tmpDir, "agents", "scout.md"), makeAgentMd("scout", "minimax/model", 0.3));
 
     const updated = applyProviderPrefix(join(tmpDir, "agents"), "anthropic", false);
@@ -772,15 +779,16 @@ body content here
   });
 });
 
-// ─── Non-TTY promptHttpEnable ──────────────────────────────────────────────
+// ─── Non-TTY promptHttpCombined ──────────────────────────────────────────────
 
-describe("promptHttpEnable — non-TTY fallback", () => {
-  test("returns false immediately when stdin not TTY", async () => {
+describe("promptHttpCombined — non-TTY fallback", () => {
+  test("returns {enabled:false, password:null} immediately when stdin not TTY", async () => {
     const originalIsTTY = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
     try {
-      const result = await promptHttpEnable();
-      expect(result).toBe(false);
+      const result = await promptHttpCombined();
+      expect(result.enabled).toBe(false);
+      expect(result.password).toBeNull();
     } finally {
       Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
     }

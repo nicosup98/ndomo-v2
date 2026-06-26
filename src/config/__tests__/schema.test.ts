@@ -11,10 +11,10 @@
  * 7. resolveConfigDir() honors XDG_CONFIG_HOME
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadHttpConfig, loadNdomoConfig, resolveConfigDir } from "../schema.ts";
 
 let tmpDir: string;
@@ -38,11 +38,23 @@ function restoreEnv(...keys: string[]): void {
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "ndomo-schema-"));
-  saveEnv("NDOMO_HTTP_ENABLED", "NDOMO_HTTP_PORT", "NDOMO_HTTP_CORS_ORIGINS", "NDOMO_HTTP_AUTH_REQUIRED", "XDG_CONFIG_HOME");
+  saveEnv(
+    "NDOMO_HTTP_ENABLED",
+    "NDOMO_HTTP_PORT",
+    "NDOMO_HTTP_CORS_ORIGINS",
+    "NDOMO_HTTP_AUTH_REQUIRED",
+    "XDG_CONFIG_HOME",
+  );
 });
 
 afterEach(() => {
-  restoreEnv("NDOMO_HTTP_ENABLED", "NDOMO_HTTP_PORT", "NDOMO_HTTP_CORS_ORIGINS", "NDOMO_HTTP_AUTH_REQUIRED", "XDG_CONFIG_HOME");
+  restoreEnv(
+    "NDOMO_HTTP_ENABLED",
+    "NDOMO_HTTP_PORT",
+    "NDOMO_HTTP_CORS_ORIGINS",
+    "NDOMO_HTTP_AUTH_REQUIRED",
+    "XDG_CONFIG_HOME",
+  );
   try {
     rmSync(tmpDir, { recursive: true, force: true });
   } catch {
@@ -60,7 +72,7 @@ describe("loadHttpConfig", () => {
     const fakePath = join(tmpDir, "nonexistent.json");
     const config = loadHttpConfig(fakePath);
 
-    expect(config.enabled).toBe(false);
+    expect(config.enabled).toBe(true);
     expect(config.port).toBe(4097);
     expect(config.cors.origins).toEqual(["*"]);
     expect(config.auth.required).toBe(true);

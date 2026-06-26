@@ -4,7 +4,7 @@
  * Loaded from environment variables with sensible defaults.
  *
  * Environment variables:
- * - NDOMO_HTTP_ENABLED: "true" to enable HTTP server (default: "false")
+ * - NDOMO_HTTP_ENABLED: "false" to disable HTTP server (default: "true")
  * - NDOMO_HTTP_PORT: Port number (default: 4097)
  * - NDOMO_HTTP_CORS_ORIGINS: Comma-separated list of allowed origins (default: ["*"])
  * - NDOMO_HTTP_AUTH_REQUIRED: "false" to disable auth requirement (default: "true")
@@ -146,7 +146,7 @@ export function loadHttpConfig(configPath?: string): HttpConfig {
 
   // File missing or incomplete → fall back to env vars + defaults
   return {
-    enabled: parseBoolEnv(process.env.NDOMO_HTTP_ENABLED, false),
+    enabled: parseBoolEnv(process.env.NDOMO_HTTP_ENABLED, true),
     port: Number(process.env.NDOMO_HTTP_PORT) || 4097,
     cors: {
       origins: process.env.NDOMO_HTTP_CORS_ORIGINS?.split(",").map((s) => s.trim()) ?? ["*"],
