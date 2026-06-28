@@ -22,7 +22,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HttpConfig } from "../config/schema.ts";
 import { loadHttpConfig } from "../config/schema.ts";
@@ -116,9 +116,55 @@ function printBanner(config: HttpConfig, dbPath: string): void {
 └─────────────────────────────────────┘`);
 }
 
+/**
+ * Load `.env` from cwd into process.env.
+ * Shell environment wins — existing process.env keys are NOT overridden.
+ * Returns the number of keys loaded.
+ */
+export function loadDotenv(cwd: string = process.cwd()): number {
+  const envPath = join(cwd, ".env");
+  if (!existsSync(envPath)) return 0;
+
+  const content = readFileSync(envPath, "utf-8").replace(/^\uFEFF/, ""); // strip BOM
+  let loaded = 0;
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const cleaned = line.startsWith("export ") ? line.slice(7) : line;
+    const m = cleaned.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+    if (!m) continue;
+
+    const key = m[1]!;
+    let value = m[2]!;
+    // strip optional surrounding quotes (single or double)
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+      loaded++;
+    }
+  }
+
+  if (loaded > 0) {
+    console.log(`[env] loaded ${loaded} key(s) from .env`);
+  }
+
+  return loaded;
+}
+
 /** Main entry point. */
 export async function runServe(args: string[]): Promise<void> {
   const opts = parseArgs(args);
+
+  // Load .env from cwd into process.env (shell env wins)
+  loadDotenv();
 
   // Resolve DB
   const dbPath = resolveDbPath();
