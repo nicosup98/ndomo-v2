@@ -133,6 +133,36 @@ describe("SPA static assets", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/css");
   });
+
+  test("missing CSS asset returns 404 (NOT SPA fallback text/html)", async () => {
+    // Regression: stale browser cache references a hash that vite's
+    // emptyOutDir deleted. Must 404, not serve index.html as CSS.
+    const { app } = await buildHttpServer({
+      db,
+      httpConfig: NO_AUTH_CONFIG,
+      webDistDir: webDir,
+    });
+    const res = await app.handle(
+      new Request("http://localhost/assets/DashboardView-OLDHASH.css"),
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Type") ?? "").not.toContain("text/html");
+  });
+
+  test("missing JS asset returns 404 (NOT SPA fallback text/html)", async () => {
+    const { app } = await buildHttpServer({
+      db,
+      httpConfig: NO_AUTH_CONFIG,
+      webDistDir: webDir,
+    });
+    const res = await app.handle(
+      new Request("http://localhost/assets/DashboardView-OLDHASH.js"),
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Type") ?? "").not.toContain("text/html");
+  });
 });
 
 describe("SPA does NOT swallow /api/*", () => {

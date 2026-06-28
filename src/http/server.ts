@@ -117,6 +117,14 @@ export async function buildHttpServer(args: BuildHttpServerArgs) {
         });
       }
 
+      // Static asset path that doesn't exist on disk — return 404, NOT SPA
+      // fallback. Otherwise a stale browser cache (e.g. after `bun run web:build`
+      // deletes old hashed chunks via vite's emptyOutDir) would silently receive
+      // index.html as CSS/JS, breaking the page without a visible error.
+      if (safePath.startsWith("assets/")) {
+        return new Response("Not Found", { status: 404 });
+      }
+
       // Fallback to SPA index.html for client-side routing
       if (!existsSync(INDEX_HTML)) {
         return new Response("SPA not built. Run: bun run web:build", {
