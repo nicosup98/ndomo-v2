@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useApi } from "@/composables/useApi";
+import { useSseRefresh } from "@/composables/useSseRefresh";
 import { getPlan } from "@/api/plans";
 import { listTasks } from "@/api/tasks";
 import type { Task, TaskStatus } from "@/types/api";
@@ -18,6 +19,28 @@ const props = defineProps<{
 const router = useRouter();
 const plan = useApi(() => getPlan(props.id));
 const tasks = useApi(() => listTasks(props.id));
+
+// SSE: refresh plan on plan.* events matching this id
+useSseRefresh({
+  events: ["plan.created", "plan.updated", "plan.status_changed", "plan.archived"],
+  refreshKey: `/api/plans/${props.id}`,
+  refresh: plan.refresh,
+  filter: (p) => {
+    const payload = p as Record<string, unknown>;
+    return payload?.planId === props.id;
+  },
+});
+
+// SSE: refresh tasks on task.* events matching this planId
+useSseRefresh({
+  events: ["task.created", "task.updated", "task.status_changed"],
+  refreshKey: `/api/plans/${props.id}/tasks`,
+  refresh: tasks.refresh,
+  filter: (p) => {
+    const payload = p as Record<string, unknown>;
+    return payload?.planId === props.id;
+  },
+});
 
 const groupedTasks = computed(() => {
   if (!tasks.data.value) return null;

@@ -3,9 +3,15 @@
  *
  * All functions take a Database instance and return camelCase TS types.
  * Mutations that touch multiple rows use db.transaction().
+ *
+ * Post-commit hooks: mutations emit typed events on the in-process bus
+ * (`src/events/bus.ts`) so SSE subscribers (`src/http/routes/events.ts`)
+ * receive live updates without polling. Bus emits happen AFTER the DB
+ * write so subscribers never see unpublished state.
  */
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { ensureSession } from "./sessions.ts";
 import type { Plan, PlanCategory, PlanStatus } from "./types.ts";
@@ -182,6 +188,13 @@ export function updatePlanStatus(
     executedBySession?: string;
   } = {},
 ): Plan | null {
+  // Capture the prior status BEFORE the UPDATE so the bus can emit a
+  // typed status_changed event with both the old and new values.
+  const priorRow = db.query("SELECT status FROM plans WHERE id = ?").get(id) as
+    | { status: PlanStatus }
+    | undefined;
+  const previousStatus = priorRow?.status;
+
   const now = Date.now();
 
   // Fix #1 (scoped): validate sessionId only when status will actually link it (Fix #8)
@@ -248,7 +261,33 @@ export function updatePlanStatus(
     db.query("UPDATE plans SET completed_at = ? WHERE id = ? AND completed_at IS NULL").run(now, id);
   }
 
-  return getPlan(db, id);
+  // Live-reactivity hook: re-read after the transaction so subscribers see
+  // the canonical post-write row. Emit plan.updated always; plan.status_changed
+  // only when the status actually transitioned.
+  const result = getPlan(db, id);
+  if (result) {
+    const ts = Date.now();
+    bus.emit({
+      type: "plan.updated",
+      planId: result.id,
+      slug: result.slug,
+      title: result.title,
+      status: result.status,
+      timestamp: ts,
+    });
+    if (previousStatus !== undefined && previousStatus !== status) {
+      bus.emit({
+        type: "plan.status_changed",
+        planId: result.id,
+        slug: result.slug,
+        title: result.title,
+        previousStatus,
+        status: result.status,
+        timestamp: ts,
+      });
+    }
+  }
+  return result;
 }
 
 /**
@@ -265,6 +304,12 @@ export function approvePlan(
   id: string,
   opts: { updatedBy?: string; sessionId?: string } = {},
 ): Plan | null {
+  // Capture prior status BEFORE the UPDATE for status_changed emission.
+  const priorRow = db.query("SELECT status FROM plans WHERE id = ?").get(id) as
+    | { status: PlanStatus }
+    | undefined;
+  const previousStatus = priorRow?.status;
+
   const now = Date.now();
 
   // Fix #1 (scoped): validate sessionId when linking (Fix #8 — approve always links)
@@ -286,7 +331,32 @@ export function approvePlan(
       "UPDATE plans SET status = 'approved', approved_at = ?, updated_at = ? WHERE id = ?",
     ).run(now, now, id);
   }
-  return getPlan(db, id);
+
+  // Live-reactivity hook: notify subscribers of the approval transition.
+  const result = getPlan(db, id);
+  if (result) {
+    const ts = Date.now();
+    bus.emit({
+      type: "plan.updated",
+      planId: result.id,
+      slug: result.slug,
+      title: result.title,
+      status: result.status,
+      timestamp: ts,
+    });
+    if (previousStatus !== undefined && previousStatus !== "approved") {
+      bus.emit({
+        type: "plan.status_changed",
+        planId: result.id,
+        slug: result.slug,
+        title: result.title,
+        previousStatus,
+        status: "approved",
+        timestamp: ts,
+      });
+    }
+  }
+  return result;
 }
 
 // ─── Plan deletion ──────────────────────────────────────────────────────────
@@ -370,6 +440,17 @@ export function deletePlan(db: Database, planId: string, opts: DeletePlanOpts): 
   // Delete — CASCADE handles plan_tasks, plan_files, plan_tags
   // sessions.plan_id is SET NULL per schema
   db.query("DELETE FROM plans WHERE id = ?").run(planId);
+
+  // Live-reactivity hook: notify subscribers that the plan was removed.
+  // (No plan.archived here — deletion is permanent, distinct from the
+  // soft-delete + archive path used by plan_update_status.)
+  bus.emit({
+    type: "plan.archived",
+    planId: plan.id,
+    slug: plan.slug,
+    title: plan.title,
+    timestamp: Date.now(),
+  });
 
   return {
     planId,

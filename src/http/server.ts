@@ -70,7 +70,7 @@ export async function buildHttpServer(args: BuildHttpServerArgs) {
     .use(plansRoute(db))
     .use(tasksRoute(db))
     .use(sessionsRoute(db))
-    .use(eventsRoute(args.sdkClient ?? null));
+    .use(eventsRoute({ ...(args.sdkClient ? { sdkClient: args.sdkClient } : {}) }));
 
   // Resolve web dist dir (configurable for testing, defaults to ./web/ sibling)
   const WEB_DIST = args.webDistDir

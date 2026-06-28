@@ -3,9 +3,15 @@
  *
  * All functions take a Database instance and return camelCase TS types.
  * createTasksBatch is transactional.
+ *
+ * Post-commit hooks: mutations emit typed events on the in-process bus
+ * (`src/events/bus.ts`) so SSE subscribers (`src/http/routes/events.ts`)
+ * receive live updates without polling. Bus emits happen AFTER the DB
+ * transaction commits so subscribers never see unpublished state.
  */
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { setExecutedByOnce } from "./plans.ts";
 import { ensureSession } from "./sessions.ts";
@@ -347,6 +353,22 @@ export function createTasksBatch(
     }
   });
   txn();
+
+  // Live-reactivity hook: notify subscribers for each newly-created task.
+  // Emit OUTSIDE the transaction so subscribers never observe in-flight
+  // batches that could roll back.
+  const ts = Date.now();
+  for (const task of results) {
+    bus.emit({
+      type: "task.created",
+      taskId: task.id,
+      planId: task.planId,
+      agent: task.agent,
+      description: task.description,
+      timestamp: ts,
+    });
+  }
+
   return results;
 }
 
@@ -452,6 +474,14 @@ export function updateTaskStatus(
   updatedBy?: string,
   ctx?: { agent?: string; sessionId?: string },
 ): TaskUpdateResult {
+  // Capture prior status + planId BEFORE the UPDATE for status_changed emit
+  // and so we always have the FK even when the UPDATE returns no row.
+  const priorRow = db
+    .query("SELECT status, plan_id FROM plan_tasks WHERE id = ?")
+    .get(id) as { status: TaskStatus; plan_id: string } | undefined;
+  const previousStatus = priorRow?.status;
+  const planId = priorRow?.plan_id;
+
   const now = Date.now();
   const setClauses: string[] = ["status = ?"];
   const params: SQLQueryBindings[] = [status];
@@ -548,6 +578,33 @@ export function updateTaskStatus(
   db.query(`UPDATE plan_tasks SET ${setClauses.join(", ")} WHERE id = ?`).run(...params);
   const task = getTask(db, id);
   if (!task) return null;
+
+  // Live-reactivity hook: notify subscribers that the task changed.
+  // task.updated always (catches result/error/metadataPatch changes);
+  // task.status_changed only on actual status transitions.
+  if (planId) {
+    const ts = Date.now();
+    bus.emit({
+      type: "task.updated",
+      taskId: task.id,
+      planId,
+      agent: task.agent,
+      status: task.status,
+      timestamp: ts,
+    });
+    if (previousStatus !== undefined && previousStatus !== status) {
+      bus.emit({
+        type: "task.status_changed",
+        taskId: task.id,
+        planId,
+        agent: task.agent,
+        previousStatus,
+        status: task.status,
+        timestamp: ts,
+      });
+    }
+  }
+
   return { ...task, truncation: truncationInfo };
 }
 

@@ -5,9 +5,14 @@
  * to enable unit testing without spinning up the full MCP harness.
  *
  * Behavior preserved verbatim from the original execute function.
+ *
+ * Post-commit hook: emits `plan.created` on the in-process event bus so the
+ * SSE route (`src/http/routes/events.ts`) can fan out to live subscribers.
+ * Emits OUTSIDE the transaction to avoid leaking unpublished state on errors.
  */
 
 import type { Database } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
 import { createPlan } from "./plans.ts";
 import { ensureSession } from "./sessions.ts";
 import type { Plan, PlanMetadata } from "./types.ts";
@@ -73,6 +78,17 @@ export function planCreateExecutor(
       ).run(plan.id, filePath);
     }
   }
+
+  // Live-reactivity hook: notify SSE subscribers that a new plan exists.
+  bus.emit({
+    type: "plan.created",
+    planId: plan.id,
+    slug: plan.slug,
+    title: plan.title,
+    status: plan.status,
+    priority: plan.priority,
+    timestamp: Date.now(),
+  });
 
   return plan;
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useApi } from "@/composables/useApi";
+import { useSseRefresh } from "@/composables/useSseRefresh";
 import { listPlans } from "@/api/plans";
 import { apiGet } from "@/api/client";
 import type { Health, Plan } from "@/types/api";
@@ -10,6 +11,17 @@ import { useTimeAgo } from "@vueuse/core";
 
 const health = useApi<Health>(() => apiGet<Health>("/health"));
 const plans = useApi<Plan[]>(() => listPlans({ limit: 5 }));
+
+// SSE: refresh on any plan/task/session event
+const { status: sseStatus } = useSseRefresh({
+  events: [
+    "plan.created", "plan.updated", "plan.status_changed", "plan.archived",
+    "task.created", "task.updated", "task.status_changed",
+    "session.started", "session.checkpoint", "session.ended",
+  ],
+  refreshKey: "/api/health",
+  refresh: () => { health.refresh(); plans.refresh(); },
+});
 
 function formatUptime(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -29,7 +41,19 @@ function TimeAgo({ timestamp }: { timestamp: number }) {
 <template>
   <div class="dashboard">
     <section class="health-section">
-      <h2 class="section-title">server</h2>
+      <div class="section-header">
+        <h2 class="section-title">server</h2>
+        <span
+          class="sse-dot"
+          :class="{
+            'sse-open': sseStatus === 'OPEN',
+            'sse-connecting': sseStatus === 'CONNECTING',
+            'sse-closed': sseStatus === 'CLOSED',
+          }"
+          :title="`SSE: ${sseStatus}`"
+          aria-label="SSE connection status"
+        />
+      </div>
       <LoadingSpinner v-if="health.loading.value" />
       <ErrorState
         v-else-if="health.error.value"
@@ -199,5 +223,20 @@ td {
 .cell-time {
   text-align: right;
   white-space: nowrap;
+}
+.sse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background var(--t-base);
+}
+.sse-open { background: var(--status-done); }
+.sse-connecting { background: var(--status-blocked); animation: sse-pulse 1.5s ease-in-out infinite; }
+.sse-closed { background: var(--status-failed); }
+@keyframes sse-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 </style>

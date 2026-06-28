@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { useRoute } from "vue-router";
 import { computed } from "vue";
+import { useSseRefresh } from "@/composables/useSseRefresh";
 
 const route = useRoute();
+
+// Global SSE status indicator — singleton, no extra connection
+const { status: sseStatus } = useSseRefresh({
+  events: ["hello"],
+  refreshKey: "__appshell_status__",
+  refresh: () => {},
+});
 
 const pageTitle = computed(() => {
   const name = route.name;
@@ -36,6 +44,16 @@ const pageTitle = computed(() => {
     <div class="main-area">
       <header class="top-header">
         <h1 class="page-title">{{ pageTitle }}</h1>
+        <span
+          class="sse-dot"
+          :class="{
+            'sse-open': sseStatus === 'OPEN',
+            'sse-connecting': sseStatus === 'CONNECTING',
+            'sse-closed': sseStatus === 'CLOSED',
+          }"
+          :title="`Live updates: ${sseStatus}`"
+          aria-label="SSE connection status"
+        />
       </header>
       <main class="content">
         <slot />
@@ -122,5 +140,21 @@ const pageTitle = computed(() => {
   flex: 1;
   padding: var(--space-4);
   overflow-y: auto;
+}
+.sse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: background var(--t-base);
+}
+.sse-open { background: var(--status-done); }
+.sse-connecting { background: var(--status-blocked); animation: sse-pulse 1.5s ease-in-out infinite; }
+.sse-closed { background: var(--status-failed); }
+@keyframes sse-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 </style>

@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useApi } from "@/composables/useApi";
+import { useSseRefresh } from "@/composables/useSseRefresh";
 import { listPlans } from "@/api/plans";
 import type { PlanStatus } from "@/types/api";
 import PlanListItem from "@/components/PlanListItem.vue";
@@ -14,6 +15,13 @@ const statusFilter = ref<PlanStatus | "">("");
 const plans = useApi(() => {
   const s = statusFilter.value;
   return s ? listPlans({ status: s as PlanStatus }) : listPlans();
+});
+
+// SSE: refresh on any plan event
+const { status: sseStatus } = useSseRefresh({
+  events: ["plan.created", "plan.updated", "plan.status_changed", "plan.archived"],
+  refreshKey: "/api/plans",
+  refresh: plans.refresh,
 });
 
 function handleRowClick(id: string): void {
@@ -45,6 +53,16 @@ const statuses: Array<{ value: PlanStatus | ""; label: string }> = [
       <button class="refresh-btn" :disabled="plans.loading.value" @click="plans.refresh()">
         refresh
       </button>
+      <span
+        class="sse-dot"
+        :class="{
+          'sse-open': sseStatus === 'OPEN',
+          'sse-connecting': sseStatus === 'CONNECTING',
+          'sse-closed': sseStatus === 'CLOSED',
+        }"
+        :title="`SSE: ${sseStatus}`"
+        aria-label="SSE connection status"
+      />
     </div>
 
     <LoadingSpinner v-if="plans.loading.value && !plans.data.value" />
@@ -134,5 +152,20 @@ th {
 .empty-msg {
   text-align: center;
   padding: var(--space-6);
+}
+.sse-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background var(--t-base);
+}
+.sse-open { background: var(--status-done); }
+.sse-connecting { background: var(--status-blocked); animation: sse-pulse 1.5s ease-in-out infinite; }
+.sse-closed { background: var(--status-failed); }
+@keyframes sse-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 </style>

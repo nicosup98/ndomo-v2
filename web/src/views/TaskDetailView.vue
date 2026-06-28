@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useApi } from "@/composables/useApi";
+import { useSseRefresh } from "@/composables/useSseRefresh";
 import { getTask } from "@/api/tasks";
 import StatusBadge from "@/components/StatusBadge.vue";
 import LoadingSpinner from "@/components/LoadingSpinner.vue";
@@ -11,6 +12,17 @@ const props = defineProps<{
 }>();
 
 const task = useApi(() => getTask(props.id));
+
+// SSE: refresh on task.* events matching this taskId
+useSseRefresh({
+  events: ["task.created", "task.updated", "task.status_changed"],
+  refreshKey: `/api/tasks/${props.id}`,
+  refresh: task.refresh,
+  filter: (p) => {
+    const payload = p as Record<string, unknown>;
+    return payload?.taskId === props.id;
+  },
+});
 
 function formatDuration(ms: number | null): string {
   if (ms == null) return "-";

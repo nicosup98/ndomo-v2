@@ -6,12 +6,19 @@
  * Uses timing-safe comparison to prevent timing attacks.
  *
  * Uses onRequest so the hook propagates across Elysia .use() boundaries.
- * Exempts from auth: /health (liveness probe) + non-/api paths (SPA static +
- * SPA history fallback). Only /api/* requires auth.
+ * Exempts from auth:
+ *   - /health                — liveness probe
+ *   - /api/events            — SSE push (browser EventSource cannot send
+ *                              Authorization headers; route is read-only —
+ *                              no mutations accepted)
+ *   - non-/api paths         — SPA static + history fallback
+ *
+ * Only /api/* (excluding /api/events) requires auth.
  *
  * Behavior:
  * - auth.required === false → skip entirely
  * - /health path → skip (always public)
+ * - /api/events path → skip (read-only SSE — see rationale above)
  * - non-/api path (SPA) → skip (public — Vue SPA serves static + history fallback)
  * - Password unset/empty → 503 auth_not_configured
  * - Missing/malformed Authorization → 401 + WWW-Authenticate
@@ -37,6 +44,11 @@ export function httpBasicAuth(httpConfig: HttpConfig) {
     // Exempt /health — public liveness probe
     const url = new URL(request.url);
     if (url.pathname === "/health") return;
+
+    // Exempt /api/events — SSE push channel. Browser EventSource cannot send
+    // custom Authorization headers, so this endpoint MUST be open. The route
+    // is read-only (no mutations) so it's safe to leave unauthenticated.
+    if (url.pathname === "/api/events") return;
 
     // Exempt non-/api paths — SPA static assets + history fallback are public.
     // Auth gates only the JSON API surface (/api/*). Users browse the SPA freely,

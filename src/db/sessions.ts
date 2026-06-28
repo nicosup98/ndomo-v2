@@ -4,9 +4,15 @@
  * Sessions track continuity across multiple agents working
  * toward a shared goal. They record checkpoints, agent history,
  * and key decisions.
+ *
+ * Post-commit hooks: each lifecycle mutation emits a typed event on the
+ * in-process bus (`src/events/bus.ts`) so SSE subscribers can react
+ * without polling. Bus emits happen AFTER the DB write so subscribers
+ * never observe unpublished state.
  */
 
 import type { Database } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
 import type { Session, SessionMetadata } from "./types.ts";
 import { sessionFromRow } from "./types.ts";
 
@@ -59,6 +65,16 @@ export function startSession(
   );
   const created = getSession(db, session.id);
   if (!created) throw new Error("ndomo: failed to create session");
+
+  // Live-reactivity hook: notify subscribers that a new session started.
+  bus.emit({
+    type: "session.started",
+    sessionId: created.id,
+    planId: created.planId,
+    goal: created.goal,
+    timestamp: Date.now(),
+  });
+
   return created;
 }
 
@@ -105,7 +121,18 @@ export function checkpointSession(
     )
     .run(now, JSON.stringify(state), keyDecisions ?? null, id);
   if (result.changes === 0) return null;
-  return getSession(db, id);
+
+  // Live-reactivity hook: notify subscribers of the checkpoint.
+  const sess = getSession(db, id);
+  if (sess) {
+    bus.emit({
+      type: "session.checkpoint",
+      sessionId: sess.id,
+      keyDecisions: sess.keyDecisions,
+      timestamp: Date.now(),
+    });
+  }
+  return sess;
 }
 
 export function appendAgentHistory(
@@ -131,5 +158,16 @@ export function endSession(db: Database, id: string): Session | null {
     .query("UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL")
     .run(now, id);
   if (result.changes === 0) return null;
-  return getSession(db, id);
+
+  // Live-reactivity hook: notify subscribers that the session ended.
+  const sess = getSession(db, id);
+  if (sess) {
+    bus.emit({
+      type: "session.ended",
+      sessionId: sess.id,
+      outcome: sess.outcome,
+      timestamp: Date.now(),
+    });
+  }
+  return sess;
 }

@@ -9,6 +9,11 @@ vi.mock("../src/api/plans", () => ({
   listPlans: vi.fn(),
 }));
 
+// Mock useSseRefresh — no EventSource in happy-dom
+vi.mock("../src/composables/useSseRefresh", () => ({
+  useSseRefresh: () => ({ status: { value: "CONNECTING" } }),
+}));
+
 import { listPlans } from "../src/api/plans";
 
 const mockPlans: Plan[] = [
