@@ -33,11 +33,9 @@ const showClosedBanner = computed(() => {
 <template>
   <AuthPrompt v-if="!isAuthed" />
   <AppShell>
-    <div v-if="showClosedBanner" class="sse-banner" role="alert">
-      <span>Live updates disconnected — refresh manually</span>
-      <button class="sse-banner-dismiss" @click="bannerDismissed = true">
-        dismiss
-      </button>
+    <div v-if="showClosedBanner" class="notification is-danger is-light mb-0" role="alert">
+      <button class="delete" aria-label="dismiss" @click="bannerDismissed = true"></button>
+      Live updates disconnected — refresh manually
     </div>
     <router-view />
   </AppShell>
@@ -46,32 +44,4 @@ const showClosedBanner = computed(() => {
 <style>
 @import "bulma/css/bulma.min.css";
 @import "./styles/main.css";
-</style>
-
-<style scoped>
-.sse-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  background: var(--status-failed);
-  color: var(--text-primary);
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.sse-banner-dismiss {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: var(--space-1) var(--space-2);
-  background: transparent;
-  border-color: var(--text-primary);
-  color: var(--text-primary);
-}
-.sse-banner-dismiss:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
 </style>

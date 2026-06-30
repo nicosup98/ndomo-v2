@@ -18,54 +18,44 @@ async function handleSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="auth-overlay" role="dialog" aria-modal="true" aria-label="Authentication required">
-    <form class="auth-prompt" @submit.prevent="handleSubmit">
-      <h2>auth required</h2>
-      <p class="muted">enter OPENCODE_SERVER_PASSWORD</p>
-      <input
-        v-model="password"
-        type="password"
-        placeholder="password"
-        autofocus
-        :disabled="submitting"
-        aria-label="Password"
-      />
-      <button type="submit" :disabled="submitting || !password.trim()">submit</button>
-      <p v-if="error" class="error" role="alert">{{ error }}</p>
-    </form>
+  <div class="modal is-active" role="dialog" aria-modal="true" aria-label="Authentication required">
+    <div class="modal-background"></div>
+    <div class="modal-content">
+      <div class="box">
+        <form @submit.prevent="handleSubmit">
+          <h2 class="title is-4 has-text-centered">auth required</h2>
+          <p class="subtitle is-6 has-text-grey has-text-centered mb-4">
+            enter OPENCODE_SERVER_PASSWORD
+          </p>
+          <div class="field">
+            <div class="control">
+              <input
+                v-model="password"
+                class="input"
+                type="password"
+                placeholder="password"
+                autofocus
+                :disabled="submitting"
+                aria-label="Password"
+              />
+            </div>
+          </div>
+          <div class="field">
+            <div class="control">
+              <button
+                type="submit"
+                class="button is-primary is-fullwidth"
+                :disabled="submitting || !password.trim()"
+              >
+                submit
+              </button>
+            </div>
+          </div>
+          <p v-if="error" class="has-text-danger has-text-centered mt-3" role="alert">
+            {{ error }}
+          </p>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.auth-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(13, 15, 18, 0.92);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-.auth-prompt {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  padding: var(--space-6);
-  min-width: 320px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-h2 {
-  margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-primary);
-}
-p { margin: 0; font-size: var(--fs-sm); }
-.muted { color: var(--text-muted); }
-.error { color: var(--status-failed); }
-input { width: 100%; }
-</style>

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useRoute } from "vue-router";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useSseRefresh } from "@/composables/useSseRefresh";
 
 const route = useRoute();
+const menuOpen = ref(false);
 
 // Global SSE status indicator — singleton, no extra connection
 const { status: sseStatus } = useSseRefresh({
@@ -23,136 +24,89 @@ const pageTitle = computed(() => {
 </script>
 
 <template>
-  <div class="app-shell">
-    <nav class="sidebar" aria-label="Main navigation">
-      <div class="sidebar-logo">
-        <span class="logo-text">ndomo</span>
-      </div>
-      <ul class="nav-list">
-        <li>
-          <router-link to="/" class="nav-link" :class="{ active: route.name === 'dashboard' }">
-            dashboard
-          </router-link>
-        </li>
-        <li>
-          <router-link to="/plans" class="nav-link" :class="{ active: route.name === 'plans' || route.name === 'plan-detail' }">
-            plans
-          </router-link>
-        </li>
-      </ul>
-    </nav>
-    <div class="main-area">
-      <header class="top-header">
-        <h1 class="page-title">{{ pageTitle }}</h1>
-        <span
-          class="sse-dot"
-          :class="{
-            'sse-open': sseStatus === 'OPEN',
-            'sse-connecting': sseStatus === 'CONNECTING',
-            'sse-closed': sseStatus === 'CLOSED',
-          }"
-          :title="`Live updates: ${sseStatus}`"
-          aria-label="SSE connection status"
-        />
-      </header>
-      <main class="content">
-        <slot />
-      </main>
+  <nav class="navbar is-dark has-shadow" role="navigation" aria-label="main navigation">
+    <div class="navbar-brand">
+      <router-link to="/" class="navbar-item has-text-weight-bold is-size-5" @click="menuOpen = false">
+        ndomo
+      </router-link>
+      <a
+        role="button"
+        class="navbar-burger"
+        :class="{ 'is-active': menuOpen }"
+        aria-label="menu"
+        :aria-expanded="menuOpen"
+        @click="menuOpen = !menuOpen"
+      >
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </a>
     </div>
-  </div>
+
+    <div class="navbar-menu" :class="{ 'is-active': menuOpen }">
+      <div class="navbar-start">
+        <router-link
+          to="/"
+          class="navbar-item"
+          :class="{ 'is-active': route.path === '/' }"
+          @click="menuOpen = false"
+        >
+          dashboard
+        </router-link>
+        <router-link
+          to="/plans"
+          class="navbar-item"
+          :class="{ 'is-active': route.path.startsWith('/plans') }"
+          @click="menuOpen = false"
+        >
+          plans
+        </router-link>
+      </div>
+
+      <div class="navbar-end">
+        <div class="navbar-item">
+          <span
+            class="sse-dot"
+            :class="{
+              'sse-open': sseStatus === 'OPEN',
+              'sse-connecting': sseStatus === 'CONNECTING',
+              'sse-closed': sseStatus === 'CLOSED',
+            }"
+            :title="`Live updates: ${sseStatus}`"
+            aria-label="SSE connection status"
+          />
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <section class="section py-4">
+    <div class="container is-fluid">
+      <h2 class="title is-5 mb-4">{{ pageTitle }}</h2>
+      <slot />
+    </div>
+  </section>
 </template>
 
 <style scoped>
-.app-shell {
-  display: flex;
-  min-height: 100vh;
-}
-.sidebar {
-  width: var(--sidebar-w);
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-}
-.sidebar-logo {
-  padding: var(--space-4) var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.logo-text {
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-bold);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-primary);
-}
-.nav-list {
-  list-style: none;
-  margin: 0;
-  padding: var(--space-2) 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.nav-link {
-  display: block;
-  padding: var(--space-2) var(--space-4);
-  font-size: var(--fs-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
-  border-bottom: none;
-  transition: color var(--t-fast), background var(--t-fast);
-}
-.nav-link:hover {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border-bottom: none;
-}
-.nav-link.active {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-}
-.main-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.top-header {
-  height: var(--header-h);
-  padding: 0 var(--space-4);
-  display: flex;
-  align-items: center;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  flex-shrink: 0;
-}
-.page-title {
-  margin: 0;
-  font-size: var(--fs-md);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-primary);
-}
-.content {
-  flex: 1;
-  padding: var(--space-4);
-  overflow-y: auto;
-}
 .sse-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  margin-left: auto;
-  transition: background var(--t-base);
+  transition: background 0.3s;
 }
-.sse-open { background: var(--status-done); }
-.sse-connecting { background: var(--status-blocked); animation: sse-pulse 1.5s ease-in-out infinite; }
-.sse-closed { background: var(--status-failed); }
+.sse-open {
+  background: var(--status-done);
+}
+.sse-connecting {
+  background: var(--status-blocked);
+  animation: sse-pulse 1.5s ease-in-out infinite;
+}
+.sse-closed {
+  background: var(--status-failed);
+}
 @keyframes sse-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
