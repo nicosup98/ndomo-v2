@@ -63,7 +63,17 @@ function handleTaskClick(taskId: string): void {
 </script>
 
 <template>
-  <div class="plan-detail">
+  <section class="section">
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb mb-4" aria-label="breadcrumbs">
+      <ul>
+        <li><router-link :to="{ name: 'plans' }">plans</router-link></li>
+        <li class="is-active">
+          <a href="#" aria-current="page">{{ plan.data.value?.slug ?? props.id }}</a>
+        </li>
+      </ul>
+    </nav>
+
     <LoadingSpinner v-if="plan.loading.value && !plan.data.value" />
     <ErrorState
       v-else-if="plan.error.value"
@@ -72,217 +82,99 @@ function handleTaskClick(taskId: string): void {
       @retry="plan.refresh"
     />
     <template v-else-if="plan.data.value">
-      <section class="plan-meta">
-        <div class="meta-header">
-          <h2 class="plan-title">{{ plan.data.value.title }}</h2>
-          <StatusBadge :status="plan.data.value.status" />
-        </div>
-        <p class="plan-slug muted">{{ plan.data.value.slug }}</p>
-        <p class="plan-overview">{{ plan.data.value.overview }}</p>
-        <div class="meta-grid">
-          <div class="meta-item">
-            <span class="label">priority</span>
-            <span class="val">{{ plan.data.value.priority }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">complexity</span>
-            <span class="val">{{ plan.data.value.complexity }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">created</span>
-            <span class="val">{{ useTimeAgo(plan.data.value.createdAt).value }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">updated</span>
-            <span class="val">{{ useTimeAgo(plan.data.value.updatedAt).value }}</span>
-          </div>
-          <div v-if="plan.data.value.createdBy" class="meta-item">
-            <span class="label">created by</span>
-            <span class="val">{{ plan.data.value.createdBy }}</span>
-          </div>
-          <div v-if="plan.data.value.executedByAgent" class="meta-item">
-            <span class="label">executed by</span>
-            <span class="val">{{ plan.data.value.executedByAgent }}</span>
-          </div>
-        </div>
-        <div v-if="plan.data.value.approach" class="approach">
-          <span class="label">approach</span>
-          <pre class="approach-text">{{ plan.data.value.approach }}</pre>
-        </div>
-      </section>
-
-      <section class="tasks-section">
-        <h3 class="section-title">tasks</h3>
-        <LoadingSpinner v-if="tasks.loading.value && !tasks.data.value" />
-        <ErrorState
-          v-else-if="tasks.error.value"
-          :message="tasks.error.value.message"
-          retryable
-          @retry="tasks.refresh"
-        />
-        <template v-else-if="groupedTasks">
-          <div
-            v-for="status in (['running', 'pending', 'failed', 'blocked', 'done'] as TaskStatus[])"
-            :key="status"
-            class="task-group"
-          >
-            <template v-if="groupedTasks[status].length > 0">
-              <h4 class="group-label">
-                {{ status }}
-                <span class="group-count">{{ groupedTasks[status].length }}</span>
-              </h4>
-              <table class="tasks-table">
-                <thead>
-                  <tr>
-                    <th>status</th>
-                    <th>agent</th>
-                    <th>description</th>
-                    <th>duration</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <TaskRow
-                    v-for="task in groupedTasks[status]"
-                    :key="task.id"
-                    :task="task"
-                    @click="handleTaskClick"
-                  />
-                </tbody>
-              </table>
-            </template>
-          </div>
-          <p
-            v-if="tasks.data.value?.length === 0"
-            class="muted"
-            style="text-align: center; padding: var(--space-6)"
-          >
-            no tasks
+      <!-- Plan header card -->
+      <div class="card mb-5">
+        <header class="card-header">
+          <p class="card-header-title">
+            {{ plan.data.value.title }}
+            <StatusBadge :status="plan.data.value.status" class="ml-3" />
           </p>
-        </template>
-      </section>
-    </template>
-  </div>
-</template>
+        </header>
+        <div class="card-content">
+          <p class="has-text-grey is-size-7 mb-2">{{ plan.data.value.slug }}</p>
+          <p class="mb-4">{{ plan.data.value.overview }}</p>
 
-<style scoped>
-.plan-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-.plan-meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-}
-.meta-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-.plan-title {
-  margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-semibold);
-  color: var(--text-primary);
-}
-.plan-slug {
-  margin: 0;
-  font-size: var(--fs-xs);
-}
-.plan-overview {
-  margin: 0;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  line-height: var(--lh-relaxed);
-}
-.meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: var(--space-3);
-}
-.meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.label {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.val {
-  font-size: var(--fs-sm);
-  color: var(--text-primary);
-}
-.approach {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.approach-text {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--bg-elevated);
-  padding: var(--space-3);
-  border-radius: var(--r-sm);
-  max-height: 300px;
-  overflow-y: auto;
-}
-.section-title {
-  margin: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-secondary);
-}
-.tasks-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.task-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.group-label {
-  margin: 0;
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.group-count {
-  font-size: var(--fs-xs);
-  color: var(--text-disabled);
-}
-.tasks-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-th {
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
-}
-</style>
+          <div class="columns is-multiline">
+            <div class="column is-one-third">
+              <p class="heading">priority</p>
+              <p class="title is-5">{{ plan.data.value.priority }}</p>
+            </div>
+            <div class="column is-one-third">
+              <p class="heading">complexity</p>
+              <p class="title is-5">{{ plan.data.value.complexity }}</p>
+            </div>
+            <div class="column is-one-third">
+              <p class="heading">created</p>
+              <p class="title is-5">{{ useTimeAgo(plan.data.value.createdAt).value }}</p>
+            </div>
+            <div class="column is-one-third">
+              <p class="heading">updated</p>
+              <p class="title is-5">{{ useTimeAgo(plan.data.value.updatedAt).value }}</p>
+            </div>
+            <div v-if="plan.data.value.createdBy" class="column is-one-third">
+              <p class="heading">created by</p>
+              <p class="title is-5">{{ plan.data.value.createdBy }}</p>
+            </div>
+            <div v-if="plan.data.value.executedByAgent" class="column is-one-third">
+              <p class="heading">executed by</p>
+              <p class="title is-5">{{ plan.data.value.executedByAgent }}</p>
+            </div>
+          </div>
+
+          <div v-if="plan.data.value.approach" class="mt-4">
+            <p class="heading mb-2">approach</p>
+            <pre class="box has-background-dark has-text-light is-size-7" style="white-space: pre-wrap; max-height: 300px; overflow-y: auto;">{{ plan.data.value.approach }}</pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tasks section -->
+      <h3 class="title is-4 mb-3">tasks</h3>
+      <LoadingSpinner v-if="tasks.loading.value && !tasks.data.value" />
+      <ErrorState
+        v-else-if="tasks.error.value"
+        :message="tasks.error.value.message"
+        retryable
+        @retry="tasks.refresh"
+      />
+      <template v-else-if="groupedTasks">
+        <div
+          v-for="status in (['running', 'pending', 'failed', 'blocked', 'done'] as TaskStatus[])"
+          :key="status"
+          class="mb-4"
+        >
+          <template v-if="groupedTasks[status].length > 0">
+            <h4 class="subtitle is-6 has-text-grey mb-2">
+              {{ status }}
+              <span class="tag is-small is-light ml-2">{{ groupedTasks[status].length }}</span>
+            </h4>
+            <table class="table is-hoverable is-fullwidth">
+              <thead>
+                <tr>
+                  <th>status</th>
+                  <th>agent</th>
+                  <th>description</th>
+                  <th class="has-text-right">duration</th>
+                </tr>
+              </thead>
+              <tbody>
+                <TaskRow
+                  v-for="task in groupedTasks[status]"
+                  :key="task.id"
+                  :task="task"
+                  @click="handleTaskClick"
+                />
+              </tbody>
+            </table>
+          </template>
+        </div>
+        <p
+          v-if="tasks.data.value?.length === 0"
+          class="has-text-centered has-text-grey py-6"
+        >
+          no tasks
+        </p>
+      </template>
+    </template>
+  </section>
+</template>
