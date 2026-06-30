@@ -5,6 +5,8 @@ import { getTask } from "@/api/tasks";
 import StatusBadge from "@/components/StatusBadge.vue";
 import LoadingSpinner from "@/components/LoadingSpinner.vue";
 import ErrorState from "@/components/ErrorState.vue";
+import StatusActions from "@/components/StatusActions.vue";
+import AgentReassignDropdown from "@/components/AgentReassignDropdown.vue";
 import { useTimeAgo } from "@vueuse/core";
 
 const props = defineProps<{
@@ -112,6 +114,17 @@ function formatDuration(ms: number | null): string {
           <pre class="is-family-monospace" style="white-space: pre-wrap; word-break: break-word;">{{ task.data.value.error }}</pre>
         </div>
       </article>
+
+      <!-- Task Actions -->
+      <div class="mt-5 flex gap-2 flex-wrap items-start">
+        <StatusActions kind="task" :task="task.data.value" @changed="task.refresh()" />
+        <AgentReassignDropdown
+          v-if="task.data.value.status === 'pending' || task.data.value.status === 'running'"
+          :taskId="task.data.value.id"
+          :currentAgent="task.data.value.agent"
+          @reassigned="task.refresh()"
+        />
+      </div>
     </template>
   </section>
 </template>

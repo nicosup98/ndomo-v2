@@ -9,6 +9,9 @@ import StatusBadge from "@/components/StatusBadge.vue";
 import TaskRow from "@/components/TaskRow.vue";
 import LoadingSpinner from "@/components/LoadingSpinner.vue";
 import ErrorState from "@/components/ErrorState.vue";
+import EditPlanForm from "@/components/EditPlanForm.vue";
+import StatusActions from "@/components/StatusActions.vue";
+import CreateTaskForm from "@/components/CreateTaskForm.vue";
 import { useRouter } from "vue-router";
 import { useTimeAgo } from "@vueuse/core";
 
@@ -127,6 +130,35 @@ function handleTaskClick(taskId: string): void {
           </div>
         </div>
       </div>
+
+      <!-- Status Actions -->
+      <div class="mb-5">
+        <StatusActions kind="plan" :plan="plan.data.value" @changed="plan.refresh()" />
+      </div>
+
+      <!-- Edit Plan (collapsible) -->
+      <details class="mb-5">
+        <summary class="title is-5 mb-3" style="cursor: pointer;">Edit Plan</summary>
+        <div class="box">
+          <EditPlanForm
+            :plan="plan.data.value"
+            @updated="plan.refresh()"
+            @cancel="() => {}"
+          />
+        </div>
+      </details>
+
+      <!-- Add Task -->
+      <details class="mb-5">
+        <summary class="title is-5 mb-3" style="cursor: pointer;">Add Task</summary>
+        <div class="box">
+          <CreateTaskForm
+            :planId="plan.data.value.id"
+            @created="tasks.refresh()"
+            @cancel="() => {}"
+          />
+        </div>
+      </details>
 
       <!-- Tasks section -->
       <h3 class="title is-4 mb-3">tasks</h3>

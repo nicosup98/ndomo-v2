@@ -49,6 +49,11 @@ const statuses: Array<{ value: PlanStatus | ""; label: string }> = [
       </div>
       <div class="level-right">
         <div class="level-item">
+          <router-link to="/plans/new" class="btn btn-primary btn-sm">
+            + Create Plan
+          </router-link>
+        </div>
+        <div class="level-item">
           <div class="field has-addons">
             <div class="control">
               <span class="button is-static is-small">status</span>
