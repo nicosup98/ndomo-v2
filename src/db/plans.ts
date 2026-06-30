@@ -40,8 +40,8 @@ export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updated
     createdAt: now,
   });
   db.query(
-    `INSERT INTO plans (id, slug, title, status, priority, created_at, updated_at, approved_at, completed_at, session_id, overview, approach, complexity, metadata, created_by, updated_by, source_session_id, source_message_id, category, original_plan_data, created_by_agent, executed_by_agent, executed_by_session)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (id, slug, title, status, priority, created_at, updated_at, approved_at, completed_at, session_id, overview, approach, complexity, metadata, created_by, updated_by, source_session_id, source_message_id, category, original_plan_data, created_by_agent, executed_by_agent, executed_by_session, owner)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     plan.id,
     plan.slug,
@@ -66,6 +66,7 @@ export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updated
     plan.createdByAgent ?? null,
     plan.executedByAgent ?? null,
     plan.executedBySession ?? null,
+    plan.owner ?? "foreman",
   );
   return { ...plan, createdAt: now, updatedAt: now, originalPlanData };
 }
@@ -286,6 +287,59 @@ export function updatePlanStatus(
         timestamp: ts,
       });
     }
+  }
+  return result;
+}
+
+/**
+ * Generic plan field updater — covers fields NOT handled by updatePlanStatus:
+ * title, overview, approach, complexity, category, owner.
+ * Throws on invalid owner (defense in depth since CHECK was deferred).
+ */
+export function updatePlanFields(
+  db: Database,
+  planId: string,
+  fields: Partial<Pick<Plan, "title" | "overview" | "approach" | "complexity" | "category" | "owner">>,
+  opts: { updatedBy: string },
+): Plan | null {
+  const validOwners = new Set(["foreman", "craftsman", "warden"]);
+  if (fields.owner !== undefined && !validOwners.has(fields.owner)) {
+    throw new Error(`invalid owner "${fields.owner}" — must be foreman|craftsman|warden`);
+  }
+
+  const sets: string[] = [];
+  const args: SQLQueryBindings[] = [];
+  const map: Record<keyof typeof fields, string> = {
+    title: "title",
+    overview: "overview",
+    approach: "approach",
+    complexity: "complexity",
+    category: "category",
+    owner: "owner",
+  };
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) continue;
+    sets.push(`${map[k as keyof typeof fields]} = ?`);
+    args.push(v as SQLQueryBindings);
+  }
+  if (sets.length === 0) return getPlan(db, planId);
+
+  sets.push("updated_at = ?");
+  sets.push("updated_by = ?");
+  args.push(Date.now(), opts.updatedBy);
+  args.push(planId);
+
+  db.query(`UPDATE plans SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  const result = getPlan(db, planId);
+  if (result) {
+    bus.emit({
+      type: "plan.updated",
+      planId: result.id,
+      slug: result.slug,
+      title: result.title,
+      status: result.status,
+      timestamp: Date.now(),
+    });
   }
   return result;
 }

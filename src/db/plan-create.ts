@@ -62,6 +62,7 @@ export function planCreateExecutor(
     sourceSessionId: ctx.sessionID ?? null,
     sourceMessageId: ctx.messageID ?? null,
     category: typedMeta.category ?? null,
+    owner: "foreman",
     metadata: typedMeta,
     archivedAt: null,
     originalPlanData: null,

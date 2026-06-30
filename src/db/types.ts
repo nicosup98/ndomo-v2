@@ -12,6 +12,8 @@ export type TaskStatus = "pending" | "running" | "done" | "failed" | "blocked";
 
 export type PlanCategory = "feature" | "refactor" | "bugfix" | "docs" | "infra";
 
+export type PlanOwner = "foreman" | "craftsman" | "warden";
+
 export type SessionOutcome = "success" | "partial" | "failed" | "abandoned";
 
 export interface PlanMetadata {
@@ -58,6 +60,8 @@ export interface Plan {
   sourceSessionId: string | null;
   sourceMessageId: string | null;
   category: PlanCategory | null;
+  /** v16: which agent owns this plan (ADR-010). Defaults to 'foreman' at DB level. */
+  owner?: PlanOwner;
   metadata: PlanMetadata;
   /** v5: soft delete timestamp (null = active, number = archived epoch ms) */
   archivedAt: number | null;
@@ -148,6 +152,7 @@ interface PlanRow {
   source_session_id: string | null;
   source_message_id: string | null;
   category: string | null;
+  owner: string;
   archived_at: number | null;
   original_plan_data: string | null;
   created_by_agent: string | null;
@@ -221,6 +226,7 @@ export function planFromRow(row: unknown): Plan {
     sourceSessionId: r.source_session_id ?? null,
     sourceMessageId: r.source_message_id ?? null,
     category: (r.category ?? null) as PlanCategory | null,
+    owner: (r.owner ?? "foreman") as PlanOwner,
     metadata: (r.metadata != null ? JSON.parse(r.metadata) : {}) as PlanMetadata,
     archivedAt: r.archived_at ?? null,
     originalPlanData: r.original_plan_data ?? null,

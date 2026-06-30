@@ -372,6 +372,60 @@ export function createTasksBatch(
   return results;
 }
 
+/**
+ * Create a single task on a plan.
+ * Thin wrapper around createTasksBatch — auto-allocates next order_index.
+ */
+export function createTask(
+  db: Database,
+  planId: string,
+  task: Omit<
+    PlanTask,
+    | "id"
+    | "planId"
+    | "status"
+    | "startedAt"
+    | "completedAt"
+    | "result"
+    | "error"
+    | "archivedAt"
+    | "originalPlanData"
+    | "orderIndex"
+  >,
+): PlanTask {
+  const created = createTasksBatch(db, planId, [{ ...task }]);
+  return created[0]!;
+}
+
+/**
+ * Reassign a task to a different agent (ADR-010 orchestration).
+ * Updates agent + bumps updated_at. Emits task.updated event.
+ */
+export function reassignTask(
+  db: Database,
+  taskId: string,
+  newAgent: string,
+  opts: { updatedBy: string },
+): PlanTask | null {
+  if (!newAgent || typeof newAgent !== "string") {
+    throw new Error("invalid agent — must be non-empty string");
+  }
+  const now = Date.now();
+  // plan_tasks has created_by/updated_by (v3 audit fixes) but no updated_at column.
+  // The original_plan_data JSON snapshot (v6) captures the agent at creation time.
+  db.query("UPDATE plan_tasks SET agent = ?, updated_by = ? WHERE id = ?")
+    .run(newAgent, opts.updatedBy, taskId);
+  bus.emit({
+    type: "task.updated",
+    taskId: taskId,
+    planId: "", // will be filled by getTask
+    agent: newAgent,
+    status: "pending", // will be filled by getTask
+    timestamp: now,
+  });
+  return getTask(db, taskId);
+}
+
 export function getTask(db: Database, id: string): PlanTask | null {
   const row = db.query("SELECT * FROM plan_tasks WHERE id = ?").get(id);
   return row != null ? taskFromRow(row) : null;

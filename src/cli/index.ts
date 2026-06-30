@@ -11,11 +11,15 @@
  *   vacuum    Reclaim disk space from .ndomo/state.db
  *   smoke     Run smoke tests
  *   install   Install agents, skills, and config into ~/.config/opencode/
+ *   plan      Manage plans: create | list | show | update | approve | complete | delete | assign-task
+ *   task      Manage tasks: create | list | show | update | reassign | complete | fail
  *   help      Show this help
  *
  * Each subcommand can also be run directly:
  *   bun run src/cli/status.ts --plans
  *   bun run src/cli/serve.ts --port 8080
+ *   bun run src/cli/plan.ts create --slug foo --title Foo --overview "Foo plan"
+ *   bun run src/cli/task.ts create --plan <planId> --agent craft --description "Do something"
  */
 
 const COMMANDS: Record<
@@ -62,6 +66,20 @@ const COMMANDS: Record<
     run: async (args) => {
       const { runInstall } = await import("./install.ts");
       await runInstall(args);
+    },
+  },
+  plan: {
+    description: "Manage plans: create | list | show | update | approve | complete | delete | assign-task",
+    run: async (args) => {
+      const { runPlan } = await import("./plan.ts");
+      runPlan(args);
+    },
+  },
+  task: {
+    description: "Manage tasks: create | list | show | update | reassign | complete | fail",
+    run: async (args) => {
+      const { runTask } = await import("./task.ts");
+      runTask(args);
     },
   },
 };

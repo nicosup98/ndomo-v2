@@ -27,6 +27,7 @@ export {
   listPlans,
   removePlanTag,
   searchPlans,
+  updatePlanFields,
   updatePlanStatus,
 } from "./plans.ts";
 export type { ProjectDirContext } from "./resolve-project-dir.ts";
@@ -45,12 +46,14 @@ export type { TaskTruncationInfo, TaskUpdateResult } from "./tasks.ts";
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 export {
   addTaskTag,
+  createTask,
   createTasksBatch,
   getTask,
   getTaskTags,
   listTasksByPlan,
   nextTaskForAgent,
   removeTaskTag,
+  reassignTask,
   searchTasks,
   splitFilesByStack,
   updateTaskStatus,
@@ -76,6 +79,7 @@ export type {
   Plan,
   PlanCategory,
   PlanMetadata,
+  PlanOwner,
   PlanStatus,
   PlanTask,
   Session,

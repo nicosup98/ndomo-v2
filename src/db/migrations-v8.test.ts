@@ -43,6 +43,7 @@ function makePlan(overrides: Partial<Parameters<typeof createPlan>[1]> = {}): Pl
     sourceSessionId: null,
     sourceMessageId: null,
     category: null,
+    owner: "foreman",
     metadata: {},
     archivedAt: null,
     ...overrides,
@@ -267,6 +268,7 @@ describe("v9: plan_progress view fix", () => {
       sourceSessionId: null,
       sourceMessageId: null,
       category: null,
+      owner: "foreman",
       metadata: {},
       archivedAt: null,
     });
@@ -287,6 +289,7 @@ describe("v9: plan_progress view fix", () => {
       sourceSessionId: null,
       sourceMessageId: null,
       category: null,
+      owner: "foreman",
       metadata: {},
       archivedAt: null,
     });
