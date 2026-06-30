@@ -81,6 +81,72 @@ No backend changes needed if the API already exists. Elysia auto-serves the new 
 - **Unit (Vitest)**: `bun run web:test` — api client, composables, components.
 - **Integration**: `src/http/__tests__/spa.test.ts` — boots Elysia with fake SPA dist, tests static serving, SPA fallback, 503 when unbuilt.
 
+## Styling with Bulma
+
+The Web UI uses **[Bulma 1.0](https://bulma.io)** as its CSS framework.
+
+### Why Bulma
+
+- **CSS-only**: no JavaScript runtime, no jQuery dependency. Styles load from a single CSS import.
+- **Mature and semantic**: well-documented class names (`is-primary`, `is-success`, `has-text-danger`) map directly to intent.
+- **Low learning curve**: utility-free — class names describe what they do.
+- **Modern**: built on CSS custom properties, responsive by default.
+
+### How it works
+
+Bulma is imported once in `web/src/styles/main.css`:
+
+```css
+/* main.css */
+@import "bulma/css/bulma.min.css";
+
+:root {
+  /* ndomo status palette */
+  --status-pending: #8b95a3;
+  --status-running: #5eb3ff;
+  --status-done: #6ee7b7;
+  --status-failed: #ef4444;
+  --status-blocked: #f59e0b;
+  /* plan statuses */
+  --status-draft: #6b7280;
+  --status-approved: #a78bfa;
+  --status-executing: #5eb3ff;
+  --status-completed: #6ee7b7;
+  --status-abandoned: #5a6470;
+}
+```
+
+### Using Bulma in Vue templates
+
+Bulma classes are plain strings on standard HTML elements:
+
+```html
+<div class="card">
+  <header class="card-header">
+    <p class="card-header-title">Plan: rebuild web UI</p>
+  </header>
+  <div class="card-content">
+    <span class="tag is-success">completed</span>
+  </div>
+</div>
+```
+
+No `<script>` import needed — Bulma is a stylesheet, not a component library.
+
+### Status palette
+
+Status colors live as CSS custom properties in `main.css`. Reference them in custom styles:
+
+```css
+.status-badge--pending { color: var(--status-pending); }
+```
+
+### Adding custom utility classes
+
+Add plain CSS to `main.css`. No preprocessors required — Bulma 1.0 is fully customizable via CSS variables.
+
+> **Note:** `sass` is **not** a dependency. SCSS customization is deferred — evaluate later if Bulma variable overrides or mixins become necessary.
+
 ## File map
 
 ```
@@ -96,7 +162,7 @@ web/
 │   ├── components/      # AppShell, AuthPrompt, StatusBadge, etc.
 │   ├── composables/     # useApi, useAuth, useEvents (stubbed)
 │   ├── router/          # vue-router config (hash mode)
-│   ├── styles/          # tokens.css + globals.css
+│   ├── styles/          # main.css (Bulma import + status palette)
 │   ├── types/           # api.ts (Plan, Task, Session, etc.)
 │   └── views/           # Dashboard, PlanList, PlanDetail, TaskDetail, NotFound
 └── __tests__/           # Vitest specs

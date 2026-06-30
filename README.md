@@ -168,7 +168,7 @@ See [docs/integrations.md](docs/integrations.md) for details.
 
 ## Web UI
 
-The HTTP server includes a read-only Vue 3 SPA for browsing plans, tasks, and sessions in the browser. Single-port topology — the same Elysia process serves both the API (`/api/*`) and the SPA (everything else, with hash-mode fallback).
+The HTTP server includes a read-only Vue 3 SPA for browsing plans, tasks, and sessions in the browser. Single-port topology — the same Elysia process serves both the API (`/api/*`) and the SPA (everything else, with hash-mode fallback). Web UI uses **Bulma 1.0** (no jQuery, CSS-only, ~250KB minified). Status palette exposed as CSS custom properties in `web/src/styles/main.css`.
 
 See [docs/web-ui.md](docs/web-ui.md) for architecture, build pipeline, and extension guide.
 

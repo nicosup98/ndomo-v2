@@ -66,6 +66,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fires) no longer block subsequent writes indefinitely. Admin tool
   `ndomo_write_unlock` exposed for manual recovery.
 
+## [0.3.0] - 2026-06-30
+
+### Changed
+
+- Web UI redesigned with **Bulma 1.0** CSS framework (CSS-only, no jQuery,
+  ~250KB minified). Status palette exposed as CSS custom properties in
+  `web/src/styles/main.css`.
+
+### Added
+
+- `web/src/styles/main.css` — Bulma entry point + status palette CSS custom
+  properties (`--status-pending`, `--status-running`, `--status-done`,
+  `--status-failed`, `--status-blocked`, plus plan statuses).
+- 53 unit tests for web UI (including `StatusBadge` regression test).
+
+### Removed
+
+- `web/src/styles/globals.css` and `web/src/styles/tokens.css` — replaced
+  by `web/src/styles/main.css`.
+
 ## [0.1.0] - 2026-06-20
 
 ### Added
