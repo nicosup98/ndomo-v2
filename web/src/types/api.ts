@@ -136,3 +136,82 @@ export interface ApiError {
   message?: string;
   status?: number;
 }
+
+// ─── Write body types (mirror src/http/schemas.ts) ───────────────────────────
+
+export type PlanOwner = "foreman" | "craftsman" | "warden";
+
+export interface PlanCreateBody {
+  slug: string;
+  title: string;
+  overview: string;
+  approach?: string;
+  priority?: number;
+  complexity?: number;
+  category?: PlanCategory;
+  owner?: PlanOwner;
+  metadata?: Record<string, unknown>;
+  createdBy: string;
+}
+
+export interface PlanUpdateBody {
+  title?: string;
+  overview?: string;
+  approach?: string;
+  priority?: number;
+  complexity?: number;
+  category?: PlanCategory;
+  owner?: PlanOwner;
+  metadata?: Record<string, unknown>;
+  updatedBy: string;
+}
+
+export interface PlanStatusPatch {
+  status: PlanStatus;
+  updatedBy: string;
+  result?: string;
+  error?: string;
+}
+
+export interface PlanApproveBody {
+  updatedBy: string;
+}
+
+export interface PlanDeleteBody {
+  confirm: boolean;
+  updatedBy: string;
+}
+
+export interface TaskCreateBody {
+  description: string;
+  agent: string;
+  files?: string[];
+  complexity?: number;
+  dependencies?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface TaskUpdateBody {
+  description?: string;
+  files?: string[];
+  complexity?: number;
+  metadata?: Record<string, unknown>;
+  updatedBy: string;
+}
+
+export interface TaskStatusPatch {
+  status: TaskStatus;
+  updatedBy: string;
+  result?: string;
+  error?: string;
+}
+
+export interface TaskReassignBody {
+  agent: string;
+  updatedBy: string;
+}
+
+export interface TaskDeleteBody {
+  confirm: boolean;
+  updatedBy: string;
+}

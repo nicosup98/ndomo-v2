@@ -84,3 +84,66 @@ export async function apiGet<T>(
   const res = await fetch(url, { method: "GET", headers });
   return handleResponse<T>(res);
 }
+
+// ─── Write helpers ───────────────────────────────────────────────────────────
+
+function jsonHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  const auth = authHeader();
+  if (auth) headers["Authorization"] = auth;
+  return headers;
+}
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const url = buildUrl(path);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return handleResponse<T>(res);
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const url = buildUrl(path);
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return handleResponse<T>(res);
+}
+
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const url = buildUrl(path);
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  return handleResponse<T>(res);
+}
+
+export async function apiDelete(path: string, body?: unknown): Promise<void> {
+  const url = buildUrl(path);
+  const headers = jsonHeaders();
+  const init: RequestInit = { method: "DELETE", headers };
+  if (body !== undefined) init.body = JSON.stringify(body);
+
+  const res = await fetch(url, init);
+  // 204 No Content is success with no body
+  if (res.status === 204) return;
+  // Non-2xx → throw
+  if (!res.ok) {
+    let errBody: ApiError;
+    try {
+      errBody = (await res.json()) as ApiError;
+    } catch {
+      errBody = { error: "http_error", status: res.status };
+    }
+    throw new HttpError(res.status, errBody);
+  }
+}
