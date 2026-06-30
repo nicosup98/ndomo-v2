@@ -44,7 +44,8 @@ const showClosedBanner = computed(() => {
 </template>
 
 <style>
-@import "@/styles/globals.css";
+@import "bulma/css/bulma.min.css";
+@import "./styles/main.css";
 </style>
 
 <style scoped>
