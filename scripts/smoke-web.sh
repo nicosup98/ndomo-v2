@@ -234,6 +234,58 @@ assert "SPA fallback: GET /plans/<random-uuid> → 200 text/html (not 404, no au
 assert "API: GET /api/plans/<bad-uuid> → 404 JSON error" \
   "[ \"\$(curl -s -o /tmp/smoke-404.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" localhost:${PORT}/api/plans/does-not-exist-zzz)\" = '404' ] && [ \"\$(grep -o '\"[^\"]*\"' /tmp/smoke-404.json | head -1 | cut -d'\"' -f2)\" = 'error' ]"
 
+# ─── Write endpoints (POST/PUT/PATCH/DELETE) ───────────────────────────────
+echo ""
+echo "[write] testing POST/PUT/PATCH/DELETE endpoints..."
+
+# POST /api/plans → 201
+assert "API: POST /api/plans → 201 + JSON plan" \
+  "[ \"\$(curl -s -o /tmp/smoke-post-plan.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X POST -H 'content-type: application/json' -d '{\"slug\":\"smoke-test-plan\",\"title\":\"Smoke Test\",\"overview\":\"Automated test plan\",\"createdBy\":\"smoke\"}' localhost:${PORT}/api/plans)\" = '201' ] && grep -q '\"slug\":\"smoke-test-plan\"' /tmp/smoke-post-plan.json"
+
+# Extract plan ID from POST response
+SMOKE_PLAN_ID="$(grep -o '"id":"[^"]*"' /tmp/smoke-post-plan.json | head -1 | cut -d'"' -f4)"
+
+# PUT /api/plans/:id → 200
+assert "API: PUT /api/plans/:id → 200 + updated title" \
+  "[ \"\$(curl -s -o /tmp/smoke-put-plan.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X PUT -H 'content-type: application/json' -d '{\"title\":\"Smoke Test Updated\",\"updatedBy\":\"smoke\"}' \"localhost:${PORT}/api/plans/${SMOKE_PLAN_ID}\")\" = '200' ] && grep -q '\"title\":\"Smoke Test Updated\"' /tmp/smoke-put-plan.json"
+
+# POST /api/plans/:id/approve → 200
+assert "API: POST /api/plans/:id/approve → 200 + approved" \
+  "[ \"\$(curl -s -o /tmp/smoke-approve-plan.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X POST -H 'content-type: application/json' -d '{\"updatedBy\":\"smoke\"}' \"localhost:${PORT}/api/plans/${SMOKE_PLAN_ID}/approve\")\" = '200' ] && grep -q '\"status\":\"approved\"' /tmp/smoke-approve-plan.json"
+
+# PATCH /api/plans/:id/status → 200
+assert "API: PATCH /api/plans/:id/status → 200 + executing" \
+  "[ \"\$(curl -s -o /tmp/smoke-patch-status.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X PATCH -H 'content-type: application/json' -d '{\"status\":\"executing\",\"updatedBy\":\"smoke\"}' \"localhost:${PORT}/api/plans/${SMOKE_PLAN_ID}/status\")\" = '200' ] && grep -q '\"status\":\"executing\"' /tmp/smoke-patch-status.json"
+
+# POST /api/plans/:id/tasks → 201
+assert "API: POST /api/plans/:id/tasks → 201 + JSON task" \
+  "[ \"\$(curl -s -o /tmp/smoke-post-task.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X POST -H 'content-type: application/json' -d '{\"description\":\"Smoke test task\",\"agent\":\"smoke-agent\"}' \"localhost:${PORT}/api/plans/${SMOKE_PLAN_ID}/tasks\")\" = '201' ] && grep -q '\"description\":\"Smoke test task\"' /tmp/smoke-post-task.json"
+
+# Extract task ID from POST response
+SMOKE_TASK_ID="$(grep -o '"id":"[^"]*"' /tmp/smoke-post-task.json | head -1 | cut -d'"' -f4)"
+
+# PATCH /api/tasks/:id/reassign → 200
+assert "API: PATCH /api/tasks/:id/reassign → 200 + new agent" \
+  "[ \"\$(curl -s -o /tmp/smoke-reassign-task.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X PATCH -H 'content-type: application/json' -d '{\"agent\":\"new-agent\",\"updatedBy\":\"smoke\"}' \"localhost:${PORT}/api/tasks/${SMOKE_TASK_ID}/reassign\")\" = '200' ] && grep -q '\"agent\":\"new-agent\"' /tmp/smoke-reassign-task.json"
+
+# PATCH /api/tasks/:id/status → 200
+assert "API: PATCH /api/tasks/:id/status → 200 + done" \
+  "[ \"\$(curl -s -o /tmp/smoke-patch-task.json -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X PATCH -H 'content-type: application/json' -d '{\"status\":\"done\",\"updatedBy\":\"smoke\",\"result\":\"completed\"}' \"localhost:${PORT}/api/tasks/${SMOKE_TASK_ID}/status\")\" = '200' ] && grep -q '\"status\":\"done\"' /tmp/smoke-patch-task.json"
+
+# DELETE /api/tasks/:id → 204
+assert "API: DELETE /api/tasks/:id → 204" \
+  "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X DELETE -H 'content-type: application/json' -d '{\"confirm\":true,\"updatedBy\":\"smoke\"}' \"localhost:${PORT}/api/tasks/${SMOKE_TASK_ID}\")\" = '204' ]"
+
+# Verify GET after DELETE → 404
+assert "API: GET deleted task → 404" \
+  "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" \"localhost:${PORT}/api/tasks/${SMOKE_TASK_ID}\")\" = '404' ]"
+
+# DELETE /api/plans/:id → 204 (plan is executing, no active tasks)
+assert "API: DELETE /api/plans/:id → 204" \
+  "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -u \"user:${SMOKE_PASSWORD}\" -X DELETE -H 'content-type: application/json' -d '{\"confirm\":true,\"updatedBy\":\"smoke\"}' \"localhost:${PORT}/api/plans/${SMOKE_PLAN_ID}\")\" = '204' ]"
+
+echo "[write] write endpoint assertions complete"
+
 # ─── Static JS asset served (PUBLIC, no auth) ───────────────────────────────
 if [ -n "${JS_ASSET_PATH}" ]; then
   assert "Static: GET /${JS_ASSET_PATH} → 200 application/javascript (no auth)" \

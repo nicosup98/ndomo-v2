@@ -426,6 +426,108 @@ export function reassignTask(
   return getTask(db, taskId);
 }
 
+/**
+ * Generic task field updater — covers fields NOT handled by updateTaskStatus:
+ * description, files, complexity, metadata.
+ * Does NOT touch status/agent (use updateTaskStatus/reassignTask for those).
+ */
+export function updateTaskFields(
+  db: Database,
+  taskId: string,
+  fields: Partial<Pick<PlanTask, "description" | "files" | "complexity">> & {
+    metadata?: Record<string, unknown>;
+  },
+  opts: { updatedBy: string },
+): PlanTask | null {
+  const sets: string[] = [];
+  const args: SQLQueryBindings[] = [];
+
+  if (fields.description !== undefined) {
+    sets.push("description = ?");
+    args.push(fields.description);
+  }
+  if (fields.files !== undefined) {
+    sets.push("files = ?");
+    args.push(JSON.stringify(fields.files));
+  }
+  if (fields.complexity !== undefined) {
+    sets.push("complexity = ?");
+    args.push(fields.complexity);
+  }
+  if (fields.metadata !== undefined) {
+    // Deep merge with existing metadata
+    const currentRow = db.query("SELECT metadata FROM plan_tasks WHERE id = ?").get(taskId) as
+      | { metadata: string | null }
+      | undefined;
+    const currentMetadata: Record<string, unknown> = currentRow?.metadata
+      ? JSON.parse(currentRow.metadata)
+      : {};
+    const merged = deepMerge(currentMetadata, fields.metadata);
+    sets.push("metadata = ?");
+    args.push(JSON.stringify(merged));
+  }
+
+  if (sets.length === 0) return getTask(db, taskId);
+
+  sets.push("updated_by = ?");
+  args.push(opts.updatedBy);
+  args.push(taskId);
+
+  db.query(`UPDATE plan_tasks SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+
+  const task = getTask(db, taskId);
+  if (task) {
+    bus.emit({
+      type: "task.updated",
+      taskId: task.id,
+      planId: task.planId,
+      agent: task.agent,
+      status: task.status,
+      timestamp: Date.now(),
+    });
+  }
+  return task;
+}
+
+/**
+ * Delete a task (hard delete).
+ *
+ * Guards:
+ * - Requires confirm: true
+ * - Rejects if task status is 'running' (must complete/fail first)
+ */
+export function deleteTask(
+  db: Database,
+  taskId: string,
+  opts: { confirm: boolean; updatedBy: string },
+): { taskId: string; planId: string } {
+  if (!opts.confirm) {
+    throw new Error("ndomo: deleteTask requires confirm: true");
+  }
+
+  const task = getTask(db, taskId);
+  if (!task) {
+    throw new Error(`ndomo: task not found: ${taskId}`);
+  }
+
+  if (task.status === "running") {
+    throw new Error("ndomo: cannot delete a running task — complete or fail it first");
+  }
+
+  db.query("DELETE FROM plan_tasks WHERE id = ?").run(taskId);
+
+  bus.emit({
+    type: "task.updated",
+    taskId: task.id,
+    planId: task.planId,
+    agent: task.agent,
+    status: task.status,
+    timestamp: Date.now(),
+  });
+
+  return { taskId, planId: task.planId };
+}
+
 export function getTask(db: Database, id: string): PlanTask | null {
   const row = db.query("SELECT * FROM plan_tasks WHERE id = ?").get(id);
   return row != null ? taskFromRow(row) : null;
