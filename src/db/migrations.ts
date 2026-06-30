@@ -128,6 +128,16 @@ export function runMigrations(db: Database): void {
           backfillAnalysisFindings(db);
         }
 
+        // v16: plans.owner with CHECK constraint (ADR-010)
+        // NOTE: SQLite ALTER TABLE ADD COLUMN does NOT support CHECK constraints inline.
+        // The DEFAULT 'foreman' provides safe default for existing rows. App-layer
+        // enforcement (CLI in T1, HTTP in T2) MUST validate the enum when writing.
+        // A separate one-time CHECK rebuild migration (v17?) can tighten this for
+        // already-deployed DBs if needed.
+        if (m.version === 16) {
+          addColumnIfMissing(db, "plans", "owner", "TEXT NOT NULL DEFAULT 'foreman'");
+        }
+
         // Execute SQL only if it contains actual statements (not just comments)
         const hasStatements = m.sql.split("\n").some((line) => {
           const trimmed = line.trim();

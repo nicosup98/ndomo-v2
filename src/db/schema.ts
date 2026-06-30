@@ -820,6 +820,18 @@ END;
 export const SCHEMA_V15_SQL =
   "-- v15: data-only backfill (description→observation, recommendation→proposedAction) executed in runMigrations()";
 
+/**
+ * v16: plan owner tracking — ADR-010.
+ *
+ * Adds `plans.owner` TEXT NOT NULL DEFAULT 'foreman' with CHECK
+ * enforcing the 3 valid owners (foreman | craftsman | warden).
+ *
+ * DDL runs in runMigrations() via addColumnIfMissing() pattern (SQLite 3.45
+ * lacks ADD COLUMN IF NOT EXISTS). Schema-version SQL here is comment-only.
+ */
+export const SCHEMA_V16_SQL =
+  "-- v16: plans.owner column with CHECK constraint (ADR-010), executed in runMigrations()";
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -903,5 +915,10 @@ export const MIGRATIONS: Array<{
     description:
       "rename analysis finding keys: description→observation, recommendation→proposedAction (data-only backfill)",
     sql: SCHEMA_V15_SQL,
+  },
+  {
+    version: 16,
+    description: "plan owner tracking (ADR-010): plans.owner column with CHECK(foreman|craftsman|warden)",
+    sql: SCHEMA_V16_SQL,
   },
 ];
