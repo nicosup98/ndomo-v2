@@ -20,52 +20,16 @@ function formatDuration(ms: number | null): string {
 
 <template>
   <tr
-    class="task-row"
+    class="is-clickable"
     tabindex="0"
     role="link"
     :aria-label="`task: ${task.description}, agent: ${task.agent}, status: ${task.status}`"
     @click="$emit('click', task.id)"
     @keydown.enter="$emit('click', task.id)"
   >
-    <td class="cell-status">
-      <StatusBadge :status="task.status" />
-    </td>
-    <td class="cell-agent mono">{{ task.agent }}</td>
-    <td class="cell-desc">{{ task.description }}</td>
-    <td class="cell-duration mono muted">{{ formatDuration(task.durationMs) }}</td>
+    <td><StatusBadge :status="task.status" /></td>
+    <td class="is-family-monospace">{{ task.agent }}</td>
+    <td>{{ task.description }}</td>
+    <td class="has-text-right is-family-monospace has-text-grey">{{ formatDuration(task.durationMs) }}</td>
   </tr>
 </template>
-
-<style scoped>
-.task-row {
-  cursor: pointer;
-  transition: background var(--t-fast);
-}
-.task-row:hover,
-.task-row:focus-visible {
-  background: var(--bg-elevated);
-}
-.task-row:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: -2px;
-}
-td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cell-agent {
-  width: 120px;
-}
-.cell-desc {
-  max-width: 500px;
-  white-space: normal;
-}
-.cell-duration {
-  text-align: right;
-  width: 80px;
-}
-</style>

@@ -31,212 +31,122 @@ function formatUptime(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
 }
-
-function TimeAgo({ timestamp }: { timestamp: number }) {
-  const ago = useTimeAgo(() => timestamp);
-  return ago.value;
-}
 </script>
 
 <template>
-  <div class="dashboard">
-    <section class="health-section">
-      <div class="section-header">
-        <h2 class="section-title">server</h2>
+  <section class="section">
+    <div class="level mb-5">
+      <div class="level-left">
+        <h2 class="title is-4">server</h2>
+      </div>
+      <div class="level-right">
         <span
-          class="sse-dot"
-          :class="{
-            'sse-open': sseStatus === 'OPEN',
-            'sse-connecting': sseStatus === 'CONNECTING',
-            'sse-closed': sseStatus === 'CLOSED',
-          }"
+          class="icon is-small"
           :title="`SSE: ${sseStatus}`"
           aria-label="SSE connection status"
-        />
+        >
+          <span
+            style="display:inline-block;width:10px;height:10px;border-radius:50%;"
+            :style="{
+              background: sseStatus === 'OPEN' ? 'var(--status-done)' : sseStatus === 'CONNECTING' ? 'var(--status-blocked)' : 'var(--status-failed)',
+            }"
+          />
+        </span>
       </div>
-      <LoadingSpinner v-if="health.loading.value" />
-      <ErrorState
-        v-else-if="health.error.value"
-        :message="health.error.value.message"
-        retryable
-        @retry="health.refresh"
-      />
-      <div v-else-if="health.data.value" class="health-grid">
-        <div class="health-item">
-          <span class="label">status</span>
-          <span :class="health.data.value.status === 'ok' ? 'val-ok' : 'val-warn'">
-            {{ health.data.value.status }}
-          </span>
-        </div>
-        <div class="health-item">
-          <span class="label">version</span>
-          <span class="val">{{ health.data.value.version }}</span>
-        </div>
-        <div class="health-item">
-          <span class="label">uptime</span>
-          <span class="val">{{ formatUptime(health.data.value.uptime) }}</span>
-        </div>
-        <div class="health-item">
-          <span class="label">db</span>
-          <span :class="health.data.value.dbHealthy ? 'val-ok' : 'val-warn'">
-            {{ health.data.value.dbHealthy ? "ok" : "degraded" }}
-          </span>
-        </div>
-      </div>
-    </section>
+    </div>
 
-    <section class="plans-section">
-      <div class="section-header">
-        <h2 class="section-title">recent plans</h2>
-        <router-link to="/plans" class="view-all">view all</router-link>
+    <LoadingSpinner v-if="health.loading.value" />
+    <ErrorState
+      v-else-if="health.error.value"
+      :message="health.error.value.message"
+      retryable
+      @retry="health.refresh"
+    />
+    <div v-else-if="health.data.value" class="columns is-multiline">
+      <div class="column is-one-quarter">
+        <div class="card">
+          <div class="card-content has-text-centered">
+            <p class="heading">status</p>
+            <p class="title" :class="health.data.value.status === 'ok' ? 'has-text-success' : 'has-text-danger'">
+              {{ health.data.value.status }}
+            </p>
+          </div>
+        </div>
       </div>
-      <LoadingSpinner v-if="plans.loading.value" />
-      <ErrorState
-        v-else-if="plans.error.value"
-        :message="plans.error.value.message"
-        retryable
-        @retry="plans.refresh"
-      />
-      <table v-else-if="plans.data.value && plans.data.value.length > 0" class="plans-table">
+      <div class="column is-one-quarter">
+        <div class="card">
+          <div class="card-content has-text-centered">
+            <p class="heading">version</p>
+            <p class="title">{{ health.data.value.version }}</p>
+          </div>
+        </div>
+      </div>
+      <div class="column is-one-quarter">
+        <div class="card">
+          <div class="card-content has-text-centered">
+            <p class="heading">uptime</p>
+            <p class="title">{{ formatUptime(health.data.value.uptime) }}</p>
+          </div>
+        </div>
+      </div>
+      <div class="column is-one-quarter">
+        <div class="card">
+          <div class="card-content has-text-centered">
+            <p class="heading">db</p>
+            <p class="title" :class="health.data.value.dbHealthy ? 'has-text-success' : 'has-text-danger'">
+              {{ health.data.value.dbHealthy ? "ok" : "degraded" }}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="level mt-6 mb-4">
+      <div class="level-left">
+        <h2 class="title is-4">recent plans</h2>
+      </div>
+      <div class="level-right">
+        <router-link to="/plans" class="button is-small is-link is-light">view all</router-link>
+      </div>
+    </div>
+
+    <LoadingSpinner v-if="plans.loading.value" />
+    <ErrorState
+      v-else-if="plans.error.value"
+      :message="plans.error.value.message"
+      retryable
+      @retry="plans.refresh"
+    />
+    <div v-else-if="plans.data.value && plans.data.value.length > 0" class="table-container">
+      <table class="table is-fullwidth is-hoverable is-striped">
         <thead>
           <tr>
             <th>plan</th>
             <th>status</th>
-            <th>pri</th>
-            <th>cx</th>
-            <th>updated</th>
+            <th class="has-text-centered">pri</th>
+            <th class="has-text-centered">cx</th>
+            <th class="has-text-right">updated</th>
           </tr>
         </thead>
         <tbody>
           <tr
             v-for="plan in plans.data.value"
             :key="plan.id"
-            class="plan-row"
+            class="is-clickable"
             tabindex="0"
             role="link"
             @click="$router.push(`/plans/${plan.id}`)"
             @keydown.enter="$router.push(`/plans/${plan.id}`)"
           >
-            <td class="cell-title">{{ plan.slug }}</td>
+            <td><strong>{{ plan.slug }}</strong></td>
             <td><StatusBadge :status="plan.status" /></td>
-            <td class="cell-num">{{ plan.priority }}</td>
-            <td class="cell-num">{{ plan.complexity }}</td>
-            <td class="cell-time muted">{{ useTimeAgo(plan.updatedAt).value }}</td>
+            <td class="has-text-centered">{{ plan.priority }}</td>
+            <td class="has-text-centered">{{ plan.complexity }}</td>
+            <td class="has-text-right has-text-grey">{{ useTimeAgo(plan.updatedAt).value }}</td>
           </tr>
         </tbody>
       </table>
-      <p v-else class="muted">no plans yet</p>
-    </section>
-  </div>
+    </div>
+    <p v-else class="has-text-grey has-text-centered">no plans yet</p>
+  </section>
 </template>
-
-<style scoped>
-.dashboard {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-.section-title {
-  margin: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-secondary);
-}
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.view-all {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.health-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: var(--space-3);
-}
-.health-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-}
-.label {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.val {
-  font-size: var(--fs-md);
-  font-weight: var(--fw-medium);
-  color: var(--text-primary);
-}
-.val-ok { color: var(--status-done); font-size: var(--fs-md); font-weight: var(--fw-medium); }
-.val-warn { color: var(--status-failed); font-size: var(--fs-md); font-weight: var(--fw-medium); }
-.plans-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-th {
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.plan-row {
-  cursor: pointer;
-  transition: background var(--t-fast);
-}
-.plan-row:hover,
-.plan-row:focus-visible {
-  background: var(--bg-elevated);
-}
-.plan-row:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: -2px;
-}
-td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--fs-sm);
-}
-.cell-title {
-  font-weight: var(--fw-medium);
-  color: var(--text-primary);
-}
-.cell-num {
-  text-align: center;
-  width: 50px;
-}
-.cell-time {
-  text-align: right;
-  white-space: nowrap;
-}
-.sse-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  transition: background var(--t-base);
-}
-.sse-open { background: var(--status-done); }
-.sse-connecting { background: var(--status-blocked); animation: sse-pulse 1.5s ease-in-out infinite; }
-.sse-closed { background: var(--status-failed); }
-@keyframes sse-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-</style>

@@ -33,7 +33,7 @@ function formatDuration(ms: number | null): string {
 </script>
 
 <template>
-  <div class="task-detail">
+  <section class="section">
     <LoadingSpinner v-if="task.loading.value && !task.data.value" />
     <ErrorState
       v-else-if="task.error.value"
@@ -42,170 +42,76 @@ function formatDuration(ms: number | null): string {
       @retry="task.refresh"
     />
     <template v-else-if="task.data.value">
-      <section class="task-meta">
-        <div class="meta-header">
-          <StatusBadge :status="task.data.value.status" />
-          <span class="agent mono">{{ task.data.value.agent }}</span>
-        </div>
-        <p class="task-desc">{{ task.data.value.description }}</p>
-        <div class="meta-grid">
-          <div class="meta-item">
-            <span class="label">order</span>
-            <span class="val">{{ task.data.value.orderIndex }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">complexity</span>
-            <span class="val">{{ task.data.value.complexity }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">duration</span>
-            <span class="val">{{ formatDuration(task.data.value.durationMs) }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">started</span>
-            <span class="val">{{ task.data.value.startedAt ? useTimeAgo(task.data.value.startedAt).value : "-" }}</span>
-          </div>
-          <div class="meta-item">
-            <span class="label">completed</span>
-            <span class="val">{{ task.data.value.completedAt ? useTimeAgo(task.data.value.completedAt).value : "-" }}</span>
-          </div>
-          <div v-if="task.data.value.createdBy" class="meta-item">
-            <span class="label">created by</span>
-            <span class="val">{{ task.data.value.createdBy }}</span>
-          </div>
-        </div>
-        <div v-if="task.data.value.files.length > 0" class="files-section">
-          <span class="label">files</span>
-          <ul class="file-list">
-            <li v-for="f in task.data.value.files" :key="f" class="file-item mono">{{ f }}</li>
-          </ul>
-        </div>
-        <div v-if="task.data.value.dependencies.length > 0" class="deps-section">
-          <span class="label">dependencies</span>
-          <ul class="dep-list">
-            <li v-for="d in task.data.value.dependencies" :key="d" class="dep-item mono">{{ d }}</li>
-          </ul>
-        </div>
-      </section>
+      <div class="card">
+        <header class="card-header">
+          <p class="card-header-title">
+            <StatusBadge :status="task.data.value.status" />
+            <span class="tag is-info is-light ml-3">{{ task.data.value.agent }}</span>
+          </p>
+        </header>
+        <div class="card-content">
+          <p class="subtitle is-6 mb-4">{{ task.data.value.description }}</p>
 
-      <section v-if="task.data.value.result" class="result-section">
-        <h3 class="section-title">result</h3>
-        <pre class="result-text">{{ task.data.value.result }}</pre>
-      </section>
+          <div class="columns is-multiline">
+            <div class="column is-half">
+              <p class="heading">order</p>
+              <p class="title is-5">{{ task.data.value.orderIndex }}</p>
+            </div>
+            <div class="column is-half">
+              <p class="heading">complexity</p>
+              <p class="title is-5">{{ task.data.value.complexity }}</p>
+            </div>
+            <div class="column is-half">
+              <p class="heading">duration</p>
+              <p class="title is-5">{{ formatDuration(task.data.value.durationMs) }}</p>
+            </div>
+            <div class="column is-half">
+              <p class="heading">started</p>
+              <p class="title is-5">{{ task.data.value.startedAt ? useTimeAgo(task.data.value.startedAt).value : "-" }}</p>
+            </div>
+            <div class="column is-half">
+              <p class="heading">completed</p>
+              <p class="title is-5">{{ task.data.value.completedAt ? useTimeAgo(task.data.value.completedAt).value : "-" }}</p>
+            </div>
+            <div v-if="task.data.value.createdBy" class="column is-half">
+              <p class="heading">created by</p>
+              <p class="title is-5">{{ task.data.value.createdBy }}</p>
+            </div>
+          </div>
 
-      <section v-if="task.data.value.error" class="error-section">
-        <h3 class="section-title">error</h3>
-        <pre class="error-text">{{ task.data.value.error }}</pre>
-      </section>
+          <div v-if="task.data.value.files.length > 0" class="mt-4">
+            <p class="heading mb-2">files</p>
+            <div class="tags">
+              <span v-for="f in task.data.value.files" :key="f" class="tag is-family-monospace">{{ f }}</span>
+            </div>
+          </div>
+
+          <div v-if="task.data.value.dependencies.length > 0" class="mt-4">
+            <p class="heading mb-2">dependencies</p>
+            <div class="tags">
+              <span v-for="d in task.data.value.dependencies" :key="d" class="tag is-warning is-light is-family-monospace">{{ d }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <article v-if="task.data.value.result" class="message is-success mt-5">
+        <div class="message-header">
+          <p>result</p>
+        </div>
+        <div class="message-body">
+          <pre class="is-family-monospace" style="white-space: pre-wrap; word-break: break-word;">{{ task.data.value.result }}</pre>
+        </div>
+      </article>
+
+      <article v-if="task.data.value.error" class="message is-danger mt-5">
+        <div class="message-header">
+          <p>error</p>
+        </div>
+        <div class="message-body">
+          <pre class="is-family-monospace" style="white-space: pre-wrap; word-break: break-word;">{{ task.data.value.error }}</pre>
+        </div>
+      </article>
     </template>
-  </div>
+  </section>
 </template>
-
-<style scoped>
-.task-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-.task-meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-}
-.meta-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-.agent {
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-}
-.task-desc {
-  margin: 0;
-  font-size: var(--fs-sm);
-  color: var(--text-primary);
-  line-height: var(--lh-relaxed);
-}
-.meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: var(--space-3);
-}
-.meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.label {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.val {
-  font-size: var(--fs-sm);
-  color: var(--text-primary);
-}
-.files-section,
-.deps-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.file-list,
-.dep-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.file-item,
-.dep-item {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
-  padding: var(--space-1) var(--space-2);
-  background: var(--bg-elevated);
-  border-radius: var(--r-sm);
-}
-.section-title {
-  margin: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-secondary);
-}
-.result-section,
-.error-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.result-text,
-.error-text {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  padding: var(--space-3);
-  border-radius: var(--r-sm);
-  max-height: 400px;
-  overflow-y: auto;
-}
-.result-text {
-  color: var(--text-secondary);
-}
-.error-text {
-  color: var(--status-failed);
-}
-</style>

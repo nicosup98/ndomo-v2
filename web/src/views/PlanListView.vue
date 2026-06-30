@@ -40,29 +40,57 @@ const statuses: Array<{ value: PlanStatus | ""; label: string }> = [
 </script>
 
 <template>
-  <div class="plan-list-view">
-    <div class="toolbar">
-      <div class="filters">
-        <label class="filter-label">status</label>
-        <select v-model="statusFilter" class="filter-select" @change="plans.refresh()">
-          <option v-for="s in statuses" :key="s.value" :value="s.value">
-            {{ s.label }}
-          </option>
-        </select>
+  <section class="section">
+    <div class="level">
+      <div class="level-left">
+        <div class="level-item">
+          <h1 class="title">plans</h1>
+        </div>
       </div>
-      <button class="refresh-btn" :disabled="plans.loading.value" @click="plans.refresh()">
-        refresh
-      </button>
-      <span
-        class="sse-dot"
-        :class="{
-          'sse-open': sseStatus === 'OPEN',
-          'sse-connecting': sseStatus === 'CONNECTING',
-          'sse-closed': sseStatus === 'CLOSED',
-        }"
-        :title="`SSE: ${sseStatus}`"
-        aria-label="SSE connection status"
-      />
+      <div class="level-right">
+        <div class="level-item">
+          <div class="field has-addons">
+            <div class="control">
+              <span class="button is-static is-small">status</span>
+            </div>
+            <div class="control">
+              <div class="select is-small">
+                <select v-model="statusFilter" @change="plans.refresh()">
+                  <option v-for="s in statuses" :key="s.value" :value="s.value">
+                    {{ s.label }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="level-item">
+          <button
+            class="button is-small is-outlined"
+            :class="{ 'is-loading': plans.loading.value }"
+            :disabled="plans.loading.value"
+            @click="plans.refresh()"
+          >
+            refresh
+          </button>
+        </div>
+        <div class="level-item">
+          <span
+            class="icon is-small has-text-grey-light"
+            :title="`SSE: ${sseStatus}`"
+            aria-label="SSE connection status"
+          >
+            <span
+              class="is-sse-dot"
+              :class="{
+                'has-background-success': sseStatus === 'OPEN',
+                'has-background-warning': sseStatus === 'CONNECTING',
+                'has-background-danger': sseStatus === 'CLOSED',
+              }"
+            />
+          </span>
+        </div>
+      </div>
     </div>
 
     <LoadingSpinner v-if="plans.loading.value && !plans.data.value" />
@@ -72,15 +100,15 @@ const statuses: Array<{ value: PlanStatus | ""; label: string }> = [
       retryable
       @retry="plans.refresh"
     />
-    <div v-else class="table-wrap">
-      <table class="plans-table">
+    <div v-else>
+      <table class="table is-hoverable is-fullwidth">
         <thead>
           <tr>
             <th>plan</th>
             <th>status</th>
-            <th>pri</th>
-            <th>cx</th>
-            <th>updated</th>
+            <th class="has-text-centered">pri</th>
+            <th class="has-text-centered">cx</th>
+            <th class="has-text-right">updated</th>
           </tr>
         </thead>
         <tbody>
@@ -92,80 +120,19 @@ const statuses: Array<{ value: PlanStatus | ""; label: string }> = [
           />
         </tbody>
       </table>
-      <p v-if="plans.data.value && plans.data.value.length === 0" class="muted empty-msg">
+      <p v-if="plans.data.value && plans.data.value.length === 0" class="has-text-centered has-text-grey py-6">
         no plans found
       </p>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.plan-list-view {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-.filters {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.filter-label {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.filter-select {
-  font-size: var(--fs-sm);
-  padding: var(--space-1) var(--space-2);
-  min-width: 120px;
-}
-.refresh-btn {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.table-wrap {
-  overflow-x: auto;
-}
-.plans-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-th {
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
-}
-.empty-msg {
-  text-align: center;
-  padding: var(--space-6);
-}
-.sse-dot {
+.is-sse-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  flex-shrink: 0;
-  transition: background var(--t-base);
-}
-.sse-open { background: var(--status-done); }
-.sse-connecting { background: var(--status-blocked); animation: sse-pulse 1.5s ease-in-out infinite; }
-.sse-closed { background: var(--status-failed); }
-@keyframes sse-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  transition: background 0.2s;
 }
 </style>
