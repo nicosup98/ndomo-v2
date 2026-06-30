@@ -60,6 +60,20 @@ Single binary / single process. No reverse proxy required for MVP. For productio
 - **Same-origin only**: the SPA assumes it lives behind the same origin as the API. Cross-origin deployments require explicit CORS configuration.
 - **SSE limitation**: `EventSource` cannot send custom headers in browsers. The MVP stubs the SSE composable and uses polling. A future iteration will switch to `fetch` + `ReadableStream` for SSE with auth.
 
+## Write UI
+
+Since 0.3.0 the SPA ships with a full write layer that mirrors the CLI and HTTP API:
+
+- **Create a plan** — `/plans/new` (`CreatePlanView` + `CreatePlanForm`). Reachable from the PlanList header (`+ Create Plan` button).
+- **Edit a plan** — `EditPlanForm` embedded on the PlanDetail page (title, overview, approach, priority, complexity, category).
+- **Create a task** — `CreateTaskForm` on the PlanDetail page (description, agent, files, complexity).
+- **Lifecycle actions** — `StatusActions` renders only the buttons valid for the current status:
+  - Plan: `draft` → Approve; `approved`/`executing` → Mark Complete / Fail; terminal → Archive (delete).
+  - Task: `pending`/`running` → Mark Done / Mark Failed / Reassign; terminal → Delete.
+- **Reassign a task** — `AgentReassignDropdown` lists the available agents (craftsman, js-smith, vue-smith, go-smith, python-smith, rust-smith, smith, ranger, scout, scribe, inspector, chronicler, painter).
+
+All writes go through `usePlanMutations` / `useTaskMutations` composables, which call the matching `/api/*` endpoints and surface `isLoading` / `error` refs to the components. SSE events (`plan.created`, `task.updated`, etc.) are emitted server-side on success; the SPA refreshes affected views via `useSseRefresh`.
+
 ## Extension guide (adding new panels)
 
 To add a new view (e.g., Sessions browser):
@@ -159,12 +173,16 @@ web/
 │   ├── main.ts
 │   ├── App.vue
 │   ├── api/             # fetch wrappers (plans, tasks, sessions, client)
-│   ├── components/      # AppShell, AuthPrompt, StatusBadge, etc.
-│   ├── composables/     # useApi, useAuth, useEvents (stubbed)
+│   ├── components/      # AppShell, AuthPrompt, StatusBadge, CreatePlanForm,
+│   │                    # EditPlanForm, CreateTaskForm, StatusActions,
+│   │                    # AgentReassignDropdown, etc.
+│   ├── composables/     # useApi, useAuth, useEvents, useSseRefresh,
+│   │                    # usePlanMutations, useTaskMutations
 │   ├── router/          # vue-router config (hash mode)
 │   ├── styles/          # main.css (Bulma import + status palette)
-│   ├── types/           # api.ts (Plan, Task, Session, etc.)
-│   └── views/           # Dashboard, PlanList, PlanDetail, TaskDetail, NotFound
+│   ├── types/           # api.ts (Plan, Task, Session, body interfaces)
+│   └── views/           # Dashboard, PlanList, PlanDetail, TaskDetail,
+│                        # CreatePlanView, NotFound
 └── __tests__/           # Vitest specs
 ```
 
@@ -179,8 +197,7 @@ web/
 
 ## Known limitations
 
-- SSE deferred (auth limitation in `EventSource`). MVP polls.
-- No write UI yet (all API endpoints are GET-only).
+- SSE deferred (auth limitation in `EventSource`). MVP polls for the read layer; the write layer relies on per-call refresh after success. A future iteration will switch to `fetch` + `ReadableStream` for SSE with auth.
 - Hash mode routing: URLs include `#` (e.g., `localhost:4097/#/plans`). Clean URLs require switching to `createWebHistory` + server-side history fallback.
 
 ## See also

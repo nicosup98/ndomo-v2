@@ -68,23 +68,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-06-30
 
+### Added
+
+- **Plan & task write stack** — full CRUD across CLI, HTTP, and Web UI:
+  - **DB v16 migration** (`src/db/schema.ts` + `src/db/migrations.ts`):
+    `plans.owner TEXT NOT NULL DEFAULT 'foreman'` column. CHECK constraint
+    deferred to app layer (SQLite ALTER limitation). 7 v16 tests.
+  - **CLI subcommands** — `ndomo plan create|list|show|update|approve|complete|delete`
+    and `ndomo task create|list|show|update|reassign|complete|fail`
+    (validated, register in `src/cli/index.ts`). 26 tests.
+  - **HTTP write endpoints** (10 new routes):
+    - Plans: `POST /api/plans`, `PUT /api/plans/:id`,
+      `PATCH /api/plans/:id/status`, `POST /api/plans/:id/approve`,
+      `DELETE /api/plans/:id`
+    - Tasks: `POST /api/plans/:id/tasks`, `PUT /api/tasks/:id`,
+      `PATCH /api/tasks/:id/status`, `PATCH /api/tasks/:id/reassign`,
+      `DELETE /api/tasks/:id`
+  - **Shared schemas** (`src/http/schemas.ts`) — Elysia `t` validators + plain
+    TS body types reused by HTTP and CLI. No new deps (no zod).
+  - **Web UI write composables** — `usePlanMutations`, `useTaskMutations`
+    wrap the API with `isLoading`/`error` refs.
+  - **Web UI write components** — `CreatePlanForm`, `EditPlanForm`,
+    `CreateTaskForm`, `StatusActions`, `AgentReassignDropdown` (daisyUI).
+  - **Smoke-web write assertions** — `scripts/smoke-web.sh` extended with
+    52 lines covering POST/PUT/PATCH/DELETE round-trips.
+- **`/plans/new` route** — Create Plan view reachable from PlanList header
+  (`+ Create Plan` button).
+- **Web UI redesigned with Bulma 1.0** (CSS-only, no jQuery, ~250KB
+  minified). Status palette exposed as CSS custom properties in
+  `web/src/styles/main.css`.
+- `web/src/styles/main.css` — Bulma entry point + status palette CSS custom
+  properties (`--status-pending`, `--status-running`, `--status-done`,
+  `--status-failed`, `--status-blocked`, plus plan statuses).
+- 87 web UI unit tests (api client, composables, components, write forms).
+- 18 HTTP write-endpoint integration tests covering happy paths, 400/401/404/409
+  error responses, and SSE event emission.
+
 ### Changed
 
 - Web UI redesigned with **Bulma 1.0** CSS framework (CSS-only, no jQuery,
   ~250KB minified). Status palette exposed as CSS custom properties in
   `web/src/styles/main.css`.
-
-### Added
-
-- `web/src/styles/main.css` — Bulma entry point + status palette CSS custom
-  properties (`--status-pending`, `--status-running`, `--status-done`,
-  `--status-failed`, `--status-blocked`, plus plan statuses).
-- 53 unit tests for web UI (including `StatusBadge` regression test).
+- `src/db/plans.ts` — `createPlan` now inserts `owner` column.
+- `src/db/tasks.ts` — added `createTask` (single), `updateTaskFields`,
+  `deleteTask`, and `reassignTask` (fixed pre-existing `updated_at`
+  reference bug).
+- `src/db/types.ts` — `PlanOwner` type exported; `Plan.owner` optional with
+  DB default.
 
 ### Removed
 
 - `web/src/styles/globals.css` and `web/src/styles/tokens.css` — replaced
   by `web/src/styles/main.css`.
+
+### Fixed
+
+- CLI `parseArgs` treated empty string `--agent ""` as boolean true
+  (both `src/cli/plan.ts` and `src/cli/task.ts`).
+- `reassignTask` UPDATE referenced non-existent `updated_at` column.
 
 ## [0.1.0] - 2026-06-20
 
@@ -130,5 +171,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven medium-priority `craftsman` fixes shipped alongside the Bun skill
   bootstrap for the `js-smith` specialist
 
-[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/nicosup98/ndomo-v2/releases/tag/v0.1.0

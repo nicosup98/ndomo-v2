@@ -122,6 +122,12 @@ to markdown on completion. 14 tools exposed via OpenCode: `plan_create`,
 `task_create_batch`, `task_list`, `task_update_status`, `task_search`,
 `task_next_for_agent`, `session_start`, `session_checkpoint`, `session_end`.
 
+CLI write surface (since 0.3.0):
+- `ndomo plan create|list|show|update|approve|complete|delete`
+- `ndomo task create|list|show|update|reassign|complete|fail`
+
+HTTP write surface (since 0.3.0): 10 endpoints covering plan create/update/approve/status/delete and task create/update/status/reassign/delete (`src/http/routes/`).
+
 The foreman uses these to track work across agent dispatches. See
 [docs/database.md](docs/database.md) for schema, tools, lifecycle, and
 auto-archive behavior.
@@ -168,7 +174,9 @@ See [docs/integrations.md](docs/integrations.md) for details.
 
 ## Web UI
 
-The HTTP server includes a read-only Vue 3 SPA for browsing plans, tasks, and sessions in the browser. Single-port topology — the same Elysia process serves both the API (`/api/*`) and the SPA (everything else, with hash-mode fallback). Web UI uses **Bulma 1.0** (no jQuery, CSS-only, ~250KB minified). Status palette exposed as CSS custom properties in `web/src/styles/main.css`.
+The HTTP server ships with a Vue 3 SPA for browsing **and editing** plans and tasks in the browser. Single-port topology — the same Elysia process serves both the API (`/api/*`) and the SPA (everything else, with hash-mode fallback). Web UI uses **Bulma 1.0** (no jQuery, CSS-only, ~250KB minified) plus custom daisyUI components for write forms. Status palette exposed as CSS custom properties in `web/src/styles/main.css`.
+
+Write UI features (since 0.3.0): create / edit / approve / complete / fail / archive plans; create / update / reassign / delete tasks. All writes go through `/api/*` write endpoints and surface `isLoading`/`error` refs to the components.
 
 See [docs/web-ui.md](docs/web-ui.md) for architecture, build pipeline, and extension guide.
 
