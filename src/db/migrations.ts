@@ -138,6 +138,22 @@ export function runMigrations(db: Database): void {
           addColumnIfMissing(db, "plans", "owner", "TEXT NOT NULL DEFAULT 'foreman'");
         }
 
+        // v17: execution gates — verification lifecycle columns on plan_tasks (T1).
+        // CHECK on verification_status is app-layer only (same SQLite limitation
+        // as v16 owner). Defaults preserve legacy behavior: not required + not_required.
+        if (m.version === 17) {
+          addColumnIfMissing(db, "plan_tasks", "verification_required", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissing(
+            db,
+            "plan_tasks",
+            "verification_status",
+            "TEXT NOT NULL DEFAULT 'not_required'",
+          );
+          addColumnIfMissing(db, "plan_tasks", "verification_result", "TEXT");
+          addColumnIfMissing(db, "plan_tasks", "verification_passed_at", "INTEGER");
+          addColumnIfMissing(db, "plan_tasks", "verified_by", "TEXT");
+        }
+
         // Execute SQL only if it contains actual statements (not just comments)
         const hasStatements = m.sql.split("\n").some((line) => {
           const trimmed = line.trim();

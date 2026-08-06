@@ -10,10 +10,10 @@ describe("migration v16 — plans.owner (ADR-010)", () => {
     db.exec("PRAGMA foreign_keys = ON")
   })
 
-  test("applies v16 and sets schema_version=16 (latest)", () => {
+  test("applies v16 (and any later migrations) — schema_version >= 16", () => {
     runMigrations(db)
     const row = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number }
-    expect(row.v).toBe(16)
+    expect(row.v).toBeGreaterThanOrEqual(16)
   })
 
   test("plans.owner column exists with default 'foreman'", () => {
@@ -24,10 +24,10 @@ describe("migration v16 — plans.owner (ADR-010)", () => {
     expect(owner!.dflt_value).toBe("'foreman'")
   })
 
-  test("v16 is the last entry in MIGRATIONS array", () => {
-    const last = MIGRATIONS[MIGRATIONS.length - 1]
-    expect(last).toBeDefined()
-    expect(last!.version).toBe(16)
+  test("v16 is present in MIGRATIONS array (v17+ may exist after it)", () => {
+    const v16 = MIGRATIONS.find((m) => m.version === 16)
+    expect(v16).toBeDefined()
+    expect(v16!.version).toBe(16)
   })
 
   test("idempotent — running migrations twice is a no-op", () => {

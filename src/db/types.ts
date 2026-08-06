@@ -10,6 +10,26 @@ export type PlanStatus = "draft" | "approved" | "executing" | "completed" | "fai
 
 export type TaskStatus = "pending" | "running" | "done" | "failed" | "blocked";
 
+/**
+ * Verification lifecycle for execution gates (T1, v17).
+ *
+ * - `not_required`: task was created without verificationRequired — default,
+ *   legacy tasks live here forever, no gate applies.
+ * - `pending`:     task was created with verificationRequired=true and has
+ *   not yet been verified. updateTaskStatus → 'done' is gated.
+ * - `passed`:      inspector (or force) recorded a positive verdict. Gate open.
+ * - `failed`:      inspector recorded a negative verdict. Gate still closed;
+ *   task should be reworked before re-running verification.
+ * - `waived`:      a foreman/craftsman bypassed the gate via force+forceReason
+ *   on updateTaskStatus('done'). Audit trail lives in metadata.verificationBypass.
+ */
+export type TaskVerificationStatus =
+  | "not_required"
+  | "pending"
+  | "passed"
+  | "failed"
+  | "waived";
+
 export type PlanCategory = "feature" | "refactor" | "bugfix" | "docs" | "infra";
 
 export type PlanOwner = "foreman" | "craftsman" | "warden";
@@ -29,6 +49,25 @@ export interface TaskMetadata {
   tokensUsed?: number;
   durationMs?: number;
   artifacts?: string[];
+  /**
+   * Backwards-compatible opt-in for execution gates (v17).
+   * Preferred path is the explicit `verificationRequired` field on PlanTask;
+   * this metadata key is honored ONLY at create time as a fallback so existing
+   * callers that pass metadata.verificationRequired=true still get the gate.
+   * Once the task exists, this key is informational — the canonical state is
+   * the `verification_required` column.
+   */
+  verificationRequired?: boolean;
+  /**
+   * Audit trail written by updateTaskStatus when a foreman force-bypasses the
+   * execution gate (status='done' on a gated task with no passed/waived verdict).
+   * Captures who forced, when, and why — never written by recordTaskVerification.
+   */
+  verificationBypass?: {
+    forceReason: string;
+    forcedBy: string;
+    forcedAt: number;
+  };
 }
 
 export interface SessionMetadata {
@@ -104,6 +143,16 @@ export interface PlanTask {
   archivedAt: number | null;
   /** v6: write-once — JSON snapshot of task data at creation time */
   originalPlanData?: string | null;
+  /** v17: execution gate — when true, updateTaskStatus('done') is blocked until verification passes or is waived. */
+  verificationRequired: boolean;
+  /** v17: current verification lifecycle state. See {@link TaskVerificationStatus}. */
+  verificationStatus: TaskVerificationStatus;
+  /** v17: structured result payload from the verifier (JSON column). Null when no verdict recorded. */
+  verificationResult: Record<string, unknown> | null;
+  /** v17: epoch ms when a positive ('passed') verdict was recorded. Null otherwise. */
+  verificationPassedAt: number | null;
+  /** v17: agent that recorded the verdict (typically 'inspector', or whoever forced). */
+  verifiedBy: string | null;
 }
 
 export interface Session {
@@ -185,6 +234,12 @@ interface TaskRow {
   artifacts: string;
   archived_at: number | null;
   original_plan_data: string | null;
+  /** v17 columns — may be absent on pre-v17 rows that bypassed migration (defensive). */
+  verification_required?: number | null;
+  verification_status?: string | null;
+  verification_result?: string | null;
+  verification_passed_at?: number | null;
+  verified_by?: string | null;
 }
 
 interface SessionRow {
@@ -252,6 +307,27 @@ export function planWithFilesFromRow(planRow: unknown, fileRows: unknown[]): Pla
 
 export function taskFromRow(row: unknown): PlanTask {
   const r = row as TaskRow;
+  // v17: coalesce verification columns — pre-v17 rows (shouldn't exist after
+  // migration, but defensive) default to the un-gated legacy state.
+  const verificationRequired = r.verification_required === 1;
+  const rawStatus = r.verification_status ?? "not_required";
+  const verificationStatus = (
+    ["not_required", "pending", "passed", "failed", "waived"].includes(rawStatus)
+      ? rawStatus
+      : "not_required"
+  ) as TaskVerificationStatus;
+  let verificationResult: Record<string, unknown> | null = null;
+  if (r.verification_result != null && r.verification_result !== "") {
+    try {
+      const parsed = JSON.parse(r.verification_result);
+      verificationResult =
+        parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : null;
+    } catch {
+      verificationResult = null;
+    }
+  }
   return {
     id: r.id,
     planId: r.plan_id,
@@ -277,6 +353,11 @@ export function taskFromRow(row: unknown): PlanTask {
     metadata: (r.metadata != null ? JSON.parse(r.metadata) : {}) as TaskMetadata,
     archivedAt: r.archived_at ?? null,
     originalPlanData: r.original_plan_data ?? null,
+    verificationRequired,
+    verificationStatus,
+    verificationResult,
+    verificationPassedAt: r.verification_passed_at ?? null,
+    verifiedBy: r.verified_by ?? null,
   };
 }
 

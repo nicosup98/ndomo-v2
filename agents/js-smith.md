@@ -1,7 +1,7 @@
 ---
 description: Ingeniero de Software JS/TS / Nodo de Implementación Frontend-Backend
 mode: subagent
-model: xiaomi/mimo-v2.5-pro
+model: zai-coding-plan/glm-5.2
 temperature: 0.1
 permission:
   edit: allow

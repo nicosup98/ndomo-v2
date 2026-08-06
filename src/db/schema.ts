@@ -832,6 +832,32 @@ export const SCHEMA_V15_SQL =
 export const SCHEMA_V16_SQL =
   "-- v16: plans.owner column with CHECK constraint (ADR-010), executed in runMigrations()";
 
+/**
+ * v17: execution gates — verification lifecycle columns on plan_tasks.
+ *
+ * Adds 5 columns to plan_tasks:
+ *   verification_required   INTEGER NOT NULL DEFAULT 0   (boolean gate flag)
+ *   verification_status     TEXT    NOT NULL DEFAULT 'not_required'
+ *   verification_result     TEXT                              (JSON, nullable)
+ *   verification_passed_at  INTEGER                           (epoch ms, nullable)
+ *   verified_by             TEXT                              (agent name, nullable)
+ *
+ * CHECK constraint on verification_status is enforced at the APP LAYER
+ * (recordTaskVerification in src/db/tasks.ts) because SQLite ALTER TABLE
+ * ADD COLUMN cannot carry an inline CHECK (same limitation as v16 plans.owner
+ * — see ADR-010). Comments here are intentionally honest about that.
+ *
+ * Existing rows are untouched: verification_required defaults to 0
+ * (false) and verification_status defaults to 'not_required', so legacy
+ * tasks remain un-gated and updateTaskStatus('done') keeps working.
+ *
+ * DDL runs in runMigrations() via the addColumnIfMissing() pattern
+ * (SQLite 3.45 lacks ADD COLUMN IF NOT EXISTS). Schema-version SQL here
+ * is comment-only — same convention as v6/v8/v16.
+ */
+export const SCHEMA_V17_SQL =
+  "-- v17: plan_tasks verification columns (T1 execution gates), executed in runMigrations()";
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -920,5 +946,11 @@ export const MIGRATIONS: Array<{
     version: 16,
     description: "plan owner tracking (ADR-010): plans.owner column with CHECK(foreman|craftsman|warden)",
     sql: SCHEMA_V16_SQL,
+  },
+  {
+    version: 17,
+    description:
+      "execution gates (T1): plan_tasks verification_required/status/result/passed_at/verified_by columns",
+    sql: SCHEMA_V17_SQL,
   },
 ];

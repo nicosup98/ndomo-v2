@@ -1,7 +1,7 @@
 ---
 description: Smith de Rust / Rustacean Architect & Optimizer
 mode: subagent
-model: xiaomi-token-plan-sgp/mimo-v2.5-pro
+model: zai-coding-plan/glm-5.2
 temperature: 0.1
 permission:
   edit: allow

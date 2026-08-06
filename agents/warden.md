@@ -1,7 +1,7 @@
 ---
 description: Warden (Custodio de Operaciones / Operations Custodian)
 mode: all
-model: xiaomi-token-plan-sgp/mimo-v2.5-pro
+model: opencode-go/gpt-5.6-luna
 temperature: 0.3
 permission:
   edit: ask
@@ -163,6 +163,8 @@ plan_create({
 });
 ```
 
+**Design Path:** si el foreman planificó con Phase 0 Brainstorm, el plan tendrá `metadata.designPath` apuntando al design doc. Warden debe leerlo para contexto operacional (rollback plans, exclusiones, trade-offs aceptados).
+
 Planes foreman-owned (status="draft" siempre): sin category (default "planning")
 Planes craftsman-owned: category="code" o sin category
 Planes warden-owned (status="executing"): category="ops" + ownedBy="warden"
@@ -214,3 +216,4 @@ Cuando warden se activa por primera vez en un proyecto:
 - Modificar plan metadata de planes foreman-owned
 - Usar plan mode para ops triviales (overhead innecesario)
 - Usar ad-hoc mode para ops complejos (pierde audit trail)
+- **Circuit Breaker:** si una sesión supera 4000 tool calls o 20 calls idénticas consecutivas, el circuit breaker la aborta. Threshold configurable en `ndomo.config.json`.

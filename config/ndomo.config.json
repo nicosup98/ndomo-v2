@@ -10,8 +10,7 @@
         "scout",
         "sage",
         "guild",
-        "chronicler",
-        "inspector"
+        "chronicler"
       ]
     },
     "craftsman": {
@@ -48,6 +47,16 @@
       "description": "Project analyst/cartographer/onboarding — hybrid scout+sage+scribe via DB analyses",
       "mode": "primary",
       "delegates_to": ["scout", "sage", "scribe"]
+    },
+    "inspector": {
+      "description": "Quality and security auditor — delegates binary diff reviews",
+      "mode": "subagent",
+      "delegates_to": ["critic"]
+    },
+    "critic": {
+      "description": "Binary diff critic — structured APPROVED/REJECTED review",
+      "mode": "subagent",
+      "delegates_to": []
     }
   },
   "protectedTools": ["memory", "compress", "task", "todowrite", "skill"],
@@ -58,7 +67,7 @@
   "presets": {
     "default": {
       "foreman": {
-        "model": "minimax/MiniMax-M3",
+        "model": "streamlake/kat-coder-pro-v2.5",
         "temperature": 0.3,
         "reasoning_effort": "high"
       },
@@ -81,7 +90,7 @@
         "reasoning_effort": "high"
       },
       "smith": {
-        "model": "opencode-go/deepseek-v4-flash",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
@@ -96,32 +105,32 @@
         "reasoning_effort": "high"
       },
       "go-smith": {
-        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "js-smith": {
-        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "python-smith": {
-        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "vue-smith": {
-        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "zig-smith": {
-        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "rust-smith": {
-        "model": "xiaomi-token-plan-sgp/mimo-v2.5-pro",
+        "model": "zai-coding-plan/glm-5.2",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
@@ -135,13 +144,18 @@
         "temperature": 0.2,
         "reasoning_effort": "high"
       },
-      "craftsman": {
+      "critic": {
         "model": "minimax/MiniMax-M3",
+        "temperature": 0.1,
+        "reasoning_effort": "high"
+      },
+      "craftsman": {
+        "model": "opencode-go/gpt-5.6-luna",
         "temperature": 0.3,
         "reasoning_effort": "high"
       },
       "warden": {
-        "model": "minimax/MiniMax-M3",
+        "model": "opencode-go/gpt-5.6-luna",
         "temperature": 0.3,
         "reasoning_effort": "high"
       },
@@ -247,6 +261,11 @@
         "temperature": 0.2,
         "reasoning_effort": "low"
       },
+      "critic": {
+        "model": "minimax/MiniMax-M3",
+        "temperature": 0.1,
+        "reasoning_effort": "low"
+      },
       "craftsman": {
         "model": "opencode-go/deepseek-v4-flash",
         "temperature": 0.3,
@@ -314,5 +333,8 @@
     "defaultScope": "project",
     "autoCaptureEnabled": true,
     "cavemanCompress": true
+  },
+  "circuitBreaker": {
+    "threshold": 4000
   }
 }

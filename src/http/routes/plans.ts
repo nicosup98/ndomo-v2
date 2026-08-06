@@ -280,6 +280,7 @@ export function plansRoute(db: Database) {
             durationMs: null,
             artifacts: [],
             metadata: body.metadata ?? {},
+            verificationRequired: body.verificationRequired === true,
           });
           set.status = 201;
           return task;

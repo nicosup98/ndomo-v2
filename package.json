@@ -1,6 +1,6 @@
 {
   "name": "ndomo",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenCode multi-agent plugin. Taller de artesanos: foreman + 3 peer primaries (craftsman, warden, ranger) + specialists (scout, scribe, painter, smith, sage, guild, inspector, chronicler) + stack-smiths + ops (ci-smith, deploy-smith, release-smith, ops-scout). Caveman-native. opencode-mem integrated. DCP peer optional.",
   "type": "module",
   "license": "MIT",
@@ -11,7 +11,7 @@
     "./db": "./src/db/index.ts"
   },
   "bin": {
-    "ndomo": "./src/cli/index.ts"
+    "ndomo": "src/cli/index.ts"
   },
   "files": [
     ".env.example",
@@ -98,6 +98,6 @@
   "author": "",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nicosup98/ndomo-v2.git"
+    "url": "git+https://github.com/nicosup98/ndomo-v2.git"
   }
 }

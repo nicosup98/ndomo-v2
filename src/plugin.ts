@@ -17,6 +17,11 @@ import { join } from "node:path";
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
+import {
+  CIRCUIT_BREAKER_ERROR,
+  CircuitBreaker,
+  resolveCircuitBreakerTaskFailure,
+} from "./db/circuit-breaker.ts";
 import { openDb } from "./db/client.ts";
 import {
   archiveAnalysis,
@@ -50,9 +55,11 @@ import {
   createTasksBatch,
   listTasksByPlan,
   nextTaskForAgent,
+  recordTaskVerification,
   resolveTaskDependencies,
   searchTasks,
   updateTaskStatus,
+  type TaskCreateInput,
 } from "./db/tasks.ts";
 import type {
   IncidentSeverity,
@@ -94,6 +101,61 @@ function extractFilePath(args: unknown): string | undefined {
   const record = args as Record<string, unknown>;
   const fp = record.filePath ?? record.filepath;
   return typeof fp === "string" ? fp : undefined;
+}
+
+/**
+ * Pure mapper: convert a `task_create_batch` tool arg into the
+ * {@link TaskCreateInput} shape consumed by {@link createTasksBatch}.
+ *
+ * Extracted from the tool's `execute` closure so the v17/T1
+ * `verificationRequired` forwarding (and the legacy metadata fallback) can be
+ * unit-tested without instantiating the OpenCode plugin runtime, which
+ * requires `PluginInput`/SDK wiring.
+ *
+ * Forwards the explicit `verificationRequired` flag when present. The
+ * `metadata.verificationRequired === true` fallback continues to be honored
+ * inside createTasksBatch (backwards-compatible opt-in), so callers using
+ * either path are gated correctly.
+ */
+export function mapTaskCreateBatchArg(
+  t: {
+    description: string;
+    agent: string;
+    files?: string[] | undefined;
+    complexity?: number | undefined;
+    dependencies?: string[] | undefined;
+    metadata?: Record<string, unknown> | undefined;
+    verificationRequired?: boolean | undefined;
+  },
+  auditCtx: {
+    createdBy: string;
+    updatedBy: string;
+    sourceSessionId?: string | null;
+    sourceMessageId?: string | null;
+  },
+): TaskCreateInput {
+  const typedMeta = (t.metadata ?? {}) as TaskMetadata;
+  return {
+    // orderIndex intentionally omitted — createTasksBatch allocates dynamically
+    // via SELECT MAX+1 to avoid UNIQUE constraint collisions on retries/splits.
+    // Caller-provided idx was the root cause of the UNIQUE constraint bug
+    // (plan ca69222a).
+    description: t.description,
+    agent: t.agent,
+    files: t.files ?? [],
+    complexity: t.complexity ?? 3,
+    dependencies: t.dependencies ?? [],
+    ...auditCtx,
+    reviewedBy: typedMeta.reviewedBy ?? null,
+    tokensUsed: typedMeta.tokensUsed ?? null,
+    durationMs: typedMeta.durationMs ?? null,
+    artifacts: typedMeta.artifacts ?? [],
+    metadata: typedMeta,
+    // Forward the explicit gate flag when present. Omit otherwise so the
+    // metadata.verificationRequired fallback inside createTasksBatch stays
+    // the source of truth for legacy callers.
+    ...(t.verificationRequired !== undefined ? { verificationRequired: t.verificationRequired } : {}),
+  };
 }
 
 /**
@@ -169,7 +231,7 @@ export class FileLock {
  */
 export function escalateToForeman(
   db: Database,
-  ctx: { agent?: string; sessionID?: string; messageID?: string },
+  ctx: { agent?: string; sessionID?: string; messageID?: string; projectDir?: string },
   args: {
     sourcePlanId?: string;
     sourceTaskId?: string;
@@ -228,6 +290,7 @@ export function escalateToForeman(
       ctx.sessionID,
       { escalated: true, escalationPlanId: plan.id },
       `escalated by craftsman: ${args.reason}`,
+      ctx.projectDir ? { projectDir: ctx.projectDir } : undefined,
     );
   }
 
@@ -315,6 +378,18 @@ export type NdomoConfig = {
   fileLock?: {
     /** TTL for write/edit locks in ms. Stale entries auto-release via sweep. */
     ttlMs?: number;
+  };
+  /**
+   * Circuit breaker for tool-call loops. Trips when a session emits too many
+   * total tool calls (default 4000) or too many consecutive IDENTICAL calls
+   * (default 20). On trip: warns, optionally fails the relevant task, and
+   * blocks further calls with {@link CIRCUIT_BREAKER_ERROR}. One-shot per
+   * session. Only `threshold` (total) is configurable here; the identical
+   * threshold keeps its default.
+   */
+  circuitBreaker?: {
+    /** Total tool calls per session before the breaker trips. Default 4000. */
+    threshold?: number;
   };
   /** HTTP server configuration. Loaded from environment variables if not set. */
   http?: import("./config/schema.ts").HttpConfig;
@@ -483,7 +558,11 @@ export const NdomoPlugin: Plugin = async (
   }
 
   // Shared state — lives for the lifetime of the plugin instance
-  const db: Database = openDb(resolveProjectDir({ worktree, directory }));
+  // Single resolution point: projectDir is reused for the DB, the
+  // auto-checkpoint ledger wiring, and the session_checkpoint tool so all
+  // session checkpoints persist a portable filesystem ledger.
+  const projectDir = resolveProjectDir({ worktree, directory });
+  const db: Database = openDb(projectDir);
   runMigrations(db);
   registerShutdownHandlers(db);
   const dispatcher = new BackgroundDispatcher(db);
@@ -557,8 +636,28 @@ export const NdomoPlugin: Plugin = async (
   const fileLockTtlMs = ndomoConfig?.fileLock?.ttlMs ?? 60_000;
   const activeWrites = new FileLock(fileLockTtlMs);
 
-  // Auto-checkpoint dispatcher (T3.3)
-  const autoCheckpoint = new AutoCheckpointDispatcher(db, ndomoConfig?.autoCheckpoint);
+  // Circuit breaker for tool-call loops. Config option `circuitBreaker.threshold`
+  // overrides the TOTAL per-session threshold only; the consecutive-identical
+  // threshold keeps its default (20). Absent/invalid config → built-in default
+  // (4000), so protection can never be silently disabled by a malformed value.
+  const circuitBreaker = new CircuitBreaker(
+    ndomoConfig?.circuitBreaker?.threshold !== undefined
+      ? { totalThreshold: ndomoConfig.circuitBreaker.threshold }
+      : {},
+  );
+  if (httpConfig.enabled) {
+    console.log(
+      `[ndomo] circuit breaker: totalThreshold=${circuitBreaker.config.totalThreshold} identicalThreshold=${circuitBreaker.config.identicalThreshold}`,
+    );
+  }
+
+  // Auto-checkpoint dispatcher (T3.3). projectDir threads through so each
+  // auto-checkpoint also persists a filesystem ledger (continuity across
+  // process restarts / DB rebuilds).
+  const autoCheckpoint = new AutoCheckpointDispatcher(db, {
+    ...ndomoConfig?.autoCheckpoint,
+    projectDir,
+  });
 
   // ─── Hooks ───────────────────────────────────────────────────────────────
 
@@ -629,8 +728,47 @@ export const NdomoPlugin: Plugin = async (
       }
     },
 
-    // (b) Enforce no-overlap rule for write/edit tools
+    // (b) Circuit breaker (runs for EVERY tool call) + no-overlap rule for
+    //     write/edit tools. The breaker check happens first so a tripped
+    //     session short-circuits before any lock is acquired — preserving
+    //     the existing FileLock lifecycle for healthy sessions.
     "tool.execute.before": async (input, output) => {
+      // ── Circuit breaker: count every call, evaluate thresholds ─────────
+      const cb = circuitBreaker.check(input.sessionID ?? "", input.tool, output.args);
+      if (cb.trippedNow) {
+        // One-shot edge: this is the single call that crossed a threshold.
+        // Emit ONE warning + (optionally) fail the relevant task, then throw.
+        const taskToFail = resolveCircuitBreakerTaskFailure(input.tool, output.args);
+        console.error(
+          `[ndomo] circuit breaker TRIPPED — session=${input.sessionID ?? "?"} tool=${input.tool} reason=${cb.reason} calls=${cb.callCount} identical=${cb.identicalCount}${taskToFail ? ` failingTask=${taskToFail}` : " (no task target)"}`,
+        );
+        if (taskToFail) {
+          try {
+            updateTaskStatus(
+              db,
+              taskToFail,
+              "failed",
+              { error: CIRCUIT_BREAKER_ERROR },
+              "ndomo-circuit-breaker",
+              { agent: "ndomo-circuit-breaker", sessionId: input.sessionID },
+            );
+          } catch (err) {
+            // A failed task-write (e.g. missing row) must NOT mask the
+            // circuit-breaker throw itself. Log and continue to the throw.
+            console.warn(
+              `[ndomo] circuit breaker: could not mark task ${taskToFail} failed: ${(err as Error).message}`,
+            );
+          }
+        }
+        throw new Error(CIRCUIT_BREAKER_ERROR);
+      }
+      if (cb.blocked) {
+        // Session already tripped on an earlier call — block silently so the
+        // log isn't spammed (one-shot, no re-warn / re-fail).
+        throw new Error(CIRCUIT_BREAKER_ERROR);
+      }
+
+      // ── File-lock enforcement (existing behavior, unchanged) ───────────
       if (input.tool !== "write" && input.tool !== "edit") return;
 
       const filepath = extractFilePath(output.args);
@@ -1125,7 +1263,7 @@ export const NdomoPlugin: Plugin = async (
 
       task_create_batch: tool({
         description:
-          "Create multiple tasks for a plan in a single transaction. Each task gets a UUID and sequential order_index.",
+           "Create multiple tasks for a plan in a single transaction. Each task gets a UUID and sequential order_index. Set verificationRequired=true on a task to enable the v17/T1 execution gate (updateTaskStatus('done') blocked until the inspector passes or a foreman force-waives). metadata.verificationRequired=true is honored as a backwards-compatible fallback.",
         args: {
           planId: tool.schema.string(),
           tasks: tool.schema.array(
@@ -1136,6 +1274,7 @@ export const NdomoPlugin: Plugin = async (
               complexity: tool.schema.number().int().min(1).max(5).optional(),
               dependencies: tool.schema.array(tool.schema.string()).optional(),
               metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+              verificationRequired: tool.schema.boolean().optional(),
             }),
           ),
         },
@@ -1149,26 +1288,7 @@ export const NdomoPlugin: Plugin = async (
           const tasks = createTasksBatch(
             db,
             args.planId,
-            args.tasks.map((t) => {
-              const typedMeta = (t.metadata ?? {}) as TaskMetadata;
-              return {
-                // orderIndex intentionally omitted — createTasksBatch allocates
-                // dynamically via SELECT MAX+1 to avoid UNIQUE constraint collisions
-                // on retries/splits. Caller-provided idx was the root cause of the
-                // UNIQUE constraint bug (plan ca69222a).
-                description: t.description,
-                agent: t.agent,
-                files: t.files ?? [],
-                complexity: t.complexity ?? 3,
-                dependencies: t.dependencies ?? [],
-                ...auditCtx,
-                reviewedBy: typedMeta.reviewedBy ?? null,
-                tokensUsed: typedMeta.tokensUsed ?? null,
-                durationMs: typedMeta.durationMs ?? null,
-                artifacts: typedMeta.artifacts ?? [],
-                metadata: typedMeta,
-              };
-            }),
+            args.tasks.map((t) => mapTaskCreateBatchArg(t, auditCtx)),
           );
           return JSON.stringify(tasks);
         },
@@ -1191,17 +1311,27 @@ export const NdomoPlugin: Plugin = async (
       }),
 
       task_update_status: tool({
-        description: "Update a task's status. Optionally record result or error text.",
+        description:
+          "Update a task's status. Optionally record result or error text. When transitioning to 'done' on a verification-gated task (v17/T1), pass force=true with a non-blank forceReason to waive the gate.",
         args: {
           id: tool.schema.string(),
           status: tool.schema.enum(["pending", "running", "done", "failed", "blocked"]),
           result: tool.schema.string().optional(),
           error: tool.schema.string().optional(),
+          force: tool.schema.boolean().optional(),
+          forceReason: tool.schema.string().optional(),
         },
         execute: async (args, ctx) => {
-          const fields: { result?: string; error?: string } = {};
+          const fields: {
+            result?: string;
+            error?: string;
+            force?: boolean;
+            forceReason?: string;
+          } = {};
           if (args.result !== undefined) fields.result = args.result;
           if (args.error !== undefined) fields.error = args.error;
+          if (args.force !== undefined) fields.force = args.force;
+          if (args.forceReason !== undefined) fields.forceReason = args.forceReason;
           const result = updateTaskStatus(
             db,
             args.id,
@@ -1221,6 +1351,53 @@ export const NdomoPlugin: Plugin = async (
             }
           }
           return JSON.stringify(result);
+        },
+      }),
+
+      // ── T1 (v17): execution gate verification ──────────────────────────────
+
+      task_verify: tool({
+        description:
+          "Record an independent-verifier verdict on a task's execution gate (v17/T1). verdict='passed' is inspector-only unless force+forceReason; 'failed'/'waived' require reason. Override of an existing 'passed' requires force.",
+        args: {
+          taskId: tool.schema.string(),
+          verdict: tool.schema.enum(["passed", "failed", "waived"]),
+          result: tool.schema.unknown().optional(),
+          reason: tool.schema.string().optional(),
+          force: tool.schema.boolean().optional(),
+          forceReason: tool.schema.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          // result may arrive as JSON string or object — normalize to a record.
+          let resultObj: Record<string, unknown> | undefined;
+          if (args.result !== undefined) {
+            if (typeof args.result === "string") {
+              try {
+                const parsed = JSON.parse(args.result);
+                resultObj =
+                  parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+                    ? (parsed as Record<string, unknown>)
+                    : { value: parsed };
+              } catch {
+                resultObj = { raw: args.result };
+              }
+            } else if (typeof args.result === "object" && args.result !== null) {
+              resultObj = args.result as Record<string, unknown>;
+            }
+          }
+          const updated = recordTaskVerification(
+            db,
+            args.taskId,
+            args.verdict,
+            resultObj,
+            ctx.agent ?? "unknown",
+            {
+              ...(args.force !== undefined ? { force: args.force } : {}),
+              ...(args.forceReason !== undefined ? { forceReason: args.forceReason } : {}),
+              ...(args.reason !== undefined ? { reason: args.reason } : {}),
+            },
+          );
+          return JSON.stringify(updated);
         },
       }),
 
@@ -1445,7 +1622,9 @@ export const NdomoPlugin: Plugin = async (
           if (args.sourceTaskId !== undefined) escalateArgs.sourceTaskId = args.sourceTaskId;
           if (args.suggestedApproach !== undefined)
             escalateArgs.suggestedApproach = args.suggestedApproach;
-          return JSON.stringify(escalateToForeman(db, ctx, escalateArgs));
+          // Thread the boot-resolved projectDir so the escalation checkpoint
+          // persists a continuity ledger alongside the DB write.
+          return JSON.stringify(escalateToForeman(db, { ...ctx, projectDir }, escalateArgs));
         },
       }),
 
@@ -1664,7 +1843,9 @@ export const NdomoPlugin: Plugin = async (
           keyDecisions: tool.schema.string().optional(),
         },
         execute: async (args) => {
-          return JSON.stringify(checkpointSession(db, args.id, args.state, args.keyDecisions));
+          // projectDir from the plugin closure boot → each checkpoint writes a
+          // portable ledger at <projectDir>/.ndomo/ledgers/{id}.md.
+          return JSON.stringify(checkpointSession(db, args.id, args.state, args.keyDecisions, { projectDir }));
         },
       }),
 

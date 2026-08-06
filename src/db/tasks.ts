@@ -15,7 +15,12 @@ import { bus } from "../events/bus.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { setExecutedByOnce } from "./plans.ts";
 import { ensureSession } from "./sessions.ts";
-import type { PlanTask, TaskMetadata, TaskStatus } from "./types.ts";
+import type {
+  PlanTask,
+  TaskMetadata,
+  TaskStatus,
+  TaskVerificationStatus,
+} from "./types.ts";
 import { taskFromRow } from "./types.ts";
 
 // ─── M7: Cross-stack file splitting ─────────────────────────────────────────
@@ -71,30 +76,76 @@ export interface TaskTruncationInfo {
   truncatedLength?: number;
 }
 
-/** Return type for updateTaskStatus — includes truncation metadata. */
 export type TaskUpdateResult = (PlanTask & { truncation: TaskTruncationInfo }) | null;
+
+/**
+ * Input shape for {@link createTasksBatch} (and {@link createTask}).
+ *
+ * Backwards-compatible: callers that already worked with `Omit<PlanTask, ...>`
+ * keep working because every field here except `description`/`agent`/`createdBy`
+ * is optional or defaulted. The verification* fields are NOT in this input —
+ * they are system-computed from `verificationRequired` (see createTasksBatch).
+ */
+export interface TaskCreateInput {
+  /** Preferred order_index slot. Optional — core allocates dynamically. */
+  orderIndex?: number;
+  description: string;
+  agent: string;
+  files?: string[];
+  complexity?: number;
+  dependencies?: string[];
+  createdBy: string;
+  updatedBy?: string;
+  sourceSessionId?: string | null;
+  sourceMessageId?: string | null;
+  reviewedBy?: string | null;
+  tokensUsed?: number | null;
+  durationMs?: number | null;
+  artifacts?: string[];
+  metadata?: TaskMetadata;
+  /**
+   * v17 (T1): when true, the new task starts with verificationRequired=true
+   * and verificationStatus='pending', gating updateTaskStatus('done') until
+   * the inspector passes (or a foreman force-waives). Defaults to false
+   * (legacy behavior). Also recognized via metadata.verificationRequired === true.
+   */
+  verificationRequired?: boolean;
+}
+
+/**
+ * Build the immutable `original_plan_data` JSON snapshot captured at task
+ * creation time (v6 audit trail).
+ *
+ * Extracted from {@link createTasksBatch} so the initial INSERT and the
+ * UNIQUE-collision retry path share ONE definition. Previously the retry
+ * path hand-duplicated the object literal and had drifted (a misindented
+ * `complexity` line) — a classic copy/paste maintenance hazard.
+ *
+ * Pure: no DB access, no side effects.
+ */
+function buildOriginalPlanData(
+  task: TaskCreateInput,
+  metadata: TaskMetadata | Record<string, unknown>,
+  orderIndex: number,
+  verificationRequired: boolean,
+): string {
+  return JSON.stringify({
+    description: task.description,
+    agent: task.agent,
+    files: task.files ?? [],
+    complexity: task.complexity ?? 3,
+    dependencies: task.dependencies ?? [],
+    metadata,
+    orderIndex,
+    createdBy: task.createdBy,
+    verificationRequired,
+  });
+}
 
 export function createTasksBatch(
   db: Database,
   planId: string,
-  tasks: Array<
-    Omit<
-      PlanTask,
-      | "id"
-      | "planId"
-      | "status"
-      | "startedAt"
-      | "completedAt"
-      | "result"
-      | "error"
-      | "archivedAt"
-      | "originalPlanData"
-      | "orderIndex"
-    > & {
-      /** Preferred order_index slot. If omitted or occupied, core allocates dynamically. */
-      orderIndex?: number;
-    }
-  >,
+  tasks: TaskCreateInput[],
 ): PlanTask[] {
   // v6: soft warning for large task batches
   if (tasks.length > 5) {
@@ -240,26 +291,33 @@ export function createTasksBatch(
           ? { ...effectiveTask.metadata, splitFrom: firstSubTaskId }
           : (effectiveTask.metadata ?? {});
 
+        // v17 (T1): execution gate opt-in.
+        // Recognize verificationRequired from EITHER the explicit field
+        // (preferred path on PlanTask) OR metadata.verificationRequired === true
+        // (backwards-compatible opt-in for callers that don't yet send the field).
+        const verificationRequired =
+          effectiveTask.verificationRequired === true ||
+          taskMetadata.verificationRequired === true;
+        const verificationStatus: TaskVerificationStatus = verificationRequired
+          ? "pending"
+          : "not_required";
+
         // Defense-in-depth: try/catch UNIQUE constraint with retry on order_index.
         // The pre-loop allocation should prevent collisions, but if a race or
         // edge case triggers SQLITE_CONSTRAINT, reassign order_index and retry.
         let currentOrderIndex = orderIndex;
-        let originalPlanData = JSON.stringify({
-          description: effectiveTask.description,
-          agent: effectiveTask.agent,
-          files: effectiveTask.files ?? [],
-          complexity: effectiveTask.complexity,
-          dependencies: effectiveTask.dependencies ?? [],
-          metadata: taskMetadata,
-          orderIndex: currentOrderIndex,
-          createdBy: effectiveTask.createdBy,
-        });
+        let originalPlanData = buildOriginalPlanData(
+          effectiveTask,
+          taskMetadata,
+          currentOrderIndex,
+          verificationRequired,
+        );
         let inserted = false;
         for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
           try {
             db.query(
-              `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO plan_tasks (id, plan_id, order_index, description, agent, files, complexity, status, dependencies, metadata, created_by, updated_by, source_session_id, source_message_id, reviewed_by, tokens_used, duration_ms, artifacts, original_plan_data, verification_required, verification_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ).run(
               id,
               planId,
@@ -267,7 +325,7 @@ export function createTasksBatch(
               effectiveTask.description,
               effectiveTask.agent,
               JSON.stringify(effectiveTask.files ?? []),
-              effectiveTask.complexity,
+              effectiveTask.complexity ?? 3,
               JSON.stringify(effectiveTask.dependencies ?? []),
               JSON.stringify(taskMetadata),
               effectiveTask.createdBy,
@@ -279,6 +337,8 @@ export function createTasksBatch(
               effectiveTask.durationMs ?? null,
               JSON.stringify(effectiveTask.artifacts ?? []),
               originalPlanData,
+              verificationRequired ? 1 : 0,
+              verificationStatus,
             );
             inserted = true;
             break;
@@ -290,16 +350,12 @@ export function createTasksBatch(
             ) {
               // order_index collision — reassign and rebuild snapshot
               currentOrderIndex = allocateOrderIndex(undefined);
-              originalPlanData = JSON.stringify({
-                description: effectiveTask.description,
-                agent: effectiveTask.agent,
-                files: effectiveTask.files ?? [],
-                complexity: effectiveTask.complexity,
-                dependencies: effectiveTask.dependencies ?? [],
-                metadata: taskMetadata,
-                orderIndex: currentOrderIndex,
-                createdBy: effectiveTask.createdBy,
-              });
+              originalPlanData = buildOriginalPlanData(
+                effectiveTask,
+                taskMetadata,
+                currentOrderIndex,
+                verificationRequired,
+              );
               continue;
             }
             throw err;
@@ -318,7 +374,7 @@ export function createTasksBatch(
           description: effectiveTask.description,
           agent: effectiveTask.agent,
           files: effectiveTask.files ?? [],
-          complexity: effectiveTask.complexity,
+          complexity: effectiveTask.complexity ?? 3,
           status: "pending",
           startedAt: null,
           completedAt: null,
@@ -336,6 +392,11 @@ export function createTasksBatch(
           metadata: taskMetadata as TaskMetadata,
           archivedAt: null,
           originalPlanData,
+          verificationRequired,
+          verificationStatus,
+          verificationResult: null,
+          verificationPassedAt: null,
+          verifiedBy: null,
         });
 
         // Track signature to prevent in-batch duplicates
@@ -379,19 +440,7 @@ export function createTasksBatch(
 export function createTask(
   db: Database,
   planId: string,
-  task: Omit<
-    PlanTask,
-    | "id"
-    | "planId"
-    | "status"
-    | "startedAt"
-    | "completedAt"
-    | "result"
-    | "error"
-    | "archivedAt"
-    | "originalPlanData"
-    | "orderIndex"
-  >,
+  task: TaskCreateInput,
 ): PlanTask {
   const created = createTasksBatch(db, planId, [{ ...task }]);
   return created[0]!;
@@ -626,17 +675,74 @@ export function updateTaskStatus(
     metadataPatch?: Record<string, unknown>;
     reviewedBy?: string;
     reviewedVerdict?: string;
+    /**
+     * v17 (T1) execution-gate bypass. When status='done' and the task has
+     * verificationRequired=true with verificationStatus ∉ {passed, waived},
+     * updateTaskStatus throws UNLESS force=true AND forceReason is a non-blank
+     * string. The bypass is recorded in metadata.verificationBypass for audit
+     * and the verification status is moved to 'waived'.
+     */
+    force?: boolean;
+    forceReason?: string;
   },
   updatedBy?: string,
   ctx?: { agent?: string; sessionId?: string },
 ): TaskUpdateResult {
-  // Capture prior status + planId BEFORE the UPDATE for status_changed emit
-  // and so we always have the FK even when the UPDATE returns no row.
+  // Capture prior status + planId + verification state BEFORE the UPDATE for
+  // status_changed emit and for the T1 execution gate.
   const priorRow = db
-    .query("SELECT status, plan_id FROM plan_tasks WHERE id = ?")
-    .get(id) as { status: TaskStatus; plan_id: string } | undefined;
+    .query(
+      "SELECT status, plan_id, verification_required, verification_status FROM plan_tasks WHERE id = ?",
+    )
+    .get(id) as
+    | {
+        status: TaskStatus;
+        plan_id: string;
+        verification_required: number | null;
+        verification_status: string | null;
+      }
+    | undefined;
   const previousStatus = priorRow?.status;
   const planId = priorRow?.plan_id;
+
+  // Local-only bypass audit trail. Captured here when the gate is force-waived,
+  // then merged into the metadata UPDATE below. We NEVER write back to the
+  // caller's `fields` object — mutating caller input is a hidden side effect
+  // that surprised prior callers (they saw their metadataPatch gain a
+  // verificationBypass key after the call).
+  let bypassAudit: Record<string, unknown> | null = null;
+
+  // ── T1 execution gate ───────────────────────────────────────────────────
+  // Only 'done' is gated. 'failed'/'blocked'/'pending'/'running' are always
+  // allowed — failing a task doesn't reward it with a green check.
+  if (
+    status === "done" &&
+    priorRow?.verification_required === 1 &&
+    priorRow?.verification_status !== "passed" &&
+    priorRow?.verification_status !== "waived"
+  ) {
+    const reason = fields?.forceReason?.trim();
+    if (!fields?.force || !reason) {
+      throw new Error(
+        `ndomo: task ${id} requires verification before 'done' — ` +
+          `record a 'passed' verdict via task_verify (inspector), or re-issue ` +
+          `updateTaskStatus with force=true and a non-blank forceReason to waive the gate.`,
+      );
+    }
+    // Bypass accepted → capture audit trail LOCALLY (do not mutate the caller's
+    // `fields` object). The actual metadata write is merged below into the
+    // existing metadataPatch path so a single UPDATE handles it.
+    bypassAudit = {
+      verificationBypass: {
+        forceReason: reason,
+        forcedBy: updatedBy ?? ctx?.agent ?? "unknown",
+        forcedAt: Date.now(),
+      },
+    };
+    // The gate will be re-checked AFTER the UPDATE; we surface 'waived' now
+    // so the metadata + status write happens in one pass below.
+    if (priorRow) priorRow.verification_status = "waived";
+  }
 
   const now = Date.now();
   const setClauses: string[] = ["status = ?"];
@@ -708,21 +814,42 @@ export function updateTaskStatus(
     params.push(fields.reviewedBy);
   }
 
-  // T1: metadataPatch (deep merge) + reviewedVerdict (stored in metadata)
-  if (fields?.metadataPatch !== undefined || fields?.reviewedVerdict !== undefined) {
+  // T1: metadataPatch (deep merge) + reviewedVerdict + bypass audit.
+  // bypassAudit is a LOCAL object (never the caller's input), so merging it
+  // here cannot mutate the caller's `fields.metadataPatch`. The SYSTEM audit
+  // wins on key collision: caller patch is spread FIRST, bypassAudit LAST, so
+  // a caller-supplied metadataPatch.verificationBypass cannot forge the
+  // forcedBy/forceReason/forcedAt audit record. The caller's other keys still
+  // land normally.
+  if (
+    fields?.metadataPatch !== undefined ||
+    fields?.reviewedVerdict !== undefined ||
+    bypassAudit !== null
+  ) {
     const currentRow = db.query("SELECT metadata FROM plan_tasks WHERE id = ?").get(id) as
       | { metadata: string | null }
       | undefined;
     const currentMetadata: Record<string, unknown> = currentRow?.metadata
       ? JSON.parse(currentRow.metadata)
       : {};
-    const patch: Record<string, unknown> = { ...(fields.metadataPatch ?? {}) };
+    const patch: Record<string, unknown> = {
+      ...(fields?.metadataPatch ?? {}),
+      ...bypassAudit,
+    };
     if (fields?.reviewedVerdict !== undefined) {
       patch.reviewedVerdict = fields.reviewedVerdict;
     }
     const merged = deepMerge(currentMetadata, patch);
     setClauses.push("metadata = ?");
     params.push(JSON.stringify(merged));
+  }
+
+  // T1 (v17): if the execution-gate bypass fired above, persist the waived
+  // status to its column so subsequent reads (and re-issued done calls) see
+  // an open gate. The metadata.verificationBypass audit trail was written above.
+  if (status === "done" && priorRow?.verification_required === 1 && priorRow.verification_status === "waived") {
+    setClauses.push("verification_status = ?");
+    params.push("waived");
   }
 
   if (updatedBy !== undefined) {
@@ -762,6 +889,185 @@ export function updateTaskStatus(
   }
 
   return { ...task, truncation: truncationInfo };
+}
+
+// ─── T1 (v17): Verification lifecycle ──────────────────────────────────────
+
+/**
+ * Verdict emitted by an independent verifier (inspector) or by a privileged
+ * agent forcing the verdict. See {@link recordTaskVerification}.
+ */
+export type TaskVerificationVerdict = "passed" | "failed" | "waived";
+
+/** Return type for {@link recordTaskVerification}. */
+export interface TaskVerificationResult extends PlanTask {}
+
+/**
+ * Deterministically resolve the `verified_by` actor for a verification write.
+ *
+ * Resolution order:
+ *   1. Explicit caller identity (the `inspector`, or any named agent) wins.
+ *   2. Forced override with a non-empty `forceReason` → the deterministic
+ *      `"forced"` audit actor (the caller declined to identify themselves but
+ *      took responsibility via force).
+ *   3. Otherwise unattributed (`null`).
+ *
+ * Replaces a previously convoluted nested ternary
+ * (`verifiedBy ?? (opts.force ? (opts.forceReason ? verifiedBy ?? "forced" : null) : null)`)
+ * that was hard to audit and contained a redundant inner `verifiedBy ??`.
+ * Pure refactor — observable semantics preserved.
+ */
+function resolveVerificationActor(
+  verifiedBy: string | undefined,
+  opts: { force?: boolean; forceReason?: string },
+): string | null {
+  if (verifiedBy !== undefined && verifiedBy !== null) return verifiedBy;
+  if (opts.force && opts.forceReason) return "forced";
+  return null;
+}
+
+/**
+ * Independent-verifier rule (T1 / v17).
+ *
+ * Record a verification verdict on a task. Updates the four verification
+ * columns atomically. Enforces:
+ *
+ * 1. Task must exist (throws "task not found").
+ * 2. verdict ∈ {passed, failed, waived} — anything else throws.
+ * 3. **passed** requires `verifiedBy === 'inspector'` UNLESS `opts.force=true`
+ *    AND `opts.forceReason` is a non-blank string. This implements the
+ *    "inspector is the only QA authority" boundary from agents/inspector.md.
+ * 4. **failed** / **waived** REQUIRE a non-blank `opts.reason` so the
+ *    rejection/waiver is never silent. Additionally, **failed** from a
+ *    non-inspector caller is accepted ONLY while the task status is 'pending';
+ *    once the task is running/done/failed/blocked, a negative verdict must
+ *    come from 'inspector' (the QA authority). Inspector 'failed' is
+ *    unrestricted at every status.
+ * 5. Changing an existing **passed** verdict requires `opts.force=true` AND
+ *    a non-blank `opts.forceReason` — a positive verification is immutable-ish.
+ * 6. Writing verdict='passed' also stamps verification_passed_at = now and
+ *    verified_by = the resolved caller (verifiedBy ?? forcedBy ?? 'inspector').
+ *
+ * Column updates per verdict:
+ *   passed  → status='passed',  passed_at=now, verified_by=caller, result=result ?? null
+ *   failed  → status='failed',  passed_at=null, verified_by=caller, result=result ?? null
+ *   waived  → status='waived',  passed_at=null, verified_by=caller, result=result ?? null
+ *
+ * @param db        open DB handle
+ * @param taskId    plan_tasks.id
+ * @param verdict   one of 'passed' | 'failed' | 'waived'
+ * @param result    optional structured payload (JSON column)
+ * @param verifiedBy caller agent name (typically 'inspector' for passed)
+ * @param opts      { force?, forceReason?, reason? } — see rules above
+ */
+export function recordTaskVerification(
+  db: Database,
+  taskId: string,
+  verdict: TaskVerificationVerdict,
+  result?: Record<string, unknown>,
+  verifiedBy?: string,
+  opts: { force?: boolean; forceReason?: string; reason?: string } = {},
+): TaskVerificationResult {
+  const VALID_VERDICTS: ReadonlySet<string> = new Set(["passed", "failed", "waived"]);
+  if (!VALID_VERDICTS.has(verdict)) {
+    throw new Error(
+      `ndomo: invalid verification verdict "${verdict}" — must be one of: passed, failed, waived`,
+    );
+  }
+
+  const existing = getTask(db, taskId);
+  if (!existing) {
+    throw new Error(`ndomo: task not found: ${taskId}`);
+  }
+
+  const now = Date.now();
+
+  // Rule 3: 'passed' is inspector-only unless forced.
+  if (verdict === "passed") {
+    const caller = verifiedBy ?? "unknown";
+    if (caller !== "inspector") {
+      const reason = opts.forceReason?.trim();
+      if (!opts.force || !reason) {
+        throw new Error(
+          `ndomo: only 'inspector' may record verdict='passed' ` +
+            `(got verifiedBy="${caller}") — pass force=true with non-blank forceReason to override.`,
+        );
+      }
+    }
+  }
+
+  // Rule 4: 'failed' / 'waived' need a non-blank reason.
+  if (verdict !== "passed") {
+    const reason = opts.reason?.trim();
+    if (!reason) {
+      throw new Error(
+        `ndomo: verdict='${verdict}' requires a non-blank reason (opts.reason) — silent rejection is forbidden.`,
+      );
+    }
+  }
+
+  // Rule 4b: non-inspector 'failed' is accepted ONLY while the task is still
+  // pending. Once work has started (running/done/failed/blocked), a negative
+  // verdict must come from the QA authority (inspector). This matches the
+  // verification_status='failed' audit semantics ("inspector recorded a
+  // negative verdict") and the recommendation that 'failed' is accepted only
+  // if the task is pending. Inspector 'failed' is unrestricted at every status
+  // — the inspector is the authority at all stages.
+  if (verdict === "failed") {
+    const caller = verifiedBy ?? "unknown";
+    if (caller !== "inspector" && existing.status !== "pending") {
+      throw new Error(
+        `ndomo: non-inspector verdict='failed' (verifiedBy="${caller}") is only ` +
+          `accepted while the task is pending (current status="${existing.status}") — ` +
+          `re-issue as 'inspector' to record a negative verdict on an in-flight task.`,
+      );
+    }
+  }
+
+  // Rule 5: overriding an existing 'passed' requires force.
+  if (
+    existing.verificationStatus === "passed" &&
+    verdict !== "passed" &&
+    !(opts.force && opts.forceReason?.trim())
+  ) {
+    throw new Error(
+      `ndomo: task ${taskId} already has verification_status='passed' — ` +
+        `overriding to '${verdict}' requires force=true with non-blank forceReason.`,
+    );
+  }
+
+  const setClauses: string[] = [
+    "verification_status = ?",
+    "verification_passed_at = ?",
+    "verification_result = ?",
+    "verified_by = ?",
+  ];
+  const params: SQLQueryBindings[] = [
+    verdict,
+    verdict === "passed" ? now : null,
+    result !== undefined ? JSON.stringify(result) : null,
+    resolveVerificationActor(verifiedBy, opts),
+  ];
+
+  db.query(`UPDATE plan_tasks SET ${setClauses.join(", ")} WHERE id = ?`).run(...params, taskId);
+
+  const updated = getTask(db, taskId);
+  if (!updated) {
+    // Should be unreachable — we just verified the row exists.
+    throw new Error(`ndomo: task ${taskId} vanished mid-verification`);
+  }
+
+  // Live-reactivity hook — verification changes count as a task update.
+  bus.emit({
+    type: "task.updated",
+    taskId: updated.id,
+    planId: updated.planId,
+    agent: updated.agent,
+    status: updated.status,
+    timestamp: now,
+  });
+
+  return updated;
 }
 
 export function searchTasks(

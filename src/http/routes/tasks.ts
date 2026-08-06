@@ -5,7 +5,8 @@
  * GET   /api/tasks/:id              — get single task by id
  * POST  /api/plans/:planId/tasks    — create a new task on a plan
  * PUT   /api/tasks/:id              — update task fields (partial)
- * PATCH /api/tasks/:id/status       — transition task status
+ * PATCH /api/tasks/:id/status       — transition task status (gated when verificationRequired, v17/T1)
+ * POST  /api/tasks/:id/verify       — record verifier verdict (v17/T1)
  * PATCH /api/tasks/:id/reassign     — reassign task to a different agent
  * DELETE /api/tasks/:id             — delete a task (with guards)
  */
@@ -15,6 +16,7 @@ import {
   deleteTask,
   getTask,
   listTasksByPlan,
+  recordTaskVerification,
   reassignTask,
   searchTasks,
   updateTaskFields,
@@ -27,6 +29,7 @@ import {
   TaskStatusPatchBody,
   TaskStatusValues,
   TaskUpdateBody,
+  TaskVerifyBody,
 } from "../schemas.ts";
 
 export function tasksRoute(db: Database) {
@@ -119,9 +122,16 @@ export function tasksRoute(db: Database) {
       "/api/tasks/:id/status",
       async ({ params: { id }, body, set }) => {
         try {
-          const fields: { result?: string; error?: string } = {};
+          const fields: {
+            result?: string;
+            error?: string;
+            force?: boolean;
+            forceReason?: string;
+          } = {};
           if (body.result !== undefined) fields.result = body.result;
           if (body.error !== undefined) fields.error = body.error;
+          if (body.force !== undefined) fields.force = body.force;
+          if (body.forceReason !== undefined) fields.forceReason = body.forceReason;
 
           const result = updateTaskStatus(
             db,
@@ -137,6 +147,16 @@ export function tasksRoute(db: Database) {
           return result;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("requires verification")) {
+            // T1 execution gate fired — tell the client exactly how to proceed.
+            set.status = 409;
+            return {
+              error: "verification_required",
+              message: msg,
+              hint:
+                "POST /api/tasks/:id/verify with verdict='passed' (inspector only) or re-issue with force=true + non-blank forceReason to waive.",
+            };
+          }
           if (msg.includes("invalid transition") || msg.includes("cannot transition")) {
             set.status = 409;
             return { error: "conflict", message: msg };
@@ -148,6 +168,61 @@ export function tasksRoute(db: Database) {
       {
         params: t.Object({ id: t.String() }),
         body: TaskStatusPatchBody,
+      },
+    )
+    // ─── POST /api/tasks/:id/verify — record verifier verdict (v17/T1) ───────
+    .post(
+      "/api/tasks/:id/verify",
+      async ({ params: { id }, body, set }) => {
+        try {
+          // Normalize result: accept object OR JSON string.
+          let resultObj: Record<string, unknown> | undefined;
+          if (body.result !== undefined && body.result !== null) {
+            if (typeof body.result === "string") {
+              try {
+                const parsed = JSON.parse(body.result);
+                resultObj =
+                  parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+                    ? (parsed as Record<string, unknown>)
+                    : { value: parsed };
+              } catch {
+                resultObj = { raw: body.result };
+              }
+            } else if (typeof body.result === "object") {
+              resultObj = body.result as Record<string, unknown>;
+            }
+          }
+          // verifiedBy: explicit body field wins; otherwise fall back to updatedBy;
+          // the inspector-only 'passed' rule is enforced inside recordTaskVerification.
+          const verifiedBy = body.verifiedBy ?? "unknown";
+          const updated = recordTaskVerification(db, id, body.verdict, resultObj, verifiedBy, {
+            ...(body.force !== undefined ? { force: body.force } : {}),
+            ...(body.forceReason !== undefined ? { forceReason: body.forceReason } : {}),
+            ...(body.reason !== undefined ? { reason: body.reason } : {}),
+          });
+          return updated;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("task not found")) {
+            set.status = 404;
+            return { error: "not_found", message: msg };
+          }
+          if (
+            msg.includes("invalid verification verdict") ||
+            msg.includes("only 'inspector'") ||
+            msg.includes("requires a non-blank reason") ||
+            msg.includes("already has verification_status='passed'")
+          ) {
+            set.status = 409;
+            return { error: "verification_conflict", message: msg };
+          }
+          set.status = 500;
+          return { error: "internal_error", message: msg };
+        }
+      },
+      {
+        params: t.Object({ id: t.String() }),
+        body: TaskVerifyBody,
       },
     )
     // ─── PATCH /api/tasks/:id/reassign — reassign task agent ─────────────────

@@ -17,6 +17,14 @@ export interface AutoCheckpointConfig {
   enabled?: boolean
   triggers?: string[]
   minIntervalMs?: number
+  /**
+   * Resolved absolute project root. When set, every auto-checkpoint also
+   * writes a portable filesystem ledger under `<projectDir>/.ndomo/ledgers/`
+   * (see writeLedgerBestEffort in sessions.ts). Threaded in by the plugin
+   * (single resolveProjectDir call at boot); undefined = legacy behaviour
+   * (DB checkpoint only, no ledger) — fully backwards-compatible.
+   */
+  projectDir?: string
   captureState?: {
     completedTasks?: boolean
     currentPhase?: boolean
@@ -61,6 +69,7 @@ export class AutoCheckpointDispatcher {
   private readonly enabled: boolean
   private readonly triggers: Set<string>
   private readonly minIntervalMs: number
+  private readonly projectDir: string | undefined
   private readonly captureCompleted: boolean
   private readonly capturePhase: boolean
   private readonly captureBlockers: boolean
@@ -71,6 +80,7 @@ export class AutoCheckpointDispatcher {
     this.enabled = config?.enabled ?? DEFAULT_ENABLED
     this.triggers = new Set(config?.triggers ?? DEFAULT_TRIGGERS)
     this.minIntervalMs = config?.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS
+    this.projectDir = config?.projectDir
     this.captureCompleted = config?.captureState?.completedTasks ?? DEFAULT_CAPTURE_COMPLETED
     this.capturePhase = config?.captureState?.currentPhase ?? DEFAULT_CAPTURE_PHASE
     this.captureBlockers = config?.captureState?.blockers ?? DEFAULT_CAPTURE_BLOCKERS
@@ -116,7 +126,13 @@ export class AutoCheckpointDispatcher {
           state.blockers = ctx.blockers
         }
 
-        checkpointSession(this.db, ctx.sessionId!, state)
+        checkpointSession(
+          this.db,
+          ctx.sessionId!,
+          state,
+          undefined,
+          this.projectDir ? { projectDir: this.projectDir } : undefined,
+        )
       } catch (err) {
         // Auto-checkpoint must never break the caller
         console.error(

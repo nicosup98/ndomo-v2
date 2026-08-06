@@ -1,7 +1,7 @@
 ---
 description: Especialista en Vue (Vue Architect & UI/UX Optimizer)
 mode: subagent
-model: xiaomi/mimo-v2.5-pro
+model: zai-coding-plan/glm-5.2
 temperature: 0.1
 permission:
   edit: allow

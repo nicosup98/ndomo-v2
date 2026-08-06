@@ -10,10 +10,10 @@ describe("migration v13 — ops tables (T2)", () => {
     db.exec("PRAGMA foreign_keys = ON")
   })
 
-  test("applies v13 and sets schema_version=16 (latest)", () => {
+  test("applies v13 (and any later migrations) — schema_version >= 16", () => {
     runMigrations(db)
     const row = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number }
-    expect(row.v).toBe(16)
+    expect(row.v).toBeGreaterThanOrEqual(16)
   })
 
   test("all 5 ops tables exist", () => {
@@ -133,9 +133,9 @@ describe("migration v13 — ops tables (T2)", () => {
     }).toThrow()
   })
 
-  test("v16 is the last entry in MIGRATIONS array", () => {
-    const last = MIGRATIONS[MIGRATIONS.length - 1]
-    expect(last).toBeDefined()
-    expect(last!.version).toBe(16)
+  test("v16 is present in MIGRATIONS array (v17+ may exist after it)", () => {
+    const v16 = MIGRATIONS.find((m) => m.version === 16)
+    expect(v16).toBeDefined()
+    expect(v16!.version).toBe(16)
   })
 })

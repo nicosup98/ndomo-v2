@@ -27,6 +27,9 @@ export const TaskStatusValues = [
   "blocked",
 ] as const;
 
+/** v17 (T1): valid verifier verdicts. */
+export const TaskVerificationVerdictValues = ["passed", "failed", "waived"] as const;
+
 export const PlanOwnerValues = ["foreman", "craftsman", "warden"] as const;
 
 export const PlanCategoryValues = ["feature", "refactor", "bugfix", "docs", "infra"] as const;
@@ -130,6 +133,11 @@ export const TaskCreateBody = t.Object({
   complexity: t.Optional(t.Number({ minimum: 1, maximum: 5 })),
   dependencies: t.Optional(t.Array(t.String())),
   metadata: t.Optional(t.Record(t.String(), t.Unknown())),
+  /**
+   * v17 (T1): when true, the task starts gated — updateTaskStatus('done')
+   * is blocked until an inspector passes (or a foreman force-waives).
+   */
+  verificationRequired: t.Optional(t.Boolean()),
 });
 
 export type TaskCreateBodyT = {
@@ -139,6 +147,7 @@ export type TaskCreateBodyT = {
   complexity?: number;
   dependencies?: string[];
   metadata?: Record<string, unknown>;
+  verificationRequired?: boolean;
 };
 
 /** PUT /api/tasks/:id body */
@@ -164,6 +173,13 @@ export const TaskStatusPatchBody = t.Object({
   updatedBy: t.String({ minLength: 1 }),
   result: t.Optional(t.String()),
   error: t.Optional(t.String()),
+  /**
+   * v17 (T1): force-bypass the execution gate when status='done' on a
+   * gated task. Requires a non-blank forceReason. Recorded in
+   * metadata.verificationBypass and moves verification_status to 'waived'.
+   */
+  force: t.Optional(t.Boolean()),
+  forceReason: t.Optional(t.String()),
 });
 
 export type TaskStatusPatchBodyT = {
@@ -171,6 +187,27 @@ export type TaskStatusPatchBodyT = {
   updatedBy: string;
   result?: string;
   error?: string;
+  force?: boolean;
+  forceReason?: string;
+};
+
+/** POST /api/tasks/:id/verify body — record a verifier verdict (v17/T1). */
+export const TaskVerifyBody = t.Object({
+  verdict: t.UnionEnum(TaskVerificationVerdictValues),
+  result: t.Optional(t.Unknown()),
+  reason: t.Optional(t.String({ minLength: 1 })),
+  force: t.Optional(t.Boolean()),
+  forceReason: t.Optional(t.String()),
+  verifiedBy: t.Optional(t.String({ minLength: 1 })),
+});
+
+export type TaskVerifyBodyT = {
+  verdict: "passed" | "failed" | "waived";
+  result?: unknown;
+  reason?: string;
+  force?: boolean;
+  forceReason?: string;
+  verifiedBy?: string;
 };
 
 /** PATCH /api/tasks/:id/reassign body */

@@ -1,10 +1,12 @@
 # ndomo
 
-OpenCode multi-agent plugin. Taller de artesanos: 19 specialists under one Foreman, one Craftsman, and one Warden. Caveman-native. opencode-mem integrated. DCP peer optional.
+OpenCode multi-agent plugin. Taller de artesanos: 20 specialists under one Foreman, one Craftsman, and one Warden. Caveman-native. opencode-mem integrated. DCP peer optional.
 
 ## What is ndomo
 
-ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/opencode-ai). It routes development tasks to 19 specialized agents (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler, and ops agents) coordinated by 3 primaries: Foreman (planning), Craftsman (implementation), Warden (operations). All agents use the Caveman output protocol for token-efficient communication. Memory persistence across sessions is handled by opencode-mem. The optional DCP plugin provides additional context pruning for long sessions.
+ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/opencode-ai). It routes development tasks to 20 specialized agents (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, critic, chronicler, and ops agents) coordinated by 3 primaries: Foreman (planning), Craftsman (implementation), Warden (operations). All agents use the Caveman output protocol for token-efficient communication. Memory persistence across sessions is handled by opencode-mem. The optional DCP plugin provides additional context pruning for long sessions.
+
+**Quality features (since 0.4.0):** execution gates enforcement, binary critic review, brainstorm workflow with design docs, cross-session continuity ledgers, and circuit breaker loop detection.
 
 ## Agents
 
@@ -25,6 +27,7 @@ ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/op
 | **sage** | Architecture advisor and debugger | opencode-go/deepseek-v4-pro | subagent |
 | **guild** | Multi-LLM consensus and debate | opencode-go/deepseek-v4-pro | subagent |
 | **inspector** | Code quality and security auditor | opencode-go/deepseek-v4-pro | subagent |
+| **critic** | Binary diff reviewer — APPROVED/REJECTED | minimax/MiniMax-M3 | subagent |
 | **chronicler** | Technical documentation writer | opencode-go/deepseek-v4-flash | subagent |
 | **ci-smith** | CI/CD pipeline specialist | opencode-go/deepseek-v4-flash | subagent |
 | **deploy-smith** | Deployment automation specialist | opencode-go/deepseek-v4-flash | subagent |
@@ -117,10 +120,16 @@ See [docs/installer.md](docs/installer.md) for detailed steps and full flag refe
 
 ndomo persists plans, tasks, and sessions in a project-local SQLite database
 (`<project>/.ndomo/state.db`) with FTS5 search, audit trail, and auto-archive
-to markdown on completion. 14 tools exposed via OpenCode: `plan_create`,
+to markdown on completion. 17 tools exposed via OpenCode: `plan_create`,
 `plan_get`, `plan_list`, `plan_search`, `plan_approve`, `plan_update_status`,
 `task_create_batch`, `task_list`, `task_update_status`, `task_search`,
-`task_next_for_agent`, `session_start`, `session_checkpoint`, `session_end`.
+`task_next_for_agent`, `task_verify`, `session_start`, `session_checkpoint`,
+`session_end`, `design_create`, `ledger_create`, `ledger_get`, `ledger_update`.
+
+**New tools (since 0.4.0):**
+- `task_verify` — inspector-only verification gate for execution gates
+- `design_create` — persist brainstorm design docs (Phase 0)
+- `ledger_create` / `ledger_get` / `ledger_update` — cross-session continuity ledgers
 
 CLI write surface (since 0.3.0):
 - `ndomo plan create|list|show|update|approve|complete|delete`
@@ -131,6 +140,75 @@ HTTP write surface (since 0.3.0): 10 endpoints covering plan create/update/appro
 The foreman uses these to track work across agent dispatches. See
 [docs/database.md](docs/database.md) for schema, tools, lifecycle, and
 auto-archive behavior.
+
+## Quality Features (since 0.4.0)
+
+### Execution Gates (T1)
+
+Tasks can require verification before completion. When `verification_required=true`, the task enters a `verifying` state and blocks until an inspector calls `task_verify` with `verdict='passed'`. A force+forceReason audit bypass exists for emergencies.
+
+```typescript
+// Task creation with verification
+task_create_batch({ tasks: [{ verificationRequired: true, ... }] })
+
+// Inspector verification
+task_verify({ taskId, verdict: 'passed', reason: 'tests + lint clean' })
+
+// Force bypass (audited)
+task_verify({ taskId, verdict: 'waived', force: true, forceReason: 'hotfix deploy' })
+```
+
+### Critic Agent (T2)
+
+A dedicated binary reviewer agent. Produces structured `APPROVED`/`REJECTED` verdicts with feedback, scores, and action items. Routed via inspector for execution gate enforcement.
+
+```typescript
+// Critic review tool
+critic_review({ diff, verdict: 'APPROVED', critical: [], optimizations: [], scores: { security: 9, performance: 8, idiomaticity: 9 } })
+```
+
+### Brainstorm Workflow (T3)
+
+Phase 0 (mandatory before `plan_create`): foreman clarifies the problem, runs `grill-me`, optionally dispatches scout/sage/scribe, then persists a design doc via `design_create`.
+
+Design docs live in `.ndomo/designs/YYYY-MM-DD-{slug}-design.md` and include:
+- Problem definition
+- Options evaluated
+- Decision taken + rationale
+- Trade-offs accepted
+- Scope and exclusions
+
+```typescript
+design_create({ slug: 'feat-x', title: 'Feature X design', problem: '...', goals: [...], constraints: [...], options: [...], decision: '...', tradeoffs: '...' })
+```
+
+### Continuity Ledger (T4)
+
+Cross-session context persistence. Ledgers are written to `.ndomo/ledgers/{sessionId}.md` on every `session_checkpoint`. DB remains source of truth; ledger writes are best-effort.
+
+```typescript
+// Tools
+ledger_create({ sessionId, content: '...' })
+ledger_get({ sessionId })
+ledger_update({ sessionId, patch: { keyDecisions: [...] } })
+
+// Auto-written on session_checkpoint (best-effort, non-blocking)
+```
+
+### Circuit Breaker (T5)
+
+Detects stuck sessions via tool call counting. Thresholds:
+- **Total calls:** 4000 per session (configurable via `circuitBreaker.threshold`)
+- **Identical consecutive:** 20 calls with same tool + args
+
+On trip: warning emitted, target task marked `failed` with error `"Circuit breaker: potential loop detected"`. `task_update_status` calls are exempt to allow recovery.
+
+```json
+// config/ndomo.config.json
+{
+  "circuitBreaker": { "threshold": 4000 }
+}
+```
 
 ## Configuration
 
@@ -145,11 +223,14 @@ Config file: `~/.config/opencode/ndomo.json`
     "defaultScope": "project",
     "autoCaptureEnabled": true,
     "cavemanCompress": true
-  }
+  },
+  "circuitBreaker": { "threshold": 4000 }
 }
 ```
 
 See [docs/configuration.md](docs/configuration.md) for full reference. Agent presets support an optional `reasoning_effort` field (`low`/`medium`/`high`/`xhigh`) for reasoning-capable models.
+
+**Circuit breaker config:** `circuitBreaker.threshold` (default: 4000) sets the max tool calls per session before the breaker trips.
 
 ## Skills
 
