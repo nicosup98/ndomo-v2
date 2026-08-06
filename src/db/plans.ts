@@ -3,9 +3,15 @@
  *
  * All functions take a Database instance and return camelCase TS types.
  * Mutations that touch multiple rows use db.transaction().
+ *
+ * Post-commit hooks: mutations emit typed events on the in-process bus
+ * (`src/events/bus.ts`) so SSE subscribers (`src/http/routes/events.ts`)
+ * receive live updates without polling. Bus emits happen AFTER the DB
+ * write so subscribers never see unpublished state.
  */
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { ensureSession } from "./sessions.ts";
 import type { Plan, PlanCategory, PlanStatus } from "./types.ts";
@@ -34,8 +40,8 @@ export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updated
     createdAt: now,
   });
   db.query(
-    `INSERT INTO plans (id, slug, title, status, priority, created_at, updated_at, approved_at, completed_at, session_id, overview, approach, complexity, metadata, created_by, updated_by, source_session_id, source_message_id, category, original_plan_data, created_by_agent, executed_by_agent, executed_by_session)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (id, slug, title, status, priority, created_at, updated_at, approved_at, completed_at, session_id, overview, approach, complexity, metadata, created_by, updated_by, source_session_id, source_message_id, category, original_plan_data, created_by_agent, executed_by_agent, executed_by_session, owner)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     plan.id,
     plan.slug,
@@ -60,6 +66,7 @@ export function createPlan(db: Database, plan: Omit<Plan, "createdAt" | "updated
     plan.createdByAgent ?? null,
     plan.executedByAgent ?? null,
     plan.executedBySession ?? null,
+    plan.owner ?? "foreman",
   );
   return { ...plan, createdAt: now, updatedAt: now, originalPlanData };
 }
@@ -182,6 +189,13 @@ export function updatePlanStatus(
     executedBySession?: string;
   } = {},
 ): Plan | null {
+  // Capture the prior status BEFORE the UPDATE so the bus can emit a
+  // typed status_changed event with both the old and new values.
+  const priorRow = db.query("SELECT status FROM plans WHERE id = ?").get(id) as
+    | { status: PlanStatus }
+    | undefined;
+  const previousStatus = priorRow?.status;
+
   const now = Date.now();
 
   // Fix #1 (scoped): validate sessionId only when status will actually link it (Fix #8)
@@ -248,7 +262,86 @@ export function updatePlanStatus(
     db.query("UPDATE plans SET completed_at = ? WHERE id = ? AND completed_at IS NULL").run(now, id);
   }
 
-  return getPlan(db, id);
+  // Live-reactivity hook: re-read after the transaction so subscribers see
+  // the canonical post-write row. Emit plan.updated always; plan.status_changed
+  // only when the status actually transitioned.
+  const result = getPlan(db, id);
+  if (result) {
+    const ts = Date.now();
+    bus.emit({
+      type: "plan.updated",
+      planId: result.id,
+      slug: result.slug,
+      title: result.title,
+      status: result.status,
+      timestamp: ts,
+    });
+    if (previousStatus !== undefined && previousStatus !== status) {
+      bus.emit({
+        type: "plan.status_changed",
+        planId: result.id,
+        slug: result.slug,
+        title: result.title,
+        previousStatus,
+        status: result.status,
+        timestamp: ts,
+      });
+    }
+  }
+  return result;
+}
+
+/**
+ * Generic plan field updater — covers fields NOT handled by updatePlanStatus:
+ * title, overview, approach, complexity, category, owner.
+ * Throws on invalid owner (defense in depth since CHECK was deferred).
+ */
+export function updatePlanFields(
+  db: Database,
+  planId: string,
+  fields: Partial<Pick<Plan, "title" | "overview" | "approach" | "complexity" | "category" | "owner">>,
+  opts: { updatedBy: string },
+): Plan | null {
+  const validOwners = new Set(["foreman", "craftsman", "warden"]);
+  if (fields.owner !== undefined && !validOwners.has(fields.owner)) {
+    throw new Error(`invalid owner "${fields.owner}" — must be foreman|craftsman|warden`);
+  }
+
+  const sets: string[] = [];
+  const args: SQLQueryBindings[] = [];
+  const map: Record<keyof typeof fields, string> = {
+    title: "title",
+    overview: "overview",
+    approach: "approach",
+    complexity: "complexity",
+    category: "category",
+    owner: "owner",
+  };
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) continue;
+    sets.push(`${map[k as keyof typeof fields]} = ?`);
+    args.push(v as SQLQueryBindings);
+  }
+  if (sets.length === 0) return getPlan(db, planId);
+
+  sets.push("updated_at = ?");
+  sets.push("updated_by = ?");
+  args.push(Date.now(), opts.updatedBy);
+  args.push(planId);
+
+  db.query(`UPDATE plans SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  const result = getPlan(db, planId);
+  if (result) {
+    bus.emit({
+      type: "plan.updated",
+      planId: result.id,
+      slug: result.slug,
+      title: result.title,
+      status: result.status,
+      timestamp: Date.now(),
+    });
+  }
+  return result;
 }
 
 /**
@@ -265,6 +358,12 @@ export function approvePlan(
   id: string,
   opts: { updatedBy?: string; sessionId?: string } = {},
 ): Plan | null {
+  // Capture prior status BEFORE the UPDATE for status_changed emission.
+  const priorRow = db.query("SELECT status FROM plans WHERE id = ?").get(id) as
+    | { status: PlanStatus }
+    | undefined;
+  const previousStatus = priorRow?.status;
+
   const now = Date.now();
 
   // Fix #1 (scoped): validate sessionId when linking (Fix #8 — approve always links)
@@ -286,7 +385,32 @@ export function approvePlan(
       "UPDATE plans SET status = 'approved', approved_at = ?, updated_at = ? WHERE id = ?",
     ).run(now, now, id);
   }
-  return getPlan(db, id);
+
+  // Live-reactivity hook: notify subscribers of the approval transition.
+  const result = getPlan(db, id);
+  if (result) {
+    const ts = Date.now();
+    bus.emit({
+      type: "plan.updated",
+      planId: result.id,
+      slug: result.slug,
+      title: result.title,
+      status: result.status,
+      timestamp: ts,
+    });
+    if (previousStatus !== undefined && previousStatus !== "approved") {
+      bus.emit({
+        type: "plan.status_changed",
+        planId: result.id,
+        slug: result.slug,
+        title: result.title,
+        previousStatus,
+        status: "approved",
+        timestamp: ts,
+      });
+    }
+  }
+  return result;
 }
 
 // ─── Plan deletion ──────────────────────────────────────────────────────────
@@ -370,6 +494,17 @@ export function deletePlan(db: Database, planId: string, opts: DeletePlanOpts): 
   // Delete — CASCADE handles plan_tasks, plan_files, plan_tags
   // sessions.plan_id is SET NULL per schema
   db.query("DELETE FROM plans WHERE id = ?").run(planId);
+
+  // Live-reactivity hook: notify subscribers that the plan was removed.
+  // (No plan.archived here — deletion is permanent, distinct from the
+  // soft-delete + archive path used by plan_update_status.)
+  bus.emit({
+    type: "plan.archived",
+    planId: plan.id,
+    slug: plan.slug,
+    title: plan.title,
+    timestamp: Date.now(),
+  });
 
   return {
     planId,

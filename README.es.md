@@ -36,25 +36,25 @@ ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.
 ## Inicio Rápido
 
 ```bash
-# Instalación rápida (interactivo, preguntará por provider)
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+# Instalación rápida (interactivo, preguntará por HTTP)
+bunx ndomo install
 
-# No interactivo con provider preestablecido
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+# No interactivo con preset + HTTP habilitado
+bunx ndomo install --preset=budget --enable-http
 
-# Con preset budget + DCP
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+# Con DCP
+bunx ndomo install --with-dcp
 ```
 
-Por defecto la instalación aplica `presets.default` de `config/ndomo.config.json`. Usa `--preset=budget` para modelos más económicos, `--provider=ID` para sobrescribir el prefijo de provider.
+Por defecto la instalación aplica `presets.default` de `config/ndomo.config.json`. Usa `--preset=budget` para modelos más económicos, `--provider=ID` para sobrescribir el prefijo de provider, `--enable-http` para activar el servidor HTTP.
 
 O desde el código fuente:
 
 ```bash
-git clone <repo-url> ndomo
+git clone https://github.com/nicosup98/ndomo-v2 ndomo
 cd ndomo
 bun install
-opencode
+bun run src/cli/install.ts
 ```
 
 Dentro de OpenCode, verifica que todos los agentes respondan:
@@ -67,30 +67,31 @@ ping all agents
 
 **Requisitos:** [bun](https://bun.sh) >= 1.1.0, OpenCode instalado y configurado con al menos un proveedor autenticado.
 
-Instalación vía curl (recomendada):
+Instalación vía bunx (recomendada):
 
 ```bash
-# Instalación interactiva (preguntará por provider)
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
+# Instalación interactiva (preguntará por HTTP)
+bunx ndomo install
 
 # Con provider preestablecido (no interactivo)
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --provider=opencode --no-provider-prompt
+bunx ndomo install --provider=opencode --no-provider-prompt
 
 # Con preset budget + DCP
-curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash -s -- --preset=budget --with-dcp
+bunx ndomo install --preset=budget --with-dcp
 ```
 
 O desde un clon local:
 
 ```bash
-git clone <repo-url> ndomo
+git clone https://github.com/nicosup98/ndomo-v2 ndomo
 cd ndomo
-./scripts/install.sh                 # con preset default
-./scripts/install.sh --preset=budget # con modelos budget
-./scripts/install.sh --with-dcp      # incluye plugin DCP
+bun install
+bun run src/cli/install.ts                        # con preset default
+bun run src/cli/install.ts --preset=budget        # con modelos budget
+bun run src/cli/install.ts --with-dcp             # incluye plugin DCP
 ```
 
-Ver [docs/installation.md](docs/installation.md) para pasos detallados.
+Ver [docs/installer.md](docs/installer.md) para pasos detallados.
 
 **Flags:**
 
@@ -100,10 +101,15 @@ Ver [docs/installation.md](docs/installation.md) para pasos detallados.
 | `--no-provider-prompt` | Omite el prompt interactivo de provider. El preset se aplica igualmente; no se realiza ninguna sobrescritura de prefijo de provider. |
 | `--preset=NAME` | Selecciona un preset de `config/ndomo.config.json::presets[NAME]`. El preset es la fuente de verdad para los modelos de agentes al instalar. (default: `default`, opciones: `default`, `budget`) |
 | `--with-dcp` | Instala y configura el plugin DCP. |
-| `--repo=URL` | Sobrescribe la URL del repositorio (para instalaciones vía pipe desde un fork). |
-| `--branch=NAME` | Sobrescribe la rama del repositorio (para instalaciones vía pipe desde ramas dev). |
+| `--dry-run` | Imprime los cambios planeados sin escribir archivos. |
+| `--skip-deps` | Omite el paso de dependencias (`bun install`). |
+| `--enable-http` | Activa automáticamente el servidor HTTP (escribe bloque http en `ndomo.config.json`). |
+| `--disable-http` | Omite por completo el prompt automático de HTTP (default en no-TTY / CI). |
+| `--port=N` | Puerto del servidor HTTP (default: `4097`). |
+| `--cors-origins=CSV` | Orígenes CORS del HTTP, separados por comas (default: `*`). |
+| `--auth-required=BOOL` | Requisito de auth HTTP (default: `true`). |
 
-**Desinstalación:** `./scripts/uninstall.sh [--keep-data]`
+**Desinstalación:** `bunx ndomo install --uninstall` or `./scripts/uninstall.sh [--keep-data]`
 
 ## Base de Datos de Planes y Tareas
 

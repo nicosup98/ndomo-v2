@@ -4,9 +4,18 @@
  * Sessions track continuity across multiple agents working
  * toward a shared goal. They record checkpoints, agent history,
  * and key decisions.
+ *
+ * Post-commit hooks: each lifecycle mutation emits a typed event on the
+ * in-process bus (`src/events/bus.ts`) so SSE subscribers can react
+ * without polling. Bus emits happen AFTER the DB write so subscribers
+ * never observe unpublished state.
  */
 
 import type { Database } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
+import { sessionToLedgerData, writeLedger } from "./ledgers.ts";
+import type { ProjectDirContext } from "./resolve-project-dir.ts";
+import { resolveProjectDir } from "./resolve-project-dir.ts";
 import type { Session, SessionMetadata } from "./types.ts";
 import { sessionFromRow } from "./types.ts";
 
@@ -59,6 +68,16 @@ export function startSession(
   );
   const created = getSession(db, session.id);
   if (!created) throw new Error("ndomo: failed to create session");
+
+  // Live-reactivity hook: notify subscribers that a new session started.
+  bus.emit({
+    type: "session.started",
+    sessionId: created.id,
+    planId: created.planId,
+    goal: created.goal,
+    timestamp: Date.now(),
+  });
+
   return created;
 }
 
@@ -92,11 +111,29 @@ export function listSessions(
   return (rows as unknown[]).map((r) => sessionFromRow(r));
 }
 
+/**
+ * Options for {@link checkpointSession} that opt into filesystem ledger
+ * persistence. Both fields are optional and independent:
+ *   - `projectDir`: explicit, already-resolved absolute project root
+ *     (preferred — caller used {@link resolveProjectDir} once).
+ *   - `context`: raw opencode SDK context (`{ worktree, directory }`),
+ *     resolved internally via {@link resolveProjectDir} when `projectDir`
+ *     is absent. Resolution failure is swallowed (best-effort).
+ *
+ * When neither is provided, the call is identical to the legacy 4-arg form
+ * (no ledger write) — fully backwards-compatible.
+ */
+export interface CheckpointLedgerOptions {
+  projectDir?: string;
+  context?: ProjectDirContext;
+}
+
 export function checkpointSession(
   db: Database,
   id: string,
   state: Record<string, unknown>,
   keyDecisions?: string,
+  opts?: CheckpointLedgerOptions,
 ): Session | null {
   const now = Date.now();
   const result = db
@@ -105,7 +142,52 @@ export function checkpointSession(
     )
     .run(now, JSON.stringify(state), keyDecisions ?? null, id);
   if (result.changes === 0) return null;
-  return getSession(db, id);
+
+  // Live-reactivity hook: notify subscribers of the checkpoint.
+  const sess = getSession(db, id);
+  if (sess) {
+    bus.emit({
+      type: "session.checkpoint",
+      sessionId: sess.id,
+      keyDecisions: sess.keyDecisions,
+      timestamp: Date.now(),
+    });
+
+    // Filesystem continuity ledger (best-effort). Persists a portable
+    // markdown snapshot under <projectDir>/.ndomo/ledgers/{id}.md so a new
+    // agent/process can resume without the SQLite store. The DB write above
+    // is the source of truth — a ledger failure MUST NOT break the
+    // checkpoint (mirrors AutoCheckpointDispatcher's swallow-on-error rule).
+    writeLedgerBestEffort(sess, opts);
+  }
+  return sess;
+}
+
+/**
+ * Resolve a project dir from the checkpoint options (explicit path wins,
+ * then context), then write the ledger. Swallows all filesystem errors
+ * with a single `console.warn` so the DB checkpoint stays authoritative.
+ */
+function writeLedgerBestEffort(sess: Session, opts?: CheckpointLedgerOptions): void {
+  let projectDir: string | undefined = opts?.projectDir;
+  if (!projectDir && opts?.context) {
+    try {
+      projectDir = resolveProjectDir(opts.context);
+    } catch {
+      // Invalid/unresolvable context (e.g. directory="/") — skip ledger.
+      projectDir = undefined;
+    }
+  }
+  if (!projectDir) return;
+
+  try {
+    writeLedger(projectDir, sessionToLedgerData(sess));
+  } catch (err) {
+    console.warn(
+      `[ndomo] session ledger write failed for ${sess.id}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 export function appendAgentHistory(
@@ -131,5 +213,16 @@ export function endSession(db: Database, id: string): Session | null {
     .query("UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL")
     .run(now, id);
   if (result.changes === 0) return null;
-  return getSession(db, id);
+
+  // Live-reactivity hook: notify subscribers that the session ended.
+  const sess = getSession(db, id);
+  if (sess) {
+    bus.emit({
+      type: "session.ended",
+      sessionId: sess.id,
+      outcome: sess.outcome,
+      timestamp: Date.now(),
+    });
+  }
+  return sess;
 }

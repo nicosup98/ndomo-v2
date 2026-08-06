@@ -63,7 +63,7 @@ All agents use `opencode-go/deepseek-v4-flash` at their respective temperatures.
 
 ## Provider Override at Install Time
 
-The `install.sh` script includes a provider override that modifies agent models before registration. This is not a runtime setting — it applies once during installation and is baked into each agent's frontmatter.
+The installer includes a provider override that modifies agent models before registration. This is not a runtime setting — it applies once during installation and is baked into each agent's frontmatter.
 
 The preset (not the provider) defines the model ID. `--provider=ID` only changes the `provider/` prefix in each agent's `model:` field, so the literal `default` model ID is never used.
 
@@ -97,11 +97,11 @@ The install also wires the plugin into the OpenCode config directory (`~/.config
 - `agents/*.md` — the `model:` field in each agent's frontmatter is modified during Step 5.5 of the install script.
 - `~/.cache/ndomo/models-catalog.json` — cached catalog (re-fetched weekly or on cache miss).
 
-The provider override is a one-time install operation. To change providers after installation, either re-run `install.sh` with a different `--provider` flag, or manually edit the `model:` fields in `agents/*.md`.
+The provider override is a one-time install operation. To change providers after installation, either re-run `bunx ndomo install` with a different `--provider` flag, or manually edit the `model:` fields in `agents/*.md`.
 
 ## Hot-swap: editing models without re-running install
 
-`ndomo.json::presets[preset][agent].model` is the **runtime source of truth** for agent models. The plugin's `syncAgentFrontmatter()` runs at every OpenCode session startup, compares each agent's `model:` and `temperature:` in `~/.config/opencode/agent/<agent>.md` against the active preset in `ndomo.json`, and rewrites the file when the values differ. This means you can edit `ndomo.json` directly and have the changes take effect on the next session — no need to re-run `install.sh`.
+`ndomo.json::presets[preset][agent].model` is the **runtime source of truth** for agent models. The plugin's `syncAgentFrontmatter()` runs at every OpenCode session startup, compares each agent's `model:` and `temperature:` in `~/.config/opencode/agent/<agent>.md` against the active preset in `ndomo.json`, and rewrites the file when the values differ. This means you can edit `ndomo.json` directly and have the changes take effect on the next session — no need to re-run the installer.
 
 **Workflow:**
 
@@ -243,7 +243,7 @@ Tools listed in `protectedTools` cannot be disabled, overridden, or pruned from 
 
 The ndomo package is not in `~/.config/opencode/node_modules/ndomo/`. OpenCode's plugin loader silently skips plugins it cannot resolve, so no tools, DB, or agents will appear.
 
-**Fix:** Re-run `./scripts/install.sh` or symlink it manually:
+**Fix:** Re-run `bunx ndomo install` or symlink it manually:
 
 ```bash
 ln -sfn $(pwd) ~/.config/opencode/node_modules/ndomo

@@ -14,7 +14,8 @@
       "**/*.json",
       "!**/.cache",
       "!**/skills",
-      "!**/node_modules"
+      "!**/node_modules",
+      "!**/.slim"
     ]
   },
   "formatter": {

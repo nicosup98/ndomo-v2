@@ -43,6 +43,7 @@ function makePlan(overrides: Partial<Parameters<typeof createPlan>[1]> = {}): Pl
     sourceSessionId: null,
     sourceMessageId: null,
     category: null,
+    owner: "foreman",
     metadata: {},
     archivedAt: null,
     ...overrides,
@@ -241,12 +242,12 @@ describe("v8: executed_by_agent/session", () => {
 // ─── Critical 2: v9 migration — plan_progress excludes archived ─────────────
 
 describe("v9: plan_progress view fix", () => {
-  test("DB with schema_version=5 → runMigrations → schema_version=15", () => {
-    // Fresh DB already runs all migrations up to v15
+  test("DB with schema_version=5 → runMigrations → schema_version >= 16", () => {
+    // Fresh DB already runs all migrations up to the latest version.
     const row = db.query("SELECT MAX(version) as version FROM schema_version").get() as {
       version: number;
     };
-    expect(row.version).toBe(15);
+    expect(row.version).toBeGreaterThanOrEqual(16);
   });
 
   test("plan_progress excludes archived plans", () => {
@@ -267,6 +268,7 @@ describe("v9: plan_progress view fix", () => {
       sourceSessionId: null,
       sourceMessageId: null,
       category: null,
+      owner: "foreman",
       metadata: {},
       archivedAt: null,
     });
@@ -287,6 +289,7 @@ describe("v9: plan_progress view fix", () => {
       sourceSessionId: null,
       sourceMessageId: null,
       category: null,
+      owner: "foreman",
       metadata: {},
       archivedAt: null,
     });

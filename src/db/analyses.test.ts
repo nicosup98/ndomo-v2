@@ -36,6 +36,7 @@ function makePlan(overrides?: Partial<ReturnType<typeof createPlan>>): ReturnTyp
     sourceSessionId: null,
     sourceMessageId: null,
     category: null,
+    owner: "foreman",
     metadata: {},
     archivedAt: null,
     ...overrides,

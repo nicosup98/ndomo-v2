@@ -12,21 +12,36 @@ import type { TaskStatus } from "ndomo/db";
 import { closeDb, openDb, resolveProjectDir, runMigrations, updateTaskStatus } from "ndomo/db";
 
 export default tool({
-  description: "Update a task's status. Optionally record result or error text.",
+  description:
+    "Update a task's status. Optionally record result or error text. When transitioning to 'done' on a verification-gated task, pass force=true with a non-blank forceReason to waive the gate (v17/T1).",
   args: {
     id: tool.schema.string(),
     status: tool.schema.enum(["pending", "running", "done", "failed", "blocked"]),
     result: tool.schema.string().optional(),
     error: tool.schema.string().optional(),
+    /**
+     * v17 (T1): force-bypass the execution gate when status='done' and the
+     * task has verificationRequired=true but no passed/waived verdict.
+     * Requires a non-blank forceReason — recorded in metadata.verificationBypass.
+     */
+    force: tool.schema.boolean().optional(),
+    forceReason: tool.schema.string().optional(),
   },
   execute: async (args, ctx) => {
     const projectDir = resolveProjectDir(ctx);
     const db = openDb(projectDir);
     runMigrations(db);
     try {
-      const fields: { result?: string; error?: string } = {};
+      const fields: {
+        result?: string;
+        error?: string;
+        force?: boolean;
+        forceReason?: string;
+      } = {};
       if (args.result !== undefined) fields.result = args.result;
       if (args.error !== undefined) fields.error = args.error;
+      if (args.force !== undefined) fields.force = args.force;
+      if (args.forceReason !== undefined) fields.forceReason = args.forceReason;
       return JSON.stringify(
         updateTaskStatus(db, args.id, args.status as TaskStatus, fields, ctx.agent ?? "unknown"),
       );

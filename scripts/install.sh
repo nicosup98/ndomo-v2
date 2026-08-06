@@ -3,6 +3,34 @@
 # Usage: ./install.sh [OPTIONS]
 #        curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh | bash
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️  DEPRECATED: scripts/install.sh is the legacy bash installer.
+# ─────────────────────────────────────────────────────────────────────────────
+# This script is preserved for backward-compat (e.g., pipe-mode installs from
+# raw GitHub URL). It will be removed in a future major version.
+#
+# ✅  USE THE NEW TS INSTALLER INSTEAD:
+#
+#     bunx ndomo install [OPTIONS]
+#
+# New features vs. this bash version:
+#   • Full parity with install.sh (same flags, same phases, same package install
+#     strategies, same preset application, same opencode.json plugin registration)
+#   • NEW: HTTP auto-prompt — interactively enables HTTP server (writes http
+#     block to ndomo.config.json) — closes the gap left by phase-1
+#   • NEW: --dry-run, --skip-deps, --port, --cors-origins, --auth-required flags
+#   • Honors XDG_CONFIG_HOME per XDG Base Directory spec
+#   • Cross-platform (no BSD/GNU sed differences)
+#   • Tested via bun:test (src/cli/__tests__/install.test.ts)
+#
+# Migration (one-liner):
+#   curl ... | bash                    →  bunx ndomo install
+#   ./install.sh --preset=budget       →  bunx ndomo install --preset=budget
+#   ./install.sh --with-dcp            →  bunx ndomo install --with-dcp
+#
+# See docs/installer.md for full flag reference.
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Pipe detection (must be first, before set -e) ──────────────────────────────
 # When invoked via pipe/stdin, clone repo to temp dir and re-exec from disk.
 if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "bash" || "${BASH_SOURCE[0]}" == "/dev/stdin" ]]; then

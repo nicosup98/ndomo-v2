@@ -161,6 +161,18 @@
           "description": "Apply caveman compression to stored memories."
         }
       }
+    },
+    "circuitBreaker": {
+      "type": "object",
+      "description": "Circuit breaker for tool-call loops. Trips on runaway total call volume (default 4000/session) or repeated identical consecutive calls (default 20). One-shot per session: warns + optionally fails the relevant task + blocks further calls on the tripping call; subsequent calls are blocked silently.",
+      "additionalProperties": false,
+      "properties": {
+        "threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total tool calls per session before the breaker trips. Default 4000. The consecutive-identical threshold (20) is not configurable here and keeps its default."
+        }
+      }
     }
   }
 }

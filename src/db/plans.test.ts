@@ -55,6 +55,7 @@ function makePlan(overrides: Partial<Parameters<typeof createPlan>[1]> = {}): Pl
     sourceSessionId: null,
     sourceMessageId: null,
     category: null,
+    owner: "foreman",
     metadata: {},
     archivedAt: null,
     ...overrides,

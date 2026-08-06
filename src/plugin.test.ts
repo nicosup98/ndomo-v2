@@ -7,6 +7,9 @@
 
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import {
   archiveAnalysis,
@@ -18,6 +21,7 @@ import {
   unlinkAnalysisFromPlan,
   updateAnalysis,
 } from "./db/analyses.ts";
+import { readLedger } from "./db/ledgers.ts";
 import { createIncident } from "./db/incidents.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
@@ -33,7 +37,7 @@ import {
   updateTaskStatus,
 } from "./db/tasks.ts";
 import type { Plan } from "./db/types.ts";
-import { escalateToForeman, FileLock, reconcileAbandonedPlans } from "./plugin.ts";
+import { escalateToForeman, FileLock, mapTaskCreateBatchArg, reconcileAbandonedPlans } from "./plugin.ts";
 
 let db: Database;
 
@@ -160,6 +164,44 @@ describe("escalateToForeman", () => {
     expect(p1?.slug).not.toBe(p2?.slug);
     expect(p1?.slug).toMatch(/^escalation-/);
     expect(p2?.slug).toMatch(/^escalation-/);
+  });
+
+  test("writes a continuity ledger when ctx.projectDir is provided", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-esc-ledger-"));
+    try {
+      const sessionId = "ses_esc_ledger";
+      startSession(db, { id: sessionId, goal: "escalate with ledger" });
+
+      escalateToForeman(
+        db,
+        { agent: "craftsman", sessionID: sessionId, projectDir },
+        { reason: "needs ledger persistence" },
+      );
+
+      // The escalation checkpoint must persist a portable markdown ledger.
+      const ledger = readLedger(projectDir, sessionId);
+      expect(ledger).not.toBeNull();
+      expect(ledger?.goal).toBe("escalate with ledger");
+      expect(ledger?.keyDecisions).toContain("escalated by craftsman: needs ledger persistence");
+      expect(ledger?.state).toMatchObject({ escalated: true });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("writes NO ledger when ctx.projectDir is absent (backwards-compatible)", () => {
+    const sessionId = "ses_esc_noledger";
+    startSession(db, { id: sessionId, goal: "no ledger" });
+    // No projectDir → no ledger dir should ever be created anywhere reachable.
+    escalateToForeman(
+      db,
+      { agent: "craftsman", sessionID: sessionId },
+      { reason: "legacy path" },
+    );
+    // The DB checkpoint still happened (keyDecisions set) — ledger is the
+    // only thing skipped.
+    const session = getSession(db, sessionId);
+    expect(session?.keyDecisions).toContain("escalated by craftsman: legacy path");
   });
 });
 
@@ -1250,6 +1292,81 @@ describe("integration — task_create_batch → task_add_artifact → task_revie
     expect(JSON.parse(finalTask.artifacts)).toEqual(["output.ts"]);
     expect(finalTask.reviewed_by).toBe("inspector");
     expect(JSON.parse(finalTask.metadata).reviewedVerdict).toBe("approved");
+  });
+});
+
+// ─── mapTaskCreateBatchArg — v17/T1 verificationRequired forwarding (Issue 4) ─
+
+describe("mapTaskCreateBatchArg — verificationRequired forwarding (T1)", () => {
+  const auditCtx = {
+    createdBy: "foreman",
+    updatedBy: "foreman",
+    sourceSessionId: "ses_1",
+    sourceMessageId: "msg_1",
+  };
+
+  test("forwards explicit verificationRequired=true", () => {
+    const input = mapTaskCreateBatchArg(
+      { description: "gated", agent: "js-smith", verificationRequired: true },
+      auditCtx,
+    );
+    expect(input.verificationRequired).toBe(true);
+  });
+
+  test("forwards explicit verificationRequired=false", () => {
+    const input = mapTaskCreateBatchArg(
+      { description: "explicit-free", agent: "js-smith", verificationRequired: false },
+      auditCtx,
+    );
+    expect(input.verificationRequired).toBe(false);
+  });
+
+  test("omits verificationRequired when not supplied (legacy path)", () => {
+    const input = mapTaskCreateBatchArg({ description: "free", agent: "js-smith" }, auditCtx);
+    expect(input.verificationRequired).toBeUndefined();
+  });
+
+  test("metadata.verificationRequired fallback is preserved untouched (backwards-compat)", () => {
+    // The mapper does NOT promote metadata→field; createTasksBatch honors
+    // metadata.verificationRequired===true as the legacy fallback. We only
+    // assert the metadata passes through verbatim so that fallback keeps working.
+    const input = mapTaskCreateBatchArg(
+      { description: "legacy gated", agent: "js-smith", metadata: { verificationRequired: true } },
+      auditCtx,
+    );
+    expect(input.verificationRequired).toBeUndefined();
+    expect(input.metadata?.verificationRequired).toBe(true);
+  });
+
+  test("applies audit ctx + defaults (files, complexity, dependencies, artifacts)", () => {
+    const input = mapTaskCreateBatchArg({ description: "d", agent: "a" }, auditCtx);
+    expect(input.files).toEqual([]);
+    expect(input.complexity).toBe(3);
+    expect(input.dependencies).toEqual([]);
+    expect(input.artifacts).toEqual([]);
+    expect(input.createdBy).toBe("foreman");
+    expect(input.updatedBy).toBe("foreman");
+    expect(input.sourceSessionId).toBe("ses_1");
+    expect(input.sourceMessageId).toBe("msg_1");
+    // orderIndex intentionally NOT set — createTasksBatch allocates it.
+    expect(input.orderIndex).toBeUndefined();
+  });
+
+  test("explicit field does NOT clobber a conflicting metadata value (field wins, forwarded as-is)", () => {
+    const input = mapTaskCreateBatchArg(
+      {
+        description: "conflict",
+        agent: "js-smith",
+        verificationRequired: false,
+        metadata: { verificationRequired: true },
+      },
+      auditCtx,
+    );
+    // Explicit field forwarded; metadata retained. createTasksBatch resolves
+    // the OR (field===true || metadata===true) — false||true → gated, which is
+    // the documented "metadata is a fallback, either opts in" semantics.
+    expect(input.verificationRequired).toBe(false);
+    expect(input.metadata?.verificationRequired).toBe(true);
   });
 });
 
@@ -2366,6 +2483,61 @@ describe("auto_checkpoint hook (T3.3)", () => {
     // currentPhase and blockers should NOT be captured
     expect(state.currentPhase).toBeUndefined();
     expect(state.blockers).toBeUndefined();
+  });
+
+  test("projectDir in config → auto-checkpoint writes a continuity ledger", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-acp-ledger-"));
+    try {
+      const { plan } = setupPlanWithTasks(1);
+      startSession(db, { id: "ses_acp_ledger", goal: "ledger auto-persist" });
+      const tasks = listTasksByPlan(db, plan.id);
+      updateTaskStatus(db, tasks[0]!.id, "done", {}, "test");
+
+      const dispatcher = new AutoCheckpointDispatcher(db, {
+        minIntervalMs: 0,
+        projectDir,
+      });
+      dispatcher.dispatch("phase_transition", {
+        planId: plan.id,
+        sessionId: "ses_acp_ledger",
+      });
+
+      // Flush the microtask-scheduled checkpoint.
+      await new Promise((r) => setTimeout(r, 10));
+
+      // DB checkpoint happened…
+      const sess = getSession(db, "ses_acp_ledger");
+      expect(sess?.state.trigger).toBe("phase_transition");
+      // …and a portable ledger was persisted alongside it.
+      const ledger = readLedger(projectDir, "ses_acp_ledger");
+      expect(ledger).not.toBeNull();
+      expect(ledger?.goal).toBe("ledger auto-persist");
+      expect(ledger?.state).toMatchObject({ trigger: "phase_transition" });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("no projectDir in config → auto-checkpoint writes NO ledger (legacy)", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-acp-noleg-"));
+    try {
+      const { plan } = setupPlanWithTasks(1);
+      startSession(db, { id: "ses_acp_noleg", goal: "legacy no ledger" });
+
+      // No projectDir passed — legacy behaviour.
+      const dispatcher = new AutoCheckpointDispatcher(db, { minIntervalMs: 0 });
+      dispatcher.dispatch("phase_transition", { planId: plan.id, sessionId: "ses_acp_noleg" });
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      // DB checkpoint still fires…
+      const sess = getSession(db, "ses_acp_noleg");
+      expect(sess?.state.trigger).toBe("phase_transition");
+      // …but no ledger directory was ever created.
+      expect(existsSync(join(projectDir, ".ndomo", "ledgers"))).toBe(false);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 });
 

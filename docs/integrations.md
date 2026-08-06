@@ -48,7 +48,7 @@ DCP monitors context token usage and, on request or automatically, prunes low-va
 ### How to install
 
 ```bash
-./scripts/install.sh --with-dcp
+bunx ndomo install --with-dcp
 ```
 
 This installs `@tarquinen/opencode-dcp` as an optional peer dependency.

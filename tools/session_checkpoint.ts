@@ -23,7 +23,12 @@ export default tool({
     const db = openDb(projectDir);
     runMigrations(db);
     try {
-      return JSON.stringify(checkpointSession(db, args.id, args.state, args.keyDecisions));
+      // projectDir already resolved → thread it so the checkpoint persists a
+      // portable ledger at <projectDir>/.ndomo/ledgers/{id}.md (matches the
+      // plugin tool behaviour in src/plugin.ts).
+      return JSON.stringify(
+        checkpointSession(db, args.id, args.state, args.keyDecisions, { projectDir }),
+      );
     } finally {
       closeDb(db);
     }

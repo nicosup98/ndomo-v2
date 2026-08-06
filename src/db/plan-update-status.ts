@@ -6,9 +6,15 @@
  *
  * Adds: readiness checks (blockers/warnings), atomic transaction,
  * dryRun, force with plan_audit capture.
+ *
+ * Post-commit hook: emits `plan.status_changed` on the bus when the status
+ * actually transitioned (no-op on dryRun / blocked / same-status idempotent
+ * calls). Also emits `plan.archived` on terminal status (the executor
+ * auto-archives markdown). Emits OUTSIDE the transaction.
  */
 
 import type { Database } from "bun:sqlite";
+import { bus } from "../events/bus.ts";
 import type { ArchiveResult } from "./plan-archive.ts";
 import { archivePlan } from "./plan-archive.ts";
 import { getPlan, updatePlanStatus } from "./plans.ts";
@@ -271,6 +277,37 @@ export function planUpdateStatusExecutor(
   });
 
   const { updated, archiveResult, archiveError, auditRowId } = txn();
+
+  // Live-reactivity hook: notify subscribers when status actually transitioned.
+  // - On terminal status (completed/failed/abandoned) we also emit plan.archived
+  //   because the executor auto-writes a markdown snapshot via archivePlan.
+  // - On dryRun / blocked paths we never reach here (early returns above).
+  if (updated && updated.status === args.status && currentStatus !== args.status) {
+    const ts = Date.now();
+    bus.emit({
+      type: "plan.status_changed",
+      planId: updated.id,
+      slug: updated.slug,
+      title: updated.title,
+      previousStatus: currentStatus,
+      status: updated.status,
+      timestamp: ts,
+    });
+    if (
+      archiveResult !== null &&
+      (updated.status === "completed" ||
+        updated.status === "failed" ||
+        updated.status === "abandoned")
+    ) {
+      bus.emit({
+        type: "plan.archived",
+        planId: updated.id,
+        slug: updated.slug,
+        title: updated.title,
+        timestamp: ts,
+      });
+    }
+  }
 
   return {
     plan: updated,

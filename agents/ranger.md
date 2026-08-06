@@ -240,7 +240,8 @@ Ranger NUNCA crea worktrees (no implementa). Si un análisis requiere cambios de
 1. `memory({mode:"search", scope:"project"})` — buscar decisiones pasadas, arquitecturas documentadas, convenciones detectadas
 2. `memory({mode:"search", scope:"all-projects"})` — buscar patrones cross-proyecto (anti-patterns conocidos, stacks similares)
 3. `analysis_search({query: "<tema>"})` — buscar analyses previas que cubran el mismo scope
-4. Integrar findings existentes en el nuevo analysis (evitar duplicación, linkear como referencia)
+4. Si se conoce un `sessionId` previo: `ledger_get({sessionId})` — tool que lee ledgers de continuidad histórica de esa sesión. Tratar como **contexto observacional** (qué se decidió, qué se hizo, qué falló). NO reemplaza `analysis_search`. NO modificar ledgers.
+5. Integrar findings existentes en el nuevo analysis (evitar duplicación, linkear como referencia)
 
 ### Antes de almacenar
 

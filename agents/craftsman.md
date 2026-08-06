@@ -1,7 +1,7 @@
 ---
 description: Implementador Artesano / Disciplined Craftsman (modo ad-hoc o planificado)
 mode: all
-model: minimax/MiniMax-M3
+model: opencode-go/gpt-5.6-luna
 temperature: 0.1
 permission:
   edit: allow
@@ -38,7 +38,6 @@ permission:
     "painter": allow
     "inspector": allow
     "chronicler": allow
-    "ranger": allow
   plan_db: allow
 ---
 
