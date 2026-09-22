@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Integration test suite** (`tests/integration/ranger-flow.test.ts`)
   — 13 end-to-end tests covering create→link→search→archive→unlink
   flows and FK CASCADE behavior on plan deletion.
+- **Hybrid JEV routing** — task delegation is now classified through
+  `classifyTaskWithJev` (`src/orchestrator/jev.ts`, `@typesafe-ai/sdk`
+  0.6.0) with the deterministic heuristic as fallback; `routeTask()`
+  surfaces `source: "jev" | "rules"`. Activated via the optional
+  `TYPESAFE_API_KEY` env var — no network access without it.
 
 ### Changed
 
