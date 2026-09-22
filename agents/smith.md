@@ -1,7 +1,7 @@
 ---
 description: Forjador Rápido / Fast Implementation Specialist
 mode: subagent
-model: zai-coding-plan/glm-5.2
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   edit: allow

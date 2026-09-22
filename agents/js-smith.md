@@ -1,7 +1,7 @@
 ---
 description: Ingeniero de Software JS/TS / Nodo de Implementación Frontend-Backend
 mode: subagent
-model: zai-coding-plan/glm-5.2
+model: opencode-go/deepseek-v4.1-flash
 temperature: 0.1
 permission:
   edit: allow

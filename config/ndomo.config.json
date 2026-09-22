@@ -85,7 +85,7 @@
         "reasoning_effort": "high"
       },
       "smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
@@ -100,32 +100,32 @@
         "reasoning_effort": "high"
       },
       "go-smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "js-smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "python-smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "vue-smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "zig-smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
       "rust-smith": {
-        "model": "zai-coding-plan/glm-5.2",
+        "model": "opencode-go/deepseek-v4.1-flash",
         "temperature": 0.1,
         "reasoning_effort": "high"
       },
