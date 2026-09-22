@@ -51,8 +51,8 @@ The install script:
 3. Verifies all agent definitions in `agents/` are valid
 4. Links the bundled skills (bash-scripting, caveman, grill-me, and 20+ others from `skills/`) to the OpenCode skills directory
 5. Applies the active preset (`presets[PRESET]` from `ndomo.config.json`) to every agent's `model:` and `temperature:` frontmatter.
-6. Registers `ndomo` as a local `file:` dependency in `~/.config/opencode/package.json` and installs it to `~/.config/opencode/node_modules/ndomo/` via `bun install`. This is what allows OpenCode to resolve the plugin from `plugin: ["ndomo", ...]` and register its tools. See [OpenCode plugin docs](https://opencode.ai/docs/es/plugins/) and [custom tools docs](https://opencode.ai/docs/es/custom-tools/).
-7. Symlinks the bundled custom tools (14 DB access tools: `plan_*`, `task_*`, `session_*`) from `tools/` to `~/.config/opencode/tools/`. See [OpenCode custom tools docs](https://opencode.ai/docs/es/custom-tools/).
+6. Registers `ndomo` as a local `file:` dependency in `~/.config/opencode/package.json` and installs it to `~/.config/opencode/node_modules/ndomo/` via `bun install`. This is what allows OpenCode to resolve the plugin from `plugins: ["ndomo", ...]` and register its tools. See [OpenCode v2 plugin docs](https://opencode.ai/v2/docs/build/plugins).
+7. All tools (51, including `plan_*`, `task_*`, `session_*`, `ledger_*`, `analysis_*`, `design_create`, `critic_review`) are registered by the plugin itself from `setup(ctx)` via `ctx.tool.transform` — OpenCode v2 has no `~/.config/opencode/tools/` directory, so nothing is copied or symlinked.
 
 **Note:** The `reasoning_effort` field (optional, `low`|`medium`|`high`|`xhigh`) is supported for reasoning-capable models (DeepSeek, MiMo, OpenAI). Omit it for non-reasoning models.
 

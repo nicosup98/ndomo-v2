@@ -26,7 +26,7 @@
  * disconnects unregister bus listeners and close the SDK stream generator.
  */
 
-import type { OpencodeClient } from "@opencode-ai/sdk/client";
+import type { OpenCodeClient } from "@opencode/client";
 import { Elysia, t } from "elysia";
 import type { NdomoEvent } from "../../events/bus.ts";
 import { bus } from "../../events/bus.ts";
@@ -36,7 +36,7 @@ const KEEPALIVE_INTERVAL_MS = 30_000;
 
 interface EventsRouteOpts {
   /** OpenCode SDK client. If null/undefined, SDK events are silently skipped. */
-  sdkClient?: OpencodeClient | null;
+  sdkClient?: OpenCodeClient | null;
 }
 
 /**
@@ -69,7 +69,11 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
         if (cleanedUp) return;
         cleanedUp = true;
         for (const cb of cleanups) {
-          try { cb(); } catch { /* ignore */ }
+          try {
+            cb();
+          } catch {
+            /* ignore */
+          }
         }
       };
 
@@ -79,13 +83,13 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
           const encoder = new TextEncoder();
 
           // Keepalive timer — prevents proxy/load-balancer timeouts
-          const keepaliveTimer = setInterval(
-            () => {
-              try { controller.enqueue(encoder.encode(formatKeepalive())); }
-              catch { /* closed */ }
-            },
-            KEEPALIVE_INTERVAL_MS,
-          );
+          const keepaliveTimer = setInterval(() => {
+            try {
+              controller.enqueue(encoder.encode(formatKeepalive()));
+            } catch {
+              /* closed */
+            }
+          }, KEEPALIVE_INTERVAL_MS);
           cleanups.push(() => clearInterval(keepaliveTimer));
 
           // Wire request.signal abort → cleanups
@@ -93,7 +97,10 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
 
           try {
             // Hello on connect — clients can use this to detect stream establish
-            const helloChunk = formatSseEvent({ eventName: "hello", data: { timestamp: Date.now() } });
+            const helloChunk = formatSseEvent({
+              eventName: "hello",
+              data: { timestamp: Date.now() },
+            });
             controller.enqueue(encoder.encode(helloChunk));
 
             // ── Bus source (always) ────────────────────────────────────────
@@ -103,7 +110,9 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
               try {
                 const chunk = formatSseEvent({ eventName: event.type, data: event });
                 controller.enqueue(encoder.encode(chunk));
-              } catch { /* closed */ }
+              } catch {
+                /* closed */
+              }
             };
             bus.onAny(busHandler);
             cleanups.push(() => bus.offAny(busHandler));
@@ -112,16 +121,16 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
             const sdkLoop = (async (): Promise<void> => {
               if (!sdkClient) return;
               try {
-                const result = await sdkClient.event.subscribe();
-                for await (const event of result.stream) {
+                for await (const event of sdkClient.event.subscribe()) {
                   if (signal.aborted) break;
-                  const eventName =
-                    (event as { type?: string })?.type ?? "message";
+                  const eventName = (event as { type?: string })?.type ?? "message";
                   if (filterTypes && !filterTypes.has(eventName)) continue;
                   try {
                     const chunk = formatSseEvent({ eventName, data: event });
                     controller.enqueue(encoder.encode(chunk));
-                  } catch { break; }
+                  } catch {
+                    break;
+                  }
                 }
               } catch (err) {
                 if (signal.aborted) return;
@@ -134,14 +143,21 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
                     },
                   });
                   controller.enqueue(encoder.encode(chunk));
-                } catch { /* closed */ }
+                } catch {
+                  /* closed */
+                }
               }
             })();
-            cleanups.push(() => { sdkLoop.catch(() => {}); });
+            cleanups.push(() => {
+              sdkLoop.catch(() => {});
+            });
 
             // ── Keep stream open until abort ───────────────────────────────
             await new Promise<void>((resolve) => {
-              if (signal.aborted) { resolve(); return; }
+              if (signal.aborted) {
+                resolve();
+                return;
+              }
               signal.addEventListener("abort", () => resolve(), { once: true });
             });
           } catch (err) {
@@ -155,11 +171,17 @@ export function eventsRoute(opts: EventsRouteOpts = {}) {
                   },
                 });
                 controller.enqueue(encoder.encode(chunk));
-              } catch { /* closed */ }
+              } catch {
+                /* closed */
+              }
             }
           } finally {
             runCleanups();
-            try { controller.close(); } catch { /* already closed */ }
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
           }
         },
         cancel() {

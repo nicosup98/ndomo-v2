@@ -34,5 +34,4 @@ export {
   shouldStoreMemory,
   verifyIntegrity,
 } from "./lib.ts";
-export { NdomoPlugin, type NdomoPluginOptions } from "./plugin.ts";
-export { default } from "./plugin.ts";
+export { default, NdomoPlugin, type NdomoPluginOptions } from "./plugin.ts";

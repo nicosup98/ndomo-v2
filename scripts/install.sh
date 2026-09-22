@@ -333,33 +333,9 @@ install_ndomo_package() {
   fi
 }
 
-# Symlink project tools/ -> ~/.config/opencode/tools/ for OpenCode custom tools
-install_custom_tools_symlink() {
-  local project_root="$1"
-  local config_dir="$2"
-  local src="$project_root/tools"
-  local dst="$config_dir/tools"
-
-  if [[ ! -d "$src" ]]; then
-    warn "No tools/ directory found at $src — skipping"
-    return 0
-  fi
-
-  if [[ -e "$dst" ]]; then
-    if [[ -L "$dst" ]] && [[ "$(readlink "$dst")" == "$src" ]]; then
-      ok "Custom tools symlink already in place: $dst -> $src"
-      return 0
-    fi
-    if [[ -d "$dst" ]] && [[ ! -L "$dst" ]]; then
-      warn "Custom tools directory already exists at $dst (not a symlink) — skipping"
-      return 0
-    fi
-  fi
-
-  mkdir -p "$config_dir"
-  ln -sfn "$src" "$dst"
-  ok "Symlinked custom tools: $dst -> $src"
-}
+# NOTE (v2): OpenCode v2 has no custom-tools directory (`~/.config/opencode/tools/`
+# was removed). All ndomo tools are registered by the plugin itself during
+# `setup(ctx)` via `ctx.tool.transform`, so there is nothing to symlink.
 
 usage() {
   cat <<EOF
@@ -637,9 +613,16 @@ if command -v jq &>/dev/null; then
       # Build JSON array
       NEW_PLUGINS_JSON=$(printf '%s\n' "$PLUGIN_LIST" | jq -R . | jq -s 'map(select(. != "" and . != null))')
 
-      # Merge (unique handles idempotency)
+      # Merge (unique handles idempotency) + migrate v1 `plugin` key → v2 `plugins`.
+      # V1 tuples (["pkg", {...}]) become { package, options }; plain strings stay.
       jq --argjson new "$NEW_PLUGINS_JSON" '
-        .plugin = ((.plugin // []) + $new | unique)
+        .plugins = (
+          ((.plugins // [])
+            + ((.plugin // []) | map(if type == "array" then { package: .[0], options: (.[1] // {}) } else . end))
+            + $new)
+          | unique
+        )
+        | del(.plugin)
       ' "$OPENCODE_JSON_PATH" > "${OPENCODE_JSON_PATH}.tmp" \
         && mv "${OPENCODE_JSON_PATH}.tmp" "$OPENCODE_JSON_PATH"
 
@@ -657,9 +640,6 @@ fi
 # ── Step 6.6: Install ndomo package in ~/.config/opencode/ ──────────────────
 install_ndomo_package "$PROJECT_ROOT" "$CONFIG_DIR"
 
-# ── Step 6.7: Symlink custom tools ──────────────────────────────────────────
-install_custom_tools_symlink "$PROJECT_ROOT" "$CONFIG_DIR"
-
 # ── Step 7: Inject preset name into ndomo.json ──────────────────────────────
 NDOMO_JSON="${CONFIG_DIR}/ndomo.json"
 if [[ -f "$NDOMO_JSON" ]]; then
@@ -676,7 +656,7 @@ fi
 # ── Step 8: Optional DCP install ─────────────────────────────────────────────
 if [[ "$WITH_DCP" == true ]]; then
   info "Installing @tarquinen/opencode-dcp (AGPL-3.0)..."
-  opencode plugin @tarquinen/opencode-dcp --global
+  opencode plugin add @tarquinen/opencode-dcp
   ok "DCP plugin installed"
 fi
 

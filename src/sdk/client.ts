@@ -1,32 +1,34 @@
-// ─── OpenCode SDK Client Singleton ───────────────────────────────────────────
+// ─── OpenCode Client Singleton ───────────────────────────────────────────────
 /**
- * Singleton wrapper around `createOpencodeClient` from `@opencode-ai/sdk`.
+ * Singleton wrapper around `OpenCode.make` from `@opencode/client` (v2).
  *
  * Reads `OPENCODE_SERVER_URL` env (default `http://localhost:4096`).
- * Uses `directory: process.cwd()` for project scoping via
- * `x-opencode-directory` header (handled internally by the SDK).
+ * Project scoping is passed as the `x-opencode-directory` header (the same
+ * signal the v2 client uses internally for global-scoped requests).
  *
  * Recreates the client if baseUrl or directory change between calls.
- * Throws on construction if the SDK server is unreachable (config.get health check).
+ * Throws on construction if the server is unreachable (server.info health check).
  */
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/client";
+import { OpenCode, type OpenCodeClient } from "@opencode/client";
 
-let cachedClient: OpencodeClient | null = null;
+let cachedClient: OpenCodeClient | null = null;
 let cachedConfig: { baseUrl: string; directory: string } | null = null;
 
+export type { OpenCodeClient };
+
 export interface SdkClientHandle {
-  client: OpencodeClient;
+  client: OpenCodeClient;
   baseUrl: string;
   directory: string;
 }
 
 /**
- * Get or create a singleton SDK client.
+ * Get or create a singleton OpenCode client.
  *
  * @param opts.optional baseUrl override (default: OPENCODE_SERVER_URL or http://localhost:4096)
  * @param opts.optional directory override (default: process.cwd())
  * @returns SdkClientHandle with the connected client
- * @throws if the SDK server is unreachable (config.get fails)
+ * @throws if the OpenCode server is unreachable (server.info fails)
  */
 export async function getSdkClient(opts?: {
   baseUrl?: string;
@@ -40,14 +42,17 @@ export async function getSdkClient(opts?: {
     return { client: cachedClient, baseUrl, directory };
   }
 
-  const client = createOpencodeClient({ baseUrl, directory });
+  const client = OpenCode.make({
+    baseUrl,
+    headers: { "x-opencode-directory": encodeURIComponent(directory) },
+  });
 
-  // Health check — fetch config to verify connectivity
+  // Health check — fetch server info to verify connectivity
   try {
-    await client.config.get({ throwOnError: true });
+    await client.server.info();
   } catch (err) {
     throw new Error(
-      `OpenCode SDK unreachable at ${baseUrl} (directory=${directory}): ${err instanceof Error ? err.message : String(err)}`,
+      `OpenCode server unreachable at ${baseUrl} (directory=${directory}): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -57,7 +62,7 @@ export async function getSdkClient(opts?: {
 }
 
 /**
- * Reset the cached SDK client. Useful for testing or when the server
+ * Reset the cached client. Useful for testing or when the server
  * connection needs to be re-established.
  */
 export function resetSdkClient(): void {

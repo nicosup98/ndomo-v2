@@ -90,7 +90,7 @@ If you override with provider `opencode`, the agent models transform as follows:
 | `--provider=ID` | Non-interactive provider prefix override. The model ID is taken from the active preset; only the `provider/` segment of the `model:` field is swapped. |
 | `--no-provider-prompt` | Skips the interactive picker. The preset is still applied; no prefix override is performed. |
 
-The install also wires the plugin into the OpenCode config directory (`~/.config/opencode/`) so tools are auto-registered on OpenCode launch — see [plugin docs](https://opencode.ai/docs/es/plugins/) and [custom tools docs](https://opencode.ai/docs/es/custom-tools/).
+The install also wires the plugin into the OpenCode config directory (`~/.config/opencode/`) so tools are auto-registered on OpenCode launch — see [OpenCode v2 plugin docs](https://opencode.ai/v2/docs/build/plugins). Registration uses the v2 `plugins` key (array of `string | { package, options }`); the installer migrates any legacy v1 `plugin` key it finds.
 
 ### Relevant files modified
 

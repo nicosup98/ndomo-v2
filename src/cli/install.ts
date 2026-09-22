@@ -621,10 +621,22 @@ export function stepRegisterPlugins(
     opencode = {};
   }
 
-  // Merge with dedup
-  const existingPlugins: string[] = Array.isArray(opencode.plugin) ? opencode.plugin : [];
-  const merged = [...new Set([...existingPlugins, ...allPlugins])];
-  opencode.plugin = merged;
+  // Merge with dedup + migrate v1 `plugin` key → v2 `plugins`.
+  // V1 tuples (["pkg", {...}]) become { package, options }; plain strings stay.
+  const existingPlugins: unknown[] = Array.isArray(opencode.plugins)
+    ? opencode.plugins
+    : Array.isArray(opencode.plugin)
+      ? opencode.plugin
+      : [];
+  const migratedLegacy = existingPlugins.map((entry) =>
+    Array.isArray(entry) ? { package: entry[0], options: entry[1] ?? {} } : entry,
+  );
+  const canonical = new Set<string>();
+  for (const entry of [...migratedLegacy, ...allPlugins]) {
+    canonical.add(JSON.stringify(entry));
+  }
+  opencode.plugins = [...canonical].map((entry) => JSON.parse(entry) as unknown);
+  delete opencode.plugin;
 
   writeFileSync(opencodeJsonPath, `${JSON.stringify(opencode, null, 2)}\n`);
   ok(`Registered ${allPlugins.length} ndomo plugin(s) in opencode.json`);
@@ -797,58 +809,11 @@ export async function stepInstallPackage(
   }
 }
 
-// ─── Step 4.7: Copy custom tools ─────────────────────────────────────────────
-// npm distribution: tools live inside the installed ndomo package, so symlink
-// dance (used in old repo-based install) is obsolete. Copy .ts files directly.
-export function stepCopyTools(projectRoot: string, configDir: string, dryRun: boolean): number {
-  const src = join(projectRoot, "tools");
-  const dst = join(configDir, "tools");
-
-  if (!existsSync(src)) {
-    warn(`No tools/ directory found at ${src} — skipping`);
-    return 0;
-  }
-
-  if (dryRun) {
-    info(`[dry-run] would copy tools from ${src} to ${dst}`);
-    return 0;
-  }
-
-  mkdirSync(configDir, { recursive: true });
-  mkdirSync(dst, { recursive: true });
-  let copied = 0;
-  const entries = readdirSafe(src);
-  for (const entry of entries) {
-    const srcPath = join(src, entry);
-    const dstPath = join(dst, entry);
-    const stat = lstatSync(srcPath);
-    if (!stat.isFile() || !srcPath.endsWith(".ts")) {
-      // Skip non-.ts files (subdirs, etc.)
-      continue;
-    }
-    if (existsSync(dstPath)) {
-      // Idempotent: skip if content matches
-      const srcContent = readFileSync(srcPath, "utf-8");
-      const dstContent = readFileSync(dstPath, "utf-8");
-      if (srcContent === dstContent) {
-        continue;
-      }
-      // Backup changed file
-      const ts = new Date().toISOString().replace(/[:.]/g, "-");
-      const backupPath = join(configDir, `.backup-${ts}`, "tools", entry);
-      mkdirSync(dirname(backupPath), { recursive: true });
-      copyFileSync(dstPath, backupPath);
-    }
-    copyFileSync(srcPath, dstPath);
-    copied++;
-  }
-  if (copied > 0) {
-    ok(`Copied ${copied} tool file(s) to ${dst}`);
-  } else {
-    info(`Tool files already up to date at ${dst}`);
-  }
-  return copied;
-}
+// NOTE (v2): OpenCode v2 removed the custom-tools directory
+// (`~/.config/opencode/tools/`). All ndomo tools are registered by the plugin
+// itself during `setup(ctx)` via `ctx.tool.transform`, so there is nothing to
+// copy or symlink. The former `stepCopyTools` step was deleted with the
+// migration.
 
 // ─── Step 5: Inject preset name into ndomo.json ──────────────────────────────
 export function stepInjectPreset(configDir: string, preset: string, dryRun: boolean): void {
@@ -877,11 +842,11 @@ export function stepInjectPreset(configDir: string, preset: string, dryRun: bool
 export async function stepInstallDcp(dryRun: boolean): Promise<void> {
   info("Installing @tarquinen/opencode-dcp (AGPL-3.0)...");
   if (dryRun) {
-    info("[dry-run] would run: opencode plugin @tarquinen/opencode-dcp --global");
+    info("[dry-run] would run: opencode plugin add @tarquinen/opencode-dcp");
     return;
   }
 
-  const result = await streamSpawn(["opencode", "plugin", "@tarquinen/opencode-dcp", "--global"], {
+  const result = await streamSpawn(["opencode", "plugin", "add", "@tarquinen/opencode-dcp"], {
     label: "opencode plugin dcp",
     nothrow: true,
   });
@@ -1296,8 +1261,7 @@ export async function runInstall(args: string[]): Promise<void> {
   // Step 4.6: Install package
   await stepInstallPackage(projectRoot, configDir, flags.dryRun);
 
-  // Step 4.7: Copy tools (npm distribution — no symlink)
-  stepCopyTools(projectRoot, configDir, flags.dryRun);
+  // (v2) No custom-tools copy step — the plugin registers its own tools.
 
   // Step 5: Inject preset
   stepInjectPreset(configDir, flags.preset, flags.dryRun);

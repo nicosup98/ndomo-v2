@@ -9,11 +9,12 @@
  * 4. health route (no auth)
  * 5. /api/plans, /api/tasks, /api/sessions (auth required)
  */
+
+import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Database } from "bun:sqlite";
-import type { OpencodeClient } from "@opencode-ai/sdk/client";
+import type { OpenCodeClient } from "@opencode/client";
 import { Elysia } from "elysia";
 import type { HttpConfig } from "../config/schema.ts";
 import { httpBasicAuth } from "./auth.ts";
@@ -29,7 +30,7 @@ interface BuildHttpServerArgs {
   db: Database;
   httpConfig: HttpConfig;
   /** OpenCode SDK client for SSE events. If null/undefined, /api/events returns 503. */
-  sdkClient?: OpencodeClient;
+  sdkClient?: OpenCodeClient;
   /**
    * Override web dist directory for testing. Defaults to ./web/ relative to this file.
    * Set to a temp dir with index.html + assets for SPA tests.
@@ -79,66 +80,59 @@ export async function buildHttpServer(args: BuildHttpServerArgs) {
   const INDEX_HTML = join(WEB_DIST, "index.html");
 
   // Static-file + SPA fallback sub-app
-  const spaApp = new Elysia({ name: "spa-fallback" }).get(
-    "/*",
-    ({ path }) => {
-      // Try static asset first (path traversal safe)
-      // Strip leading slashes so resolve() doesn't treat path as absolute
-      const safePath = normalize(path)
-        .replace(/^(\.\.[/\\])+/g, "")
-        .replace(/^\/+/, "");
-      const assetPath = resolve(WEB_DIST, safePath);
+  const spaApp = new Elysia({ name: "spa-fallback" }).get("/*", ({ path }) => {
+    // Try static asset first (path traversal safe)
+    // Strip leading slashes so resolve() doesn't treat path as absolute
+    const safePath = normalize(path)
+      .replace(/^(\.\.[/\\])+/g, "")
+      .replace(/^\/+/, "");
+    const assetPath = resolve(WEB_DIST, safePath);
 
-      if (
-        assetPath.startsWith(WEB_DIST) &&
-        safePath !== "" &&
-        existsSync(assetPath)
-      ) {
-        const file = Bun.file(assetPath);
-        const ext = assetPath.split(".").pop() ?? "";
-        const contentTypes: Record<string, string> = {
-          html: "text/html; charset=utf-8",
-          js: "application/javascript; charset=utf-8",
-          css: "text/css; charset=utf-8",
-          json: "application/json; charset=utf-8",
-          svg: "image/svg+xml",
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          ico: "image/x-icon",
-          woff: "font/woff",
-          woff2: "font/woff2",
-        };
-        return new Response(file, {
-          headers: {
-            "Content-Type": contentTypes[ext] ?? "application/octet-stream",
-            "Cache-Control": "no-cache",
-          },
-        });
-      }
-
-      // Static asset path that doesn't exist on disk — return 404, NOT SPA
-      // fallback. Otherwise a stale browser cache (e.g. after `bun run web:build`
-      // deletes old hashed chunks via vite's emptyOutDir) would silently receive
-      // index.html as CSS/JS, breaking the page without a visible error.
-      if (safePath.startsWith("assets/")) {
-        return new Response("Not Found", { status: 404 });
-      }
-
-      // Fallback to SPA index.html for client-side routing
-      if (!existsSync(INDEX_HTML)) {
-        return new Response("SPA not built. Run: bun run web:build", {
-          status: 503,
-        });
-      }
-      return new Response(Bun.file(INDEX_HTML), {
+    if (assetPath.startsWith(WEB_DIST) && safePath !== "" && existsSync(assetPath)) {
+      const file = Bun.file(assetPath);
+      const ext = assetPath.split(".").pop() ?? "";
+      const contentTypes: Record<string, string> = {
+        html: "text/html; charset=utf-8",
+        js: "application/javascript; charset=utf-8",
+        css: "text/css; charset=utf-8",
+        json: "application/json; charset=utf-8",
+        svg: "image/svg+xml",
+        png: "image/png",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        ico: "image/x-icon",
+        woff: "font/woff",
+        woff2: "font/woff2",
+      };
+      return new Response(file, {
         headers: {
-          "Content-Type": "text/html; charset=utf-8",
+          "Content-Type": contentTypes[ext] ?? "application/octet-stream",
           "Cache-Control": "no-cache",
         },
       });
-    },
-  );
+    }
+
+    // Static asset path that doesn't exist on disk — return 404, NOT SPA
+    // fallback. Otherwise a stale browser cache (e.g. after `bun run web:build`
+    // deletes old hashed chunks via vite's emptyOutDir) would silently receive
+    // index.html as CSS/JS, breaking the page without a visible error.
+    if (safePath.startsWith("assets/")) {
+      return new Response("Not Found", { status: 404 });
+    }
+
+    // Fallback to SPA index.html for client-side routing
+    if (!existsSync(INDEX_HTML)) {
+      return new Response("SPA not built. Run: bun run web:build", {
+        status: 503,
+      });
+    }
+    return new Response(Bun.file(INDEX_HTML), {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    });
+  });
 
   // Compose the full app — apiProtected BEFORE spaApp so /api/* wins
   const app = new Elysia({ name: "ndomo-http" })

@@ -7,10 +7,9 @@
 
 import { Database } from "bun:sqlite";
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -21,8 +20,9 @@ import {
   unlinkAnalysisFromPlan,
   updateAnalysis,
 } from "./db/analyses.ts";
-import { readLedger } from "./db/ledgers.ts";
+import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
 import { createIncident } from "./db/incidents.ts";
+import { readLedger } from "./db/ledgers.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
 import { planUpdateStatusExecutor } from "./db/plan-update-status.ts";
@@ -199,11 +199,7 @@ describe("escalateToForeman", () => {
     const sessionId = "ses_esc_noledger";
     startSession(db, { id: sessionId, goal: "no ledger" });
     // No projectDir → no ledger dir should ever be created anywhere reachable.
-    escalateToForeman(
-      db,
-      { agent: "craftsman", sessionID: sessionId },
-      { reason: "legacy path" },
-    );
+    escalateToForeman(db, { agent: "craftsman", sessionID: sessionId }, { reason: "legacy path" });
     // The DB checkpoint still happened (keyDecisions set) — ledger is the
     // only thing skipped.
     const session = getSession(db, sessionId);
@@ -2674,7 +2670,13 @@ describe("analysis tools", () => {
   test("analysis_list — returns created row, excludes archived by default", () => {
     makeAnalysis({ slug: "list-a" });
     makeAnalysis({ slug: "list-b" });
-    archiveAnalysis(db, getAnalysis(db, getAnalysis(db, (listAnalyses(db, { limit: 10 }).find(a => a.slug === "list-b")!).id)!.id)!.id);
+    archiveAnalysis(
+      db,
+      getAnalysis(
+        db,
+        getAnalysis(db, listAnalyses(db, { limit: 10 }).find((a) => a.slug === "list-b")!.id)!.id,
+      )!.id,
+    );
 
     const results = listAnalyses(db);
     expect(results.length).toBeGreaterThanOrEqual(1);
@@ -2753,7 +2755,7 @@ describe("analysis tools", () => {
 
 // ─── v2 plugin registration (Plugin.define + ctx.tool.transform) ─────────────
 
-type PluginSetupCtx = Parameters<typeof NdomoPlugin["setup"]>[0];
+type PluginSetupCtx = Parameters<(typeof NdomoPlugin)["setup"]>[0];
 
 type HarnessTool = {
   name: string;
@@ -2852,17 +2854,23 @@ describe("NdomoPlugin v2 registration", () => {
     return { projectDir, harness, cleanup };
   };
 
-  test("setup registers 46 tools, all 4 hooks, and returns a cleanup fn", async () => {
+  test("setup registers 51 tools, all 4 hooks, and returns a cleanup fn", async () => {
     const { projectDir, harness, cleanup } = await setupPlugin();
     try {
       expect(typeof cleanup).toBe("function");
-      expect(harness.tools).toHaveLength(46);
+      expect(harness.tools).toHaveLength(51);
       const names = harness.tools.map((t) => t.name);
       expect(names).toContain("plan_create");
       expect(names).toContain("task_update_status");
       expect(names).toContain("status");
       expect(names).toContain("route");
-      expect(new Set(names).size).toBe(46);
+      // Consolidated from the former v1 standalone tools/ (removed in v2).
+      expect(names).toContain("ledger_create");
+      expect(names).toContain("ledger_get");
+      expect(names).toContain("ledger_update");
+      expect(names).toContain("design_create");
+      expect(names).toContain("critic_review");
+      expect(new Set(names).size).toBe(51);
       expect(harness.sessionHooks.map((h) => h.name)).toEqual(["compaction"]);
       expect(harness.toolHooks.map((h) => h.name).sort()).toEqual([
         "execute.after",
@@ -2957,7 +2965,12 @@ describe("NdomoPlugin v2 registration", () => {
       expect(before).toBeDefined();
       expect(after).toBeDefined();
       const filePath = join(projectDir, "locked.txt");
-      const base = { tool: "write", sessionID: "ses_v2_lock", agent: "craftsman", messageID: "msg_1" };
+      const base = {
+        tool: "write",
+        sessionID: "ses_v2_lock",
+        agent: "craftsman",
+        messageID: "msg_1",
+      };
 
       await before!.cb({ ...base, id: "call_1", input: { filePath } });
       await expect(before!.cb({ ...base, id: "call_2", input: { filePath } })).rejects.toThrow(
@@ -3014,7 +3027,7 @@ describe("NdomoPlugin v2 registration", () => {
       const first = makePluginHarness(projectDir);
       const firstCleanup = await NdomoPlugin.setup(first.ctx);
       if (typeof firstCleanup !== "function") throw new Error("setup did not return a cleanup fn");
-      expect(first.tools).toHaveLength(46);
+      expect(first.tools).toHaveLength(51);
       await firstCleanup();
       await firstCleanup(); // idempotent — a second dispose must not throw
 
@@ -3025,10 +3038,79 @@ describe("NdomoPlugin v2 registration", () => {
       if (typeof secondCleanup !== "function") {
         throw new Error("setup did not return a cleanup fn");
       }
-      expect(second.tools).toHaveLength(46);
-      expect(first.tools).toHaveLength(46);
+      expect(second.tools).toHaveLength(51);
+      expect(first.tools).toHaveLength(51);
       await secondCleanup();
     } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("consolidated tools (ledger_*, design_create, critic_review) work through the v2 path", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const find = (name: string) => {
+        const tool = harness.tools.find((t) => t.name === name);
+        if (!tool) throw new Error(`tool not registered: ${name}`);
+        return tool;
+      };
+
+      // ledger_create → ledger_get → ledger_update round-trip (DB-free FS).
+      const created = JSON.parse(
+        (
+          await find("ledger_create").execute(
+            { sessionId: "ses_v2_ledger", goal: "v2 ledger smoke" },
+            harness.toolCtx("ses_v2_ledger"),
+          )
+        ).content,
+      ) as { filePath: string; created: boolean };
+      expect(created.created).toBe(true);
+      expect(existsSync(created.filePath)).toBe(true);
+
+      const read = JSON.parse(
+        (await find("ledger_get").execute({ sessionId: "ses_v2_ledger" }, harness.toolCtx("x")))
+          .content,
+      ) as { goal: string };
+      expect(read.goal).toBe("v2 ledger smoke");
+
+      const updated = JSON.parse(
+        (
+          await find("ledger_update").execute(
+            { sessionId: "ses_v2_ledger", outcome: "success" },
+            harness.toolCtx("x"),
+          )
+        ).content,
+      ) as { updatedAt: number };
+      expect(typeof updated.updatedAt).toBe("number");
+
+      // ledger_update must refuse a missing ledger.
+      await expect(
+        find("ledger_update").execute({ sessionId: "ses_missing" }, harness.toolCtx("x")),
+      ).rejects.toThrow(/no ledger found/);
+
+      // design_create writes a markdown doc under <projectDir>/.ndomo/designs/.
+      const design = JSON.parse(
+        (
+          await find("design_create").execute(
+            { slug: "v2-smoke", title: "V2 smoke", problem: "Tools-dir removal" },
+            harness.toolCtx("x", "foreman"),
+          )
+        ).content,
+      ) as { filePath: string };
+      expect(existsSync(design.filePath)).toBe(true);
+
+      // critic_review returns the binary report + the task_verify payload.
+      const critic = JSON.parse(
+        (
+          await find("critic_review").execute(
+            { diff: "--- a/x.ts\n+++ b/x.ts", verdict: "APPROVED" },
+            harness.toolCtx("x", "critic"),
+          )
+        ).content,
+      ) as { executionGate: { verdict: string } };
+      expect(critic.executionGate.verdict).toBe("passed");
+    } finally {
+      await cleanup();
       rmSync(projectDir, { recursive: true, force: true });
     }
   });

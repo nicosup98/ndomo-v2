@@ -2,7 +2,7 @@
 
 ## Overview
 
-The optional **ndomo HTTP server** exposes the plugin's SQLite state (plans, tasks, sessions) as a read-only REST API and bridges the OpenCode SDK event stream as Server-Sent Events. Built on [Elysia](https://elysiajs.com/) with `@opencode-ai/sdk` for upstream connectivity.
+The optional **ndomo HTTP server** exposes the plugin's SQLite state (plans, tasks, sessions) as a read-only REST API and bridges the OpenCode event stream as Server-Sent Events. Built on [Elysia](https://elysiajs.com/) with `@opencode/client` for upstream connectivity.
 
 **Phase 1 scope:** read-only REST endpoints + live SSE event relay. No HTTP writes to the DB, no WebSocket, no JWT. Phase 2 will introduce peer-spawning actions.
 

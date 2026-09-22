@@ -30,7 +30,6 @@ import {
   promptHttpCombined,
   stepCopyAgents,
   stepCopySkills,
-  stepCopyTools,
   stepInjectPreset,
   stepRegisterPlugins,
   writeHttpBlock,
@@ -440,15 +439,15 @@ describe("stepRegisterPlugins", () => {
     stepRegisterPlugins(configDir, config, backupDir, false);
 
     const written = JSON.parse(readFileSync(opencodePath, "utf-8"));
-    expect(written.plugin).toContain("ndomo");
-    expect(written.plugin).toContain("opencode-mem");
-    expect(written.plugin).toContain("@tarquinen/opencode-dcp");
-    expect(written.plugin).toContain("existing-plugin");
+    expect(written.plugins).toContain("ndomo");
+    expect(written.plugins).toContain("opencode-mem");
+    expect(written.plugins).toContain("@tarquinen/opencode-dcp");
+    expect(written.plugins).toContain("existing-plugin");
   });
 
   test("idempotent: running twice doesn't duplicate plugins", () => {
     const opencodePath = join(configDir, "opencode.json");
-    writeFileSync(opencodePath, JSON.stringify({ plugin: [] }));
+    writeFileSync(opencodePath, JSON.stringify({ plugins: [] }));
 
     const config: NdomoConfig = {
       plugins: ["ndomo", "opencode-mem"],
@@ -458,7 +457,7 @@ describe("stepRegisterPlugins", () => {
     stepRegisterPlugins(configDir, config, backupDir, false);
 
     const written = JSON.parse(readFileSync(opencodePath, "utf-8"));
-    const ndomoCount = written.plugin.filter((p: string) => p === "ndomo").length;
+    const ndomoCount = written.plugins.filter((p: unknown) => p === "ndomo").length;
     expect(ndomoCount).toBe(1);
   });
 
@@ -468,7 +467,7 @@ describe("stepRegisterPlugins", () => {
 
     expect(existsSync(join(configDir, "opencode.json"))).toBe(true);
     const written = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf-8"));
-    expect(written.plugin).toContain("ndomo");
+    expect(written.plugins).toContain("ndomo");
   });
 
   test("backups existing opencode.json before modifying", () => {
@@ -483,9 +482,26 @@ describe("stepRegisterPlugins", () => {
     expect(backup.plugin).toContain("old");
   });
 
+  test("migrates legacy v1 plugin key + tuple entries to v2 plugins", () => {
+    const opencodePath = join(configDir, "opencode.json");
+    writeFileSync(
+      opencodePath,
+      JSON.stringify({ plugin: ["legacy-string", ["pkg-a", { enabled: true }]] }),
+    );
+
+    const config: NdomoConfig = { plugins: ["ndomo"] };
+    stepRegisterPlugins(configDir, config, backupDir, false);
+
+    const written = JSON.parse(readFileSync(opencodePath, "utf-8"));
+    expect(written.plugin).toBeUndefined();
+    expect(written.plugins).toContain("legacy-string");
+    expect(written.plugins).toContainEqual({ package: "pkg-a", options: { enabled: true } });
+    expect(written.plugins).toContain("ndomo");
+  });
+
   test("dry-run does not modify opencode.json", () => {
     const opencodePath = join(configDir, "opencode.json");
-    const original = JSON.stringify({ plugin: [] });
+    const original = JSON.stringify({ plugins: [] });
     writeFileSync(opencodePath, original);
 
     const config: NdomoConfig = { plugins: ["ndomo"] };
@@ -648,7 +664,7 @@ describe("idempotency", () => {
 
   test("re-running plugin registration produces same opencode.json", () => {
     const opencodePath = join(configDir, "opencode.json");
-    writeFileSync(opencodePath, JSON.stringify({ plugin: [] }));
+    writeFileSync(opencodePath, JSON.stringify({ plugins: [] }));
 
     const config: NdomoConfig = { plugins: ["ndomo", "opencode-mem"] };
 
@@ -659,84 +675,6 @@ describe("idempotency", () => {
     const second = readFileSync(opencodePath, "utf-8");
 
     expect(first).toBe(second);
-  });
-});
-
-describe("stepCopyTools", () => {
-  test("copies .ts files from project tools/ to config tools/", () => {
-    const toolsDir = join(projectRoot, "tools");
-    mkdirSync(toolsDir, { recursive: true });
-    writeFileSync(join(toolsDir, "plan_create.ts"), "// plan_create\n");
-    writeFileSync(join(toolsDir, "memory_search.ts"), "// memory_search\n");
-
-    const copied = stepCopyTools(projectRoot, configDir, false);
-
-    expect(copied).toBe(2);
-    expect(existsSync(join(configDir, "tools", "plan_create.ts"))).toBe(true);
-    expect(existsSync(join(configDir, "tools", "memory_search.ts"))).toBe(true);
-  });
-
-  test("idempotent: same content → skip, returns 0", () => {
-    const toolsDir = join(projectRoot, "tools");
-    mkdirSync(toolsDir, { recursive: true });
-    writeFileSync(join(toolsDir, "plan_create.ts"), "// plan_create\n");
-    mkdirSync(join(configDir, "tools"), { recursive: true });
-    writeFileSync(join(configDir, "tools", "plan_create.ts"), "// plan_create\n");
-
-    const copied = stepCopyTools(projectRoot, configDir, false);
-
-    expect(copied).toBe(0);
-  });
-
-  test("changed content → backup old + copy new", () => {
-    const toolsDir = join(projectRoot, "tools");
-    mkdirSync(toolsDir, { recursive: true });
-    writeFileSync(join(toolsDir, "plan_create.ts"), "// NEW plan_create\n");
-    mkdirSync(join(configDir, "tools"), { recursive: true });
-    writeFileSync(join(configDir, "tools", "plan_create.ts"), "// OLD plan_create\n");
-
-    const copied = stepCopyTools(projectRoot, configDir, false);
-
-    expect(copied).toBe(1);
-    const dst = readFileSync(join(configDir, "tools", "plan_create.ts"), "utf-8");
-    expect(dst).toBe("// NEW plan_create\n");
-    // backup should exist somewhere in configDir/.backup-*
-    const { readdirSync } = require("node:fs");
-    const entries = readdirSync(configDir);
-    const backupDirName = entries.find((e: string) => e.startsWith(".backup-"));
-    expect(backupDirName).toBeDefined();
-  });
-
-  test("skips non-.ts files", () => {
-    const toolsDir = join(projectRoot, "tools");
-    mkdirSync(toolsDir, { recursive: true });
-    writeFileSync(join(toolsDir, "tool.ts"), "// tool\n");
-    writeFileSync(join(toolsDir, "README.md"), "# README\n");
-    writeFileSync(join(toolsDir, "script.sh"), "#!/bin/bash\n");
-
-    const copied = stepCopyTools(projectRoot, configDir, false);
-
-    expect(copied).toBe(1);
-    expect(existsSync(join(configDir, "tools", "tool.ts"))).toBe(true);
-    expect(existsSync(join(configDir, "tools", "README.md"))).toBe(false);
-    expect(existsSync(join(configDir, "tools", "script.sh"))).toBe(false);
-  });
-
-  test("dry-run does not modify files", () => {
-    const toolsDir = join(projectRoot, "tools");
-    mkdirSync(toolsDir, { recursive: true });
-    writeFileSync(join(toolsDir, "tool.ts"), "// tool\n");
-
-    const copied = stepCopyTools(projectRoot, configDir, true);
-
-    expect(copied).toBe(0);
-    expect(existsSync(join(configDir, "tools", "tool.ts"))).toBe(false);
-  });
-
-  test("returns 0 when no tools/ dir exists", () => {
-    // projectRoot has no tools/ (default setup in beforeEach)
-    const copied = stepCopyTools(projectRoot, configDir, false);
-    expect(copied).toBe(0);
   });
 });
 

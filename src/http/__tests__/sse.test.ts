@@ -45,33 +45,39 @@ function basicAuthHeader(password: string): string {
 
 /**
  * Create a mock SDK client that yields events from a provided array.
- * Returns a minimal object compatible with OpencodeClient.event.subscribe().
+ * Returns a minimal object compatible with OpenCodeClient.event.subscribe()
+ * (v2: subscribe() returns an async iterable directly).
  */
 function mockSdkClient(events: Array<{ type?: string; data?: unknown }>) {
   return {
     event: {
-      subscribe: async () => ({
-        stream: (async function* () {
+      subscribe: () =>
+        (async function* () {
           for (const event of events) {
             yield event;
           }
         })(),
-      }),
     },
-  } as unknown as import("@opencode-ai/sdk/client").OpencodeClient;
+  } as unknown as import("@opencode/client").OpenCodeClient;
 }
 
 /**
- * Create a mock SDK client that throws on subscribe.
+ * Create a mock SDK client whose subscribe stream fails on consumption.
  */
 function mockFailingSdkClient(errorMessage = "SDK connection failed") {
+  const failingStream: AsyncIterable<never> = {
+    [Symbol.asyncIterator](): AsyncIterator<never> {
+      return {
+        // The stream fails on first consumption (no events yielded).
+        next: () => Promise.reject(new Error(errorMessage)),
+      };
+    },
+  };
   return {
     event: {
-      subscribe: async () => {
-        throw new Error(errorMessage);
-      },
+      subscribe: () => failingStream,
     },
-  } as unknown as import("@opencode-ai/sdk/client").OpencodeClient;
+  } as unknown as import("@opencode/client").OpenCodeClient;
 }
 
 beforeEach(() => {
@@ -416,12 +422,9 @@ describe("GET /api/events — bus events", () => {
     });
 
     // Filter ONLY task.updated (plan.created should be filtered out)
-    const req = new Request(
-      "http://localhost/api/events?types=task.updated",
-      {
-        headers: { Authorization: basicAuthHeader("test-password") },
-      },
-    );
+    const req = new Request("http://localhost/api/events?types=task.updated", {
+      headers: { Authorization: basicAuthHeader("test-password") },
+    });
     const res = await app.handle(req);
 
     const reader = res.body!.getReader();

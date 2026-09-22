@@ -132,7 +132,7 @@ curl -fsSL https://bun.sh/install | bash
 
 ### "No agents/ directory found"
 
-Run from a ndomo clone. The installer expects `agents/`, `skills/`, `config/`, and `tools/` directories at the project root.
+Run from a ndomo clone. The installer expects `agents/`, `skills/`, and `config/` directories at the project root.
 
 ### HTTP not responding after --enable-http
 

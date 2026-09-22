@@ -36,7 +36,10 @@ import {
   resolveCircuitBreakerTaskFailure,
 } from "./db/circuit-breaker.ts";
 import { closeDb, openDb } from "./db/client.ts";
+import { buildCriticReview, toTaskVerification } from "./db/critic.ts";
+import { createDesign, type DesignInput, type DesignOption } from "./db/designs.ts";
 import { createIncident } from "./db/incidents.ts";
+import { type LedgerData, readLedger, readLedgerRaw, writeLedger } from "./db/ledgers.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { resolveArchiveDir } from "./db/plan-archive.ts";
 import { planCreateExecutor } from "./db/plan-create.ts";
@@ -645,7 +648,7 @@ export const NdomoPlugin = Plugin.define({
     const dispatcher = new BackgroundDispatcher(db);
 
     // ─── SDK Client (for SSE events) ─────────────────────────────────────────────
-    let sdkClient: import("@opencode-ai/sdk/client").OpencodeClient | null = null;
+    let sdkClient: import("./sdk/client.ts").OpenCodeClient | null = null;
     if (httpConfig.enabled) {
       try {
         const handle = await getSdkClient();
@@ -1933,6 +1936,213 @@ export const NdomoPlugin = Plugin.define({
             plansAbandoned,
             sessionEnded: session !== null,
           });
+        },
+      }),
+
+      // ── Filesystem ledgers, designs and critic review (v2: consolidated
+      //    from the former standalone custom tools under tools/, which no
+      //    longer load in v2 — the tools-dir mechanism is gone) ──────────
+
+      ledger_create: tool({
+        description:
+          "Create (or idempotently overwrite) a portable session ledger at <projectDir>/.ndomo/ledgers/{sessionId}.md. DB-free, atomic write. Required: sessionId, goal. Optional: planId, state, keyDecisions, agentHistory, metadata, startedAt. Returns { sessionId, filePath, byteSize, updatedAt, created } where created=true means the file did not exist before. sessionId is sanitized for the filename (path-traversal-safe). To patch an existing ledger without rewriting it whole, use ledger_update.",
+        args: {
+          sessionId: z.string(),
+          goal: z.string(),
+          planId: z.string().optional(),
+          state: z.record(z.string(), z.unknown()).optional(),
+          keyDecisions: z.string().optional(),
+          agentHistory: z
+            .array(
+              z.object({
+                agent: z.string(),
+                taskId: z.string().optional(),
+                startedAt: z.number().optional(),
+                endedAt: z.number().optional(),
+              }),
+            )
+            .optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+          startedAt: z.number().optional(),
+        },
+        execute: async (args) => {
+          const now = Date.now();
+          // Normalize each agent-history entry to the full Session shape.
+          const agentHistory = (args.agentHistory ?? []).map((h) => ({
+            agent: h.agent,
+            taskId: h.taskId ?? null,
+            startedAt: h.startedAt ?? now,
+            endedAt: h.endedAt ?? null,
+          }));
+          const data: LedgerData = {
+            sessionId: args.sessionId,
+            goal: args.goal,
+            planId: args.planId ?? null,
+            state: args.state ?? {},
+            keyDecisions: args.keyDecisions ?? null,
+            agentHistory,
+            startedAt: args.startedAt ?? now,
+            lastCheckpoint: null,
+            endedAt: null,
+            outcome: null,
+            metadata: args.metadata ?? {},
+          };
+          return JSON.stringify(writeLedger(projectDir, data), null, 2);
+        },
+      }),
+
+      ledger_get: tool({
+        description:
+          "Read a portable session ledger from <projectDir>/.ndomo/ledgers/{sessionId}.md. DB-free. Returns the parsed ledger data, or null if the ledger does not exist. Pass raw=true to return the full human-readable markdown instead (still null when the file is missing). sessionId is sanitized for the filename (path-traversal-safe).",
+        args: {
+          sessionId: z.string(),
+          raw: z.boolean().optional(),
+        },
+        execute: async (args) => {
+          if (args.raw) {
+            return JSON.stringify(readLedgerRaw(projectDir, args.sessionId));
+          }
+          return JSON.stringify(readLedger(projectDir, args.sessionId));
+        },
+      }),
+
+      ledger_update: tool({
+        description:
+          "Patch an existing portable session ledger at <projectDir>/.ndomo/ledgers/{sessionId}.md. DB-free, atomic, read-merge-rewrite. Throws if the ledger does not exist (use ledger_create first). All fields optional: goal, planId, state, keyDecisions, agentHistory, metadata, lastCheckpoint, endedAt, outcome. Only provided fields change; an explicit null clears a field. sessionId and startedAt are immutable here. state/metadata are replaced wholesale (not deep-merged). sessionId is sanitized for the filename (path-traversal-safe).",
+        args: {
+          sessionId: z.string(),
+          goal: z.string().optional(),
+          // Nullable-optional: these fields carry `| null` in LedgerData, so an
+          // explicit null is a meaningful "clear this" intent (distinct from
+          // omission = preserve). The merge below keys off `!== undefined`.
+          planId: z.string().nullable().optional(),
+          state: z.record(z.string(), z.unknown()).optional(),
+          keyDecisions: z.string().nullable().optional(),
+          agentHistory: z
+            .array(
+              z.object({
+                agent: z.string(),
+                taskId: z.string().optional(),
+                startedAt: z.number().optional(),
+                endedAt: z.number().optional(),
+              }),
+            )
+            .optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+          lastCheckpoint: z.number().nullable().optional(),
+          endedAt: z.number().nullable().optional(),
+          outcome: z.enum(["success", "partial", "failed", "abandoned"]).nullable().optional(),
+        },
+        execute: async (args) => {
+          const existing = readLedger(projectDir, args.sessionId);
+          if (existing === null) {
+            throw new Error(
+              `ndomo: cannot update ledger — no ledger found for sessionId '${args.sessionId}' at <projectDir>/.ndomo/ledgers/. Use ledger_create first.`,
+            );
+          }
+          const agentHistoryPatch =
+            args.agentHistory !== undefined
+              ? args.agentHistory.map((h) => ({
+                  agent: h.agent,
+                  taskId: h.taskId ?? null,
+                  startedAt: h.startedAt ?? Date.now(),
+                  endedAt: h.endedAt ?? null,
+                }))
+              : undefined;
+          const merged: LedgerData = {
+            ...existing,
+            ...(args.goal !== undefined && { goal: args.goal }),
+            ...(args.planId !== undefined && { planId: args.planId }),
+            ...(args.state !== undefined && { state: args.state }),
+            ...(args.keyDecisions !== undefined && { keyDecisions: args.keyDecisions }),
+            ...(agentHistoryPatch !== undefined && { agentHistory: agentHistoryPatch }),
+            ...(args.metadata !== undefined && { metadata: args.metadata }),
+            ...(args.lastCheckpoint !== undefined && { lastCheckpoint: args.lastCheckpoint }),
+            ...(args.endedAt !== undefined && { endedAt: args.endedAt }),
+            ...(args.outcome !== undefined && { outcome: args.outcome }),
+            // sessionId + startedAt intentionally NOT overridable here.
+          };
+          return JSON.stringify(writeLedger(projectDir, merged), null, 2);
+        },
+      }),
+
+      design_create: tool({
+        description:
+          "Create a brainstorm / ADR-style design document on the filesystem at <projectDir>/.ndomo/designs/YYYY-MM-DD-{slug}-design.md. DB-free. slug+title+problem required; planId/sessionId are soft references (no FK check). Filename collisions resolved with a numeric suffix.",
+        args: {
+          slug: z.string(),
+          title: z.string(),
+          problem: z.string(),
+          goals: z.array(z.string()).optional(),
+          constraints: z.array(z.string()).optional(),
+          scope: z.array(z.string()).optional(),
+          exclusions: z.array(z.string()).optional(),
+          options: z
+            .array(
+              z.object({
+                name: z.string(),
+                description: z.string().optional(),
+                pros: z.array(z.string()).optional(),
+                cons: z.array(z.string()).optional(),
+              }),
+            )
+            .optional(),
+          decision: z.string().optional(),
+          tradeoffs: z.array(z.string()).optional(),
+          consequences: z.array(z.string()).optional(),
+          openQuestions: z.array(z.string()).optional(),
+          planId: z.string().optional(),
+          sessionId: z.string().optional(),
+          agent: z.string().optional(),
+          date: z.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          const input: DesignInput = {
+            slug: args.slug,
+            title: args.title,
+            problem: args.problem,
+            ...(args.goals !== undefined && { goals: args.goals }),
+            ...(args.constraints !== undefined && { constraints: args.constraints }),
+            ...(args.scope !== undefined && { scope: args.scope }),
+            ...(args.exclusions !== undefined && { exclusions: args.exclusions }),
+            ...(args.options !== undefined && { options: args.options as DesignOption[] }),
+            ...(args.decision !== undefined && { decision: args.decision }),
+            ...(args.tradeoffs !== undefined && { tradeoffs: args.tradeoffs }),
+            ...(args.consequences !== undefined && { consequences: args.consequences }),
+            ...(args.openQuestions !== undefined && { openQuestions: args.openQuestions }),
+            ...(args.planId !== undefined && { planId: args.planId }),
+            ...(args.sessionId !== undefined && { sessionId: args.sessionId }),
+            agent: args.agent ?? ctx.agent ?? "foreman",
+            ...(args.date !== undefined && { date: args.date }),
+          };
+          return JSON.stringify(createDesign(projectDir, input), null, 2);
+        },
+      }),
+
+      critic_review: tool({
+        description:
+          "Return a binary APPROVED/REJECTED code-review report from a diff. The result includes the task_verify payload; it never bypasses inspector authority.",
+        args: {
+          diff: z.string(),
+          verdict: z.enum(["APPROVED", "REJECTED"]),
+          critical: z.unknown().optional(),
+          optimizations: z.unknown().optional(),
+          compliance: z.unknown().optional(),
+          actionRequired: z.string().optional(),
+          scores: z.unknown().optional(),
+        },
+        execute: async (args, ctx) => {
+          const review = buildCriticReview({
+            diff: args.diff,
+            verdict: args.verdict,
+            reviewedBy: ctx.agent ?? "critic",
+            critical: args.critical,
+            optimizations: args.optimizations,
+            compliance: args.compliance,
+            actionRequired: args.actionRequired,
+            scores: args.scores,
+          });
+          return JSON.stringify({ ...review, executionGate: toTaskVerification(review) }, null, 2);
         },
       }),
     };
