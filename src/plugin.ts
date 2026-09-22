@@ -5,8 +5,8 @@
  * OpenCode hooks and tools. All state lives in closures created
  * when the plugin is instantiated — no module-level globals.
  *
- * Dependency: `@opencode-ai/plugin` lives in `.opencode/package.json`
- * per OpenCode plugin convention (installed alongside the user's
+ * v2: the plugin is defined with `Plugin.define({ id: "ndomo", setup })`
+ * from `@opencode/plugin` (installed alongside the user's
  * `config/ndomo.config.json`).
  */
 
@@ -14,15 +14,10 @@ import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
-import { tool } from "@opencode-ai/plugin";
-import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
-import {
-  CIRCUIT_BREAKER_ERROR,
-  CircuitBreaker,
-  resolveCircuitBreakerTaskFailure,
-} from "./db/circuit-breaker.ts";
-import { openDb } from "./db/client.ts";
+import { Plugin } from "@opencode/plugin";
+import type { ToolEditor } from "@opencode/plugin/promise/tool";
+import { z } from "zod";
+import { loadHttpConfig } from "./config/schema.ts";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -34,6 +29,13 @@ import {
   updateAnalysis,
   validateAnalysisFindings,
 } from "./db/analyses.ts";
+import { AutoCheckpointDispatcher } from "./db/auto-checkpoint.ts";
+import {
+  CIRCUIT_BREAKER_ERROR,
+  CircuitBreaker,
+  resolveCircuitBreakerTaskFailure,
+} from "./db/circuit-breaker.ts";
+import { closeDb, openDb } from "./db/client.ts";
 import { createIncident } from "./db/incidents.ts";
 import { runMigrations } from "./db/migrations.ts";
 import { resolveArchiveDir } from "./db/plan-archive.ts";
@@ -58,8 +60,8 @@ import {
   recordTaskVerification,
   resolveTaskDependencies,
   searchTasks,
-  updateTaskStatus,
   type TaskCreateInput,
+  updateTaskStatus,
 } from "./db/tasks.ts";
 import type {
   IncidentSeverity,
@@ -72,10 +74,8 @@ import type {
   TaskMetadata,
   TaskStatus,
 } from "./db/types.ts";
+import { type HttpServerHandle, startHttpServer } from "./http/server.ts";
 import type { RoutingDecision } from "./lib.ts";
-import { loadHttpConfig } from "./config/schema.ts";
-import { startHttpServer, type HttpServerHandle } from "./http/server.ts";
-import { getSdkClient } from "./sdk/client.ts";
 import {
   BackgroundDispatcher,
   canRunParallel,
@@ -88,6 +88,79 @@ import {
   routeTask,
   verifyIntegrity,
 } from "./lib.ts";
+import { getSdkClient } from "./sdk/client.ts";
+
+// ─── v1 → v2 tool adapter ────────────────────────────────────────────────────
+
+/**
+ * Legacy tool context (v1 shape). v2's `Tool.Context` dropped `directory` and
+ * `worktree` (they live on the plugin context), so the adapter re-injects both
+ * from the setup closure alongside the fields v2 does provide.
+ */
+type LegacyToolContext = {
+  sessionID: string;
+  messageID: string;
+  agent: string;
+  callID: string;
+  directory: string;
+  worktree: string;
+  abort: AbortSignal;
+};
+
+/** v1-style tool definition: zod raw shape + execute over the inferred args. */
+type LegacyToolDef = {
+  description: string;
+  args: z.ZodRawShape;
+  execute: (args: any, context: LegacyToolContext) => unknown;
+};
+
+/**
+ * Identity helper mirroring the v1 `tool()` constructor so the tool map keeps
+ * its original shape (and the zod-inferred `args` types).
+ */
+function tool<Args extends z.ZodRawShape>(input: {
+  description: string;
+  args: Args;
+  execute: (
+    args: z.infer<z.ZodObject<Args>>,
+    context: LegacyToolContext,
+  ) => Promise<unknown> | unknown;
+}): typeof input {
+  return input;
+}
+
+/**
+ * Register v1-style definitions on the v2 tool editor:
+ *  - zod shapes are valid v2 `ValueSchema` inputs (StandardSchemaV1)
+ *  - executor results are wrapped into v2 `{ content }` results
+ *  - the legacy context fields (directory/worktree/callID) are injected
+ */
+function registerTools(
+  editor: ToolEditor,
+  tools: Record<string, LegacyToolDef>,
+  base: { directory: string; worktree: string },
+): void {
+  for (const [name, def] of Object.entries(tools)) {
+    editor.add({
+      name,
+      description: def.description,
+      input: z.object(def.args),
+      execute: async (input, context): Promise<{ content: string }> => {
+        const legacyCtx: LegacyToolContext = {
+          sessionID: context.sessionID,
+          messageID: context.messageID,
+          agent: context.agent,
+          callID: context.id,
+          directory: base.directory,
+          worktree: base.worktree,
+          abort: context.signal,
+        };
+        const out: unknown = await def.execute(input, legacyCtx);
+        return { content: typeof out === "string" ? out : JSON.stringify(out) };
+      },
+    });
+  }
+}
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -110,7 +183,7 @@ function extractFilePath(args: unknown): string | undefined {
  * Extracted from the tool's `execute` closure so the v17/T1
  * `verificationRequired` forwarding (and the legacy metadata fallback) can be
  * unit-tested without instantiating the OpenCode plugin runtime, which
- * requires `PluginInput`/SDK wiring.
+ * requires the OpenCode plugin runtime/SDK wiring.
  *
  * Forwards the explicit `verificationRequired` flag when present. The
  * `metadata.verificationRequired === true` fallback continues to be honored
@@ -154,7 +227,9 @@ export function mapTaskCreateBatchArg(
     // Forward the explicit gate flag when present. Omit otherwise so the
     // metadata.verificationRequired fallback inside createTasksBatch stays
     // the source of truth for legacy callers.
-    ...(t.verificationRequired !== undefined ? { verificationRequired: t.verificationRequired } : {}),
+    ...(t.verificationRequired !== undefined
+      ? { verificationRequired: t.verificationRequired }
+      : {}),
   };
 }
 
@@ -530,142 +605,148 @@ export function syncAgentFrontmatter(
 
 // ─── Plugin entry ────────────────────────────────────────────────────────────
 
-export const NdomoPlugin: Plugin = async (
-  input: PluginInput,
-  options?: Record<string, unknown>,
-): Promise<Hooks> => {
-  const { directory, worktree } = input;
-  const opts = (options ?? {}) as NdomoPluginOptions;
+export const NdomoPlugin = Plugin.define({
+  id: "ndomo",
+  async setup(ctx) {
+    // v2: the plugin context owns the location; tool execution contexts do
+    // not, so resolve both roots once and thread them through the closures.
+    const directory = ctx.location.directory;
+    const worktree = ctx.location.project.directory;
+    const opts = (ctx.options ?? {}) as NdomoPluginOptions;
 
-  // Load ndomo.json config (gracefully degrades to null if missing/corrupt)
-  const ndomoConfig = loadNdomoConfig();
-  const effectivePreset = opts.preset ?? ndomoConfig?.preset ?? "default";
-  if (ndomoConfig) {
-    console.log(
-      `[ndomo] loaded config: preset=${effectivePreset} agents=${Object.keys(ndomoConfig.agentRouting).length} plugins=${ndomoConfig.plugins.length}`,
-    );
-  }
-  if (ndomoConfig) {
-    syncAgentFrontmatter(ndomoConfig, effectivePreset);
-  }
-
-  // HTTP config — merge from ndomoConfig.http or load from environment variables
-  const httpConfig = ndomoConfig?.http ?? loadHttpConfig();
-  if (httpConfig.enabled) {
-    console.log(
-      `[ndomo] HTTP server enabled: port=${httpConfig.port} auth=${httpConfig.auth.required} cors_origins=${httpConfig.cors.origins.length}`,
-    );
-  }
-
-  // Shared state — lives for the lifetime of the plugin instance
-  // Single resolution point: projectDir is reused for the DB, the
-  // auto-checkpoint ledger wiring, and the session_checkpoint tool so all
-  // session checkpoints persist a portable filesystem ledger.
-  const projectDir = resolveProjectDir({ worktree, directory });
-  const db: Database = openDb(projectDir);
-  runMigrations(db);
-  registerShutdownHandlers(db);
-  const dispatcher = new BackgroundDispatcher(db);
-
-  // ─── SDK Client (for SSE events) ─────────────────────────────────────────────
-  let sdkClient: import("@opencode-ai/sdk/client").OpencodeClient | null = null;
-  if (httpConfig.enabled) {
-    try {
-      const handle = await getSdkClient();
-      sdkClient = handle.client;
-      console.log(`[ndomo] OpenCode SDK client connected: ${handle.baseUrl}`);
-    } catch (err) {
-      console.warn(
-        `[ndomo] OpenCode SDK client unavailable: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      console.warn(`[ndomo] /api/events will return 503 until SDK becomes reachable`);
-    }
-  }
-
-  // ─── HTTP Server ──────────────────────────────────────────────────────────
-  let httpServerHandle: HttpServerHandle | null = null;
-  if (httpConfig.enabled) {
-    try {
-      httpServerHandle = await startHttpServer({
-        db,
-        httpConfig,
-        ...(sdkClient ? { sdkClient } : {}),
-      });
-      console.log(`[ndomo] HTTP server listening on port ${httpServerHandle.port}`);
-    } catch (err) {
-      console.error(
-        `[ndomo] HTTP server failed to start: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  // HTTP shutdown — separate from DB shutdown (registerShutdownHandlers uses process.once
-  // which self-removes; adding our own listener avoids modifying shared shutdown module).
-  let httpStopped = false;
-  const stopHttpServer = (): void => {
-    if (httpStopped || !httpServerHandle) return;
-    httpStopped = true;
-    httpServerHandle.stop().catch(() => {});
-  };
-  process.on("SIGINT", stopHttpServer);
-  process.on("SIGTERM", stopHttpServer);
-
-  // Background task retention — auto-finalize terminal tasks when row count
-  // exceeds soft cap. Defaults: soft cap 1000 rows, max age 24h. Prevents
-  // unbounded growth of background_tasks on long-running installs (audit
-  // finding fcb12dc5 #1).
-  const retentionSoftCap = ndomoConfig?.backgroundRetention?.softCap ?? 1000;
-  const retentionMaxAgeMs = ndomoConfig?.backgroundRetention?.maxAgeMs ?? 24 * 60 * 60 * 1000;
-  const totalRows =
-    dispatcher.stats().pending +
-    dispatcher.stats().running +
-    dispatcher.stats().completed +
-    dispatcher.stats().failed +
-    dispatcher.stats().cancelled;
-  if (totalRows > retentionSoftCap) {
-    const deleted = dispatcher.finalize(retentionMaxAgeMs);
-    if (deleted > 0) {
-      // eslint-disable-next-line no-console
+    // Load ndomo.json config (gracefully degrades to null if missing/corrupt)
+    const ndomoConfig = loadNdomoConfig();
+    const effectivePreset = opts.preset ?? ndomoConfig?.preset ?? "default";
+    if (ndomoConfig) {
       console.log(
-        `[ndomo] background retention: pruned ${deleted} terminal tasks older than ${retentionMaxAgeMs}ms (rows were ${totalRows} > soft cap ${retentionSoftCap})`,
+        `[ndomo] loaded config: preset=${effectivePreset} agents=${Object.keys(ndomoConfig.agentRouting).length} plugins=${ndomoConfig.plugins.length}`,
       );
     }
-  }
+    if (ndomoConfig) {
+      syncAgentFrontmatter(ndomoConfig, effectivePreset);
+    }
 
-  /** filepath → `${sessionID}:${callID}` of the task that locked it. */
-  const fileLockTtlMs = ndomoConfig?.fileLock?.ttlMs ?? 60_000;
-  const activeWrites = new FileLock(fileLockTtlMs);
+    // HTTP config — merge from ndomoConfig.http or load from environment variables
+    const httpConfig = ndomoConfig?.http ?? loadHttpConfig();
+    if (httpConfig.enabled) {
+      console.log(
+        `[ndomo] HTTP server enabled: port=${httpConfig.port} auth=${httpConfig.auth.required} cors_origins=${httpConfig.cors.origins.length}`,
+      );
+    }
 
-  // Circuit breaker for tool-call loops. Config option `circuitBreaker.threshold`
-  // overrides the TOTAL per-session threshold only; the consecutive-identical
-  // threshold keeps its default (20). Absent/invalid config → built-in default
-  // (4000), so protection can never be silently disabled by a malformed value.
-  const circuitBreaker = new CircuitBreaker(
-    ndomoConfig?.circuitBreaker?.threshold !== undefined
-      ? { totalThreshold: ndomoConfig.circuitBreaker.threshold }
-      : {},
-  );
-  if (httpConfig.enabled) {
-    console.log(
-      `[ndomo] circuit breaker: totalThreshold=${circuitBreaker.config.totalThreshold} identicalThreshold=${circuitBreaker.config.identicalThreshold}`,
+    // Shared state — lives for the lifetime of the plugin instance
+    // Single resolution point: projectDir is reused for the DB, the
+    // auto-checkpoint ledger wiring, and the session_checkpoint tool so all
+    // session checkpoints persist a portable filesystem ledger.
+    const projectDir = resolveProjectDir({ worktree, directory });
+    const db: Database = openDb(projectDir);
+    runMigrations(db);
+    registerShutdownHandlers(db);
+    const dispatcher = new BackgroundDispatcher(db);
+
+    // ─── SDK Client (for SSE events) ─────────────────────────────────────────────
+    let sdkClient: import("@opencode-ai/sdk/client").OpencodeClient | null = null;
+    if (httpConfig.enabled) {
+      try {
+        const handle = await getSdkClient();
+        sdkClient = handle.client;
+        console.log(`[ndomo] OpenCode SDK client connected: ${handle.baseUrl}`);
+      } catch (err) {
+        console.warn(
+          `[ndomo] OpenCode SDK client unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        console.warn(`[ndomo] /api/events will return 503 until SDK becomes reachable`);
+      }
+    }
+
+    // ─── HTTP Server ──────────────────────────────────────────────────────────
+    let httpServerHandle: HttpServerHandle | null = null;
+    if (httpConfig.enabled) {
+      try {
+        httpServerHandle = await startHttpServer({
+          db,
+          httpConfig,
+          ...(sdkClient ? { sdkClient } : {}),
+        });
+        console.log(`[ndomo] HTTP server listening on port ${httpServerHandle.port}`);
+      } catch (err) {
+        console.error(
+          `[ndomo] HTTP server failed to start: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // HTTP shutdown — separate from DB shutdown (registerShutdownHandlers uses process.once
+    // which self-removes; adding our own listener avoids modifying shared shutdown module).
+    let httpStopped = false;
+    const stopHttpServer = (): Promise<void> => {
+      if (httpStopped || !httpServerHandle) return Promise.resolve();
+      httpStopped = true;
+      return httpServerHandle.stop().catch(() => {});
+    };
+    const onProcessSignal = (): void => {
+      void stopHttpServer();
+    };
+    process.on("SIGINT", onProcessSignal);
+    process.on("SIGTERM", onProcessSignal);
+
+    // Background task retention — auto-finalize terminal tasks when row count
+    // exceeds soft cap. Defaults: soft cap 1000 rows, max age 24h. Prevents
+    // unbounded growth of background_tasks on long-running installs (audit
+    // finding fcb12dc5 #1).
+    const retentionSoftCap = ndomoConfig?.backgroundRetention?.softCap ?? 1000;
+    const retentionMaxAgeMs = ndomoConfig?.backgroundRetention?.maxAgeMs ?? 24 * 60 * 60 * 1000;
+    const totalRows =
+      dispatcher.stats().pending +
+      dispatcher.stats().running +
+      dispatcher.stats().completed +
+      dispatcher.stats().failed +
+      dispatcher.stats().cancelled;
+    if (totalRows > retentionSoftCap) {
+      const deleted = dispatcher.finalize(retentionMaxAgeMs);
+      if (deleted > 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[ndomo] background retention: pruned ${deleted} terminal tasks older than ${retentionMaxAgeMs}ms (rows were ${totalRows} > soft cap ${retentionSoftCap})`,
+        );
+      }
+    }
+
+    /** filepath → `${sessionID}:${callID}` of the task that locked it. */
+    const fileLockTtlMs = ndomoConfig?.fileLock?.ttlMs ?? 60_000;
+    const activeWrites = new FileLock(fileLockTtlMs);
+
+    // Circuit breaker for tool-call loops. Config option `circuitBreaker.threshold`
+    // overrides the TOTAL per-session threshold only; the consecutive-identical
+    // threshold keeps its default (20). Absent/invalid config → built-in default
+    // (4000), so protection can never be silently disabled by a malformed value.
+    const circuitBreaker = new CircuitBreaker(
+      ndomoConfig?.circuitBreaker?.threshold !== undefined
+        ? { totalThreshold: ndomoConfig.circuitBreaker.threshold }
+        : {},
     );
-  }
+    if (httpConfig.enabled) {
+      console.log(
+        `[ndomo] circuit breaker: totalThreshold=${circuitBreaker.config.totalThreshold} identicalThreshold=${circuitBreaker.config.identicalThreshold}`,
+      );
+    }
 
-  // Auto-checkpoint dispatcher (T3.3). projectDir threads through so each
-  // auto-checkpoint also persists a filesystem ledger (continuity across
-  // process restarts / DB rebuilds).
-  const autoCheckpoint = new AutoCheckpointDispatcher(db, {
-    ...ndomoConfig?.autoCheckpoint,
-    projectDir,
-  });
+    // Auto-checkpoint dispatcher (T3.3). projectDir threads through so each
+    // auto-checkpoint also persists a filesystem ledger (continuity across
+    // process restarts / DB rebuilds).
+    const autoCheckpoint = new AutoCheckpointDispatcher(db, {
+      ...ndomoConfig?.autoCheckpoint,
+      projectDir,
+    });
 
-  // ─── Hooks ───────────────────────────────────────────────────────────────
+    // ─── Hooks (v2 domain registration) ─────────────────────────────────────
 
-  const hooks: Hooks = {
-    // (a) Inject orchestrator state into session compaction context
-    "experimental.session.compacting": async (input, output) => {
+    // (a) Inject orchestrator state into session compaction context.
+    //     v2 removed v1's `output.context.push`; the supported analog is
+    //     appending a text SystemPart to the outgoing compaction request.
+    await ctx.session.hook("compaction", async (event) => {
       // Sweep stale write locks before snapshotting state — surfaces the
-      // true current lock count after any prior SDK hook-miss leaks.
+      // true current lock count after any prior hook-miss leaks.
       const swept = activeWrites.sweep();
       const count = dispatcher.getActive().length;
       const paths = activeWrites.keys().join(", ");
@@ -673,8 +754,9 @@ export const NdomoPlugin: Plugin = async (
         // eslint-disable-next-line no-console
         console.log(`[ndomo] file-lock: swept ${swept} stale entries during compaction`);
       }
-      output.context.push(
-        [
+      event.system.push({
+        type: "text",
+        text: [
           "",
           "## ndomo orchestrator state",
           `- Active tasks: ${count}`,
@@ -682,18 +764,19 @@ export const NdomoPlugin: Plugin = async (
           `- Project: ${worktree || directory}`,
           "",
         ].join("\n"),
-      );
+      });
 
       // Enrich compaction context with DB state
       try {
-        const sessionId = input.sessionID ?? "";
+        const sessionId = event.sessionID ?? "";
         if (sessionId) {
           const activePlans = listPlans(db, { sessionId }).filter(
             (p) => p.status === "approved" || p.status === "executing",
           );
           if (activePlans.length > 0) {
-            output.context.push(
-              `\n## ndomo active plans\n${JSON.stringify(
+            event.system.push({
+              type: "text",
+              text: `\n## ndomo active plans\n${JSON.stringify(
                 activePlans.map((p) => ({
                   id: p.id,
                   slug: p.slug,
@@ -704,13 +787,14 @@ export const NdomoPlugin: Plugin = async (
                 null,
                 2,
               )}`,
-            );
+            });
           }
         }
         const recentSessions = listSessions(db, { limit: 3 });
         if (recentSessions.length > 0) {
-          output.context.push(
-            `\n## ndomo recent sessions\n${JSON.stringify(
+          event.system.push({
+            type: "text",
+            text: `\n## ndomo recent sessions\n${JSON.stringify(
               recentSessions.map((s) => ({
                 id: s.id,
                 goal: s.goal.slice(0, 100),
@@ -720,27 +804,27 @@ export const NdomoPlugin: Plugin = async (
               null,
               2,
             )}`,
-          );
+          });
         }
       } catch (err) {
         // DB errors should not break compaction
         console.log("ndomo: compaction DB enrichment failed", (err as Error).message);
       }
-    },
+    });
 
     // (b) Circuit breaker (runs for EVERY tool call) + no-overlap rule for
     //     write/edit tools. The breaker check happens first so a tripped
     //     session short-circuits before any lock is acquired — preserving
     //     the existing FileLock lifecycle for healthy sessions.
-    "tool.execute.before": async (input, output) => {
+    await ctx.tool.hook("execute.before", async (event) => {
       // ── Circuit breaker: count every call, evaluate thresholds ─────────
-      const cb = circuitBreaker.check(input.sessionID ?? "", input.tool, output.args);
+      const cb = circuitBreaker.check(event.sessionID, event.tool, event.input);
       if (cb.trippedNow) {
         // One-shot edge: this is the single call that crossed a threshold.
         // Emit ONE warning + (optionally) fail the relevant task, then throw.
-        const taskToFail = resolveCircuitBreakerTaskFailure(input.tool, output.args);
+        const taskToFail = resolveCircuitBreakerTaskFailure(event.tool, event.input);
         console.error(
-          `[ndomo] circuit breaker TRIPPED — session=${input.sessionID ?? "?"} tool=${input.tool} reason=${cb.reason} calls=${cb.callCount} identical=${cb.identicalCount}${taskToFail ? ` failingTask=${taskToFail}` : " (no task target)"}`,
+          `[ndomo] circuit breaker TRIPPED — session=${event.sessionID} tool=${event.tool} reason=${cb.reason} calls=${cb.callCount} identical=${cb.identicalCount}${taskToFail ? ` failingTask=${taskToFail}` : " (no task target)"}`,
         );
         if (taskToFail) {
           try {
@@ -750,7 +834,7 @@ export const NdomoPlugin: Plugin = async (
               "failed",
               { error: CIRCUIT_BREAKER_ERROR },
               "ndomo-circuit-breaker",
-              { agent: "ndomo-circuit-breaker", sessionId: input.sessionID },
+              { agent: "ndomo-circuit-breaker", sessionId: event.sessionID },
             );
           } catch (err) {
             // A failed task-write (e.g. missing row) must NOT mask the
@@ -769,55 +853,55 @@ export const NdomoPlugin: Plugin = async (
       }
 
       // ── File-lock enforcement (existing behavior, unchanged) ───────────
-      if (input.tool !== "write" && input.tool !== "edit") return;
+      if (event.tool !== "write" && event.tool !== "edit") return;
 
-      const filepath = extractFilePath(output.args);
+      const filepath = extractFilePath(event.input);
       if (!filepath) return;
 
-      const key = `${input.sessionID}:${input.callID}`;
+      const key = `${event.sessionID}:${event.id}`;
       const blockedBy = activeWrites.acquire(filepath, key);
       if (blockedBy != null) {
         throw new Error(`ndomo: file locked by active task ${blockedBy}`);
       }
-    },
+    });
 
     // (c) Remove filepath from activeWrites after tool completes — wrapped in
     //     try/finally so the lock releases even if downstream hook logic throws
     //     or the SDK aborts the chain mid-way (regression: lock leaks blocked
     //     subsequent writes indefinitely).
-    "tool.execute.after": async (input) => {
+    await ctx.tool.hook("execute.after", async (event) => {
       try {
         // (future) post-write hooks (audit, git staging) go here
       } finally {
-        if (input.tool !== "write" && input.tool !== "edit") return;
-        const filepath = extractFilePath(input.args);
-        if (filepath) {
-          const key = `${input.sessionID}:${input.callID}`;
-          activeWrites.release(filepath, key);
+        if (event.tool === "write" || event.tool === "edit") {
+          const filepath = extractFilePath(event.input);
+          if (filepath) {
+            const key = `${event.sessionID}:${event.id}`;
+            activeWrites.release(filepath, key);
+          }
         }
       }
-    },
+    });
 
-    // (d) Note: `file.edited` hook is NOT present in @opencode-ai/plugin v1.17.7.
-    //     The SDK's Hooks type does not include it. Logging file events must be
-    //     handled via a different mechanism (e.g. tool.execute.after filtering).
+    // (d) Note: v2 exposes no dedicated `file.edited` hook either. Post-write
+    //     logging must ride on `tool.execute.after` (filtered by tool name).
 
     // (e) Inject ndomo env vars into shell sessions
-    "shell.env": async (_input, output) => {
-      output.env.NDOMO_PRESET = opts.preset ?? "default";
-      output.env.NDOMO_PROJECT = worktree || directory;
-    },
+    await ctx.shell.hook("create.before", (event) => {
+      event.env.NDOMO_PRESET = opts.preset ?? "default";
+      event.env.NDOMO_PROJECT = worktree || directory;
+    });
 
     // ─── Tools ───────────────────────────────────────────────────────────
 
-    tool: {
+    const toolDefs: Record<string, LegacyToolDef> = {
       // ── Routing ────────────────────────────────────────────────────────
 
       route: tool({
         description: "Route a task to the appropriate specialist agent.",
         args: {
-          description: tool.schema.string(),
-          type: tool.schema.enum([
+          description: z.string(),
+          type: z.enum([
             "implement",
             "explore",
             "research",
@@ -827,11 +911,9 @@ export const NdomoPlugin: Plugin = async (
             "document",
             "debate",
           ]),
-          stack: tool.schema
-            .enum(["go", "vue", "js", "python", "zig", "generic", "unknown"])
-            .optional(),
-          risk: tool.schema.enum(["low", "medium", "high"]).optional(),
-          files: tool.schema.array(tool.schema.string()).optional(),
+          stack: z.enum(["go", "vue", "js", "python", "zig", "generic", "unknown"]).optional(),
+          risk: z.enum(["low", "medium", "high"]).optional(),
+          files: z.array(z.string()).optional(),
         },
         execute: async (args) => {
           const decision = routeTask({
@@ -848,7 +930,7 @@ export const NdomoPlugin: Plugin = async (
       can_parallel: tool({
         description: "Check whether a set of routing decisions can run in parallel.",
         args: {
-          tasks: tool.schema.string(),
+          tasks: z.string(),
         },
         execute: async (args) => {
           let parsed: RoutingDecision[];
@@ -869,10 +951,10 @@ export const NdomoPlugin: Plugin = async (
       dispatch: tool({
         description: "Dispatch a background task to a specialist agent and return its task ID.",
         args: {
-          agent: tool.schema.string(),
-          description: tool.schema.string(),
-          files: tool.schema.array(tool.schema.string()).optional(),
-          worktree: tool.schema.string().optional(),
+          agent: z.string(),
+          description: z.string(),
+          files: z.array(z.string()).optional(),
+          worktree: z.string().optional(),
         },
         execute: async (args) => {
           const taskId = dispatcher.dispatch({
@@ -895,7 +977,7 @@ export const NdomoPlugin: Plugin = async (
 
       background_task_status: tool({
         description: "Get the status of a background task by ID.",
-        args: { taskId: tool.schema.string() },
+        args: { taskId: z.string() },
         execute: async (args) => {
           const task = dispatcher.getStatus(args.taskId);
           if (!task) throw new Error(`ndomo: background task ${args.taskId} not found`);
@@ -906,7 +988,7 @@ export const NdomoPlugin: Plugin = async (
       background_task_cancel: tool({
         description:
           "Cancel a pending or running background task. Returns true if cancelled, false if task was already terminal.",
-        args: { taskId: tool.schema.string() },
+        args: { taskId: z.string() },
         execute: async (args) => {
           const cancelled = dispatcher.cancel(args.taskId);
           return JSON.stringify({ taskId: args.taskId, cancelled });
@@ -918,10 +1000,10 @@ export const NdomoPlugin: Plugin = async (
       worktree_create: tool({
         description: "Create a new git worktree for isolated coding.",
         args: {
-          slug: tool.schema.string(),
-          branch: tool.schema.string(),
-          agent: tool.schema.string().optional(),
-          description: tool.schema.string().optional(),
+          slug: z.string(),
+          branch: z.string(),
+          agent: z.string().optional(),
+          description: z.string().optional(),
         },
         execute: async (args, ctx) => {
           const path = await createWorktree(
@@ -946,8 +1028,8 @@ export const NdomoPlugin: Plugin = async (
       worktree_remove: tool({
         description: "Remove a git worktree by slug.",
         args: {
-          slug: tool.schema.string(),
-          abandon: tool.schema.boolean().optional(),
+          slug: z.string(),
+          abandon: z.boolean().optional(),
         },
         execute: async (args, ctx) => {
           await removeWorktree(ctx.directory, args.slug, args.abandon ?? false);
@@ -969,8 +1051,8 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Build memory search options for opencode-mem. The foreman agent passes the result to its mem tool.",
         args: {
-          query: tool.schema.string(),
-          scope: tool.schema.enum(["project", "all-projects"]).optional(),
+          query: z.string(),
+          scope: z.enum(["project", "all-projects"]).optional(),
         },
         execute: async (args, ctx) => {
           const tag = getProjectTag(ctx.directory);
@@ -983,7 +1065,7 @@ export const NdomoPlugin: Plugin = async (
       memory_compress: tool({
         description: "Compress arbitrary text into caveman format.",
         args: {
-          text: tool.schema.string(),
+          text: z.string(),
         },
         execute: async (args) => {
           const result = cavemanCompress(args.text);
@@ -1001,7 +1083,7 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Admin: force-release a write/edit lock on a filepath. Use when a prior tool execution crashed or its SDK hook chain broke before `tool.execute.after` fired, leaving a stale lock. TTL sweep also handles this automatically — this tool is for manual recovery.",
         args: {
-          filepath: tool.schema.string(),
+          filepath: z.string(),
         },
         execute: async (args) => {
           const released = activeWrites.forceRelease(args.filepath);
@@ -1034,15 +1116,15 @@ export const NdomoPlugin: Plugin = async (
       plan_create: tool({
         description: "Create a new plan in the ndomo state database.",
         args: {
-          slug: tool.schema.string(),
-          title: tool.schema.string(),
-          overview: tool.schema.string(),
-          approach: tool.schema.string().optional(),
-          priority: tool.schema.number().optional(),
-          complexity: tool.schema.number().int().min(1).max(5).optional(),
-          sessionId: tool.schema.string().optional(),
-          metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
-          files: tool.schema.array(tool.schema.string()).optional(),
+          slug: z.string(),
+          title: z.string(),
+          overview: z.string(),
+          approach: z.string().optional(),
+          priority: z.number().optional(),
+          complexity: z.number().int().min(1).max(5).optional(),
+          sessionId: z.string().optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+          files: z.array(z.string()).optional(),
         },
         execute: async (args, ctx) => {
           return JSON.stringify(
@@ -1054,8 +1136,8 @@ export const NdomoPlugin: Plugin = async (
       plan_get: tool({
         description: "Get a plan by ID or slug.",
         args: {
-          id: tool.schema.string().optional(),
-          slug: tool.schema.string().optional(),
+          id: z.string().optional(),
+          slug: z.string().optional(),
         },
         execute: async (args) => {
           if (!args.id && !args.slug) {
@@ -1074,11 +1156,11 @@ export const NdomoPlugin: Plugin = async (
       plan_list: tool({
         description: "List plans, optionally filtered by status and session.",
         args: {
-          status: tool.schema
+          status: z
             .enum(["draft", "approved", "executing", "completed", "failed", "abandoned"])
             .optional(),
-          sessionId: tool.schema.string().optional(),
-          limit: tool.schema.number().optional(),
+          sessionId: z.string().optional(),
+          limit: z.number().optional(),
         },
         execute: async (args) => {
           const opts: { status?: PlanStatus; sessionId?: string; limit?: number } = {};
@@ -1093,9 +1175,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Full-text search over plan titles, overviews, and approaches using SQLite FTS5.",
         args: {
-          query: tool.schema.string(),
-          limit: tool.schema.number().optional(),
-          includeArchived: tool.schema.boolean().optional(),
+          query: z.string(),
+          limit: z.number().optional(),
+          includeArchived: z.boolean().optional(),
         },
         execute: async (args) => {
           return JSON.stringify(
@@ -1113,7 +1195,7 @@ export const NdomoPlugin: Plugin = async (
        */
       plan_approve: tool({
         description: "Mark a plan as approved. Sets approved_at to the current timestamp.",
-        args: { id: tool.schema.string() },
+        args: { id: z.string() },
         execute: async (args, ctx) => {
           return JSON.stringify(
             approvePlan(db, args.id, {
@@ -1128,8 +1210,8 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Permanently delete a plan and all its data (tasks, files, tags). Requires confirm: true. Rejects draft plans and plans with active tasks.",
         args: {
-          id: tool.schema.string(),
-          confirm: tool.schema.boolean(),
+          id: z.string(),
+          confirm: z.boolean(),
         },
         execute: async (args) => {
           return JSON.stringify(deletePlan(db, args.id, { confirm: args.confirm }));
@@ -1140,18 +1222,11 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Update a plan's status (draft, approved, executing, completed, failed, abandoned). Auto-archives to markdown on terminal status. Use dryRun=true to pre-check readiness (blockers/warnings) without mutating. Use force=true with forceReason to bypass blockers (except status_invalid) — captured to plan_audit.",
         args: {
-          id: tool.schema.string(),
-          status: tool.schema.enum([
-            "draft",
-            "approved",
-            "executing",
-            "completed",
-            "failed",
-            "abandoned",
-          ]),
-          dryRun: tool.schema.boolean().optional(),
-          force: tool.schema.boolean().optional(),
-          forceReason: tool.schema.string().optional(),
+          id: z.string(),
+          status: z.enum(["draft", "approved", "executing", "completed", "failed", "abandoned"]),
+          dryRun: z.boolean().optional(),
+          force: z.boolean().optional(),
+          forceReason: z.string().optional(),
         },
         execute: async (args, ctx) => {
           const archiveDir = resolveArchiveDir(worktree || directory);
@@ -1196,8 +1271,8 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Get plan progress summary (task counts + percentage). Filterable by planId and/or owner (metadata.ownedBy).",
         args: {
-          planId: tool.schema.string().optional(),
-          owner: tool.schema.string().optional(),
+          planId: z.string().optional(),
+          owner: z.string().optional(),
         },
         execute: async (args) => {
           if (args.owner) {
@@ -1235,11 +1310,11 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Register files for a plan in plan_files with explicit roles (e.g. 'input', 'modified', 'output', 'reference'). Uses INSERT OR IGNORE for idempotency.",
         args: {
-          planId: tool.schema.string(),
-          files: tool.schema.array(
-            tool.schema.object({
-              filePath: tool.schema.string(),
-              role: tool.schema.string(),
+          planId: z.string(),
+          files: z.array(
+            z.object({
+              filePath: z.string(),
+              role: z.string(),
             }),
           ),
         },
@@ -1263,18 +1338,18 @@ export const NdomoPlugin: Plugin = async (
 
       task_create_batch: tool({
         description:
-           "Create multiple tasks for a plan in a single transaction. Each task gets a UUID and sequential order_index. Set verificationRequired=true on a task to enable the v17/T1 execution gate (updateTaskStatus('done') blocked until the inspector passes or a foreman force-waives). metadata.verificationRequired=true is honored as a backwards-compatible fallback.",
+          "Create multiple tasks for a plan in a single transaction. Each task gets a UUID and sequential order_index. Set verificationRequired=true on a task to enable the v17/T1 execution gate (updateTaskStatus('done') blocked until the inspector passes or a foreman force-waives). metadata.verificationRequired=true is honored as a backwards-compatible fallback.",
         args: {
-          planId: tool.schema.string(),
-          tasks: tool.schema.array(
-            tool.schema.object({
-              description: tool.schema.string(),
-              agent: tool.schema.string(),
-              files: tool.schema.array(tool.schema.string()).optional(),
-              complexity: tool.schema.number().int().min(1).max(5).optional(),
-              dependencies: tool.schema.array(tool.schema.string()).optional(),
-              metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
-              verificationRequired: tool.schema.boolean().optional(),
+          planId: z.string(),
+          tasks: z.array(
+            z.object({
+              description: z.string(),
+              agent: z.string(),
+              files: z.array(z.string()).optional(),
+              complexity: z.number().int().min(1).max(5).optional(),
+              dependencies: z.array(z.string()).optional(),
+              metadata: z.record(z.string(), z.unknown()).optional(),
+              verificationRequired: z.boolean().optional(),
             }),
           ),
         },
@@ -1298,9 +1373,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "List tasks for a plan, optionally filtered by status. Set includeArchived=true to include tasks from archived plans (archived_at IS NOT NULL).",
         args: {
-          planId: tool.schema.string(),
-          status: tool.schema.enum(["pending", "running", "done", "failed", "blocked"]).optional(),
-          includeArchived: tool.schema.boolean().optional(),
+          planId: z.string(),
+          status: z.enum(["pending", "running", "done", "failed", "blocked"]).optional(),
+          includeArchived: z.boolean().optional(),
         },
         execute: async (args) => {
           const opts: { status?: TaskStatus; includeArchived?: boolean } = {};
@@ -1314,12 +1389,12 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Update a task's status. Optionally record result or error text. When transitioning to 'done' on a verification-gated task (v17/T1), pass force=true with a non-blank forceReason to waive the gate.",
         args: {
-          id: tool.schema.string(),
-          status: tool.schema.enum(["pending", "running", "done", "failed", "blocked"]),
-          result: tool.schema.string().optional(),
-          error: tool.schema.string().optional(),
-          force: tool.schema.boolean().optional(),
-          forceReason: tool.schema.string().optional(),
+          id: z.string(),
+          status: z.enum(["pending", "running", "done", "failed", "blocked"]),
+          result: z.string().optional(),
+          error: z.string().optional(),
+          force: z.boolean().optional(),
+          forceReason: z.string().optional(),
         },
         execute: async (args, ctx) => {
           const fields: {
@@ -1360,12 +1435,12 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Record an independent-verifier verdict on a task's execution gate (v17/T1). verdict='passed' is inspector-only unless force+forceReason; 'failed'/'waived' require reason. Override of an existing 'passed' requires force.",
         args: {
-          taskId: tool.schema.string(),
-          verdict: tool.schema.enum(["passed", "failed", "waived"]),
-          result: tool.schema.unknown().optional(),
-          reason: tool.schema.string().optional(),
-          force: tool.schema.boolean().optional(),
-          forceReason: tool.schema.string().optional(),
+          taskId: z.string(),
+          verdict: z.enum(["passed", "failed", "waived"]),
+          result: z.unknown().optional(),
+          reason: z.string().optional(),
+          force: z.boolean().optional(),
+          forceReason: z.string().optional(),
         },
         execute: async (args, ctx) => {
           // result may arrive as JSON string or object — normalize to a record.
@@ -1405,9 +1480,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Full-text search over task descriptions, results, and errors using SQLite FTS5.",
         args: {
-          query: tool.schema.string(),
-          limit: tool.schema.number().optional(),
-          includeArchived: tool.schema.boolean().optional(),
+          query: z.string(),
+          limit: z.number().optional(),
+          includeArchived: z.boolean().optional(),
         },
         execute: async (args) => {
           return JSON.stringify(
@@ -1422,8 +1497,8 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Get the next pending task for a given agent (optionally within a specific plan).",
         args: {
-          agent: tool.schema.string(),
-          planId: tool.schema.string().optional(),
+          agent: z.string(),
+          planId: z.string().optional(),
         },
         execute: async (args) => {
           const opts = args.planId ? { planId: args.planId } : {};
@@ -1435,9 +1510,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Resolve task dependencies: check whether a task's dependencies are all done, and list pending/running/failed/blocked/missing deps. Accepts taskId, or planId+orderIndex to look up the task.",
         args: {
-          taskId: tool.schema.string().optional(),
-          planId: tool.schema.string().optional(),
-          orderIndex: tool.schema.number().optional(),
+          taskId: z.string().optional(),
+          planId: z.string().optional(),
+          orderIndex: z.number().optional(),
         },
         execute: async (args) => {
           let resolvedId = args.taskId;
@@ -1467,9 +1542,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "List pending tasks for an agent without claiming them (read-only peek, no status change).",
         args: {
-          agent: tool.schema.string(),
-          planId: tool.schema.string().optional(),
-          limit: tool.schema.number().optional(),
+          agent: z.string(),
+          planId: z.string().optional(),
+          limit: z.number().optional(),
         },
         execute: async (args) => {
           const limit = args.limit ?? 10;
@@ -1493,9 +1568,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Append an artifact path to a task's artifacts array. Optionally register it in plan_files with a role.",
         args: {
-          taskId: tool.schema.string(),
-          artifact: tool.schema.string(),
-          role: tool.schema.string().optional(),
+          taskId: z.string(),
+          artifact: z.string(),
+          role: z.string().optional(),
         },
         execute: async (args) => {
           const row = db
@@ -1525,9 +1600,9 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Review a completed task. Sets reviewed_by and reviewed_verdict (stored in metadata). Only works on tasks with status='done'.",
         args: {
-          taskId: tool.schema.string(),
-          reviewedBy: tool.schema.string(),
-          verdict: tool.schema.string(),
+          taskId: z.string(),
+          reviewedBy: z.string(),
+          verdict: z.string(),
         },
         execute: async (args) => {
           const row = db
@@ -1554,11 +1629,11 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Create an ops incident record. Validates severity enum (sev1-4) and FK on triggered_by_deployment_id if provided. Sets metadata.created_by from ctx.agent.",
         args: {
-          title: tool.schema.string(),
-          severity: tool.schema.enum(["sev1", "sev2", "sev3", "sev4"]),
-          summary: tool.schema.string().optional(),
-          triggeredByDeploymentId: tool.schema.string().optional(),
-          metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+          title: z.string(),
+          severity: z.enum(["sev1", "sev2", "sev3", "sev4"]),
+          summary: z.string().optional(),
+          triggeredByDeploymentId: z.string().optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
         },
         execute: async (args, ctx) => {
           const input: InsertIncident = {
@@ -1579,14 +1654,14 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Record a rollback execution tied to a deployment (required) and optionally an incident and/or new_deployment. Validates FKs + status enum. Sets metadata.executed_by_agent from ctx.agent.",
         args: {
-          deploymentId: tool.schema.string(),
-          plan: tool.schema.string(),
-          incidentId: tool.schema.string().optional(),
-          status: tool.schema
+          deploymentId: z.string(),
+          plan: z.string(),
+          incidentId: z.string().optional(),
+          status: z
             .enum(["planned", "approved", "dry_run", "executing", "success", "failed", "cancelled"])
             .optional(),
-          newDeploymentId: tool.schema.string().optional(),
-          metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+          newDeploymentId: z.string().optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
         },
         execute: async (args, ctx) => {
           const input: InsertRollback = {
@@ -1606,10 +1681,10 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Escalar tarea compleja al foreman. Crea un plan stub (foreman) con metadata.escalatedFrom=<planId_or_null> + metadata.escalatedBy='craftsman' y notifica via session_checkpoint. NO ejecuta código.",
         args: {
-          sourcePlanId: tool.schema.string().optional(),
-          sourceTaskId: tool.schema.string().optional(),
-          reason: tool.schema.string(),
-          suggestedApproach: tool.schema.string().optional(),
+          sourcePlanId: z.string().optional(),
+          sourceTaskId: z.string().optional(),
+          reason: z.string(),
+          suggestedApproach: z.string().optional(),
         },
         execute: async (args, ctx) => {
           if (!args.reason || args.reason.trim().length === 0) {
@@ -1634,14 +1709,14 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Create a new analysis record in the standalone analyses table. Use for analyst findings, architecture audits, onboarding notes, or cartography outputs. Optionally link to a source plan via sourcePlanId.",
         args: {
-          slug: tool.schema.string(),
-          title: tool.schema.string(),
-          projectPath: tool.schema.string(),
-          summary: tool.schema.string(),
-          findingsJson: tool.schema.string(),
-          sourcePlanId: tool.schema.string().optional(),
-          agent: tool.schema.string().optional(),
-          sessionId: tool.schema.string().optional(),
+          slug: z.string(),
+          title: z.string(),
+          projectPath: z.string(),
+          summary: z.string(),
+          findingsJson: z.string(),
+          sourcePlanId: z.string().optional(),
+          agent: z.string().optional(),
+          sessionId: z.string().optional(),
         },
         execute: async (args, ctx) => {
           try {
@@ -1669,10 +1744,9 @@ export const NdomoPlugin: Plugin = async (
       }),
 
       analysis_get: tool({
-        description:
-          "Get a single analysis by id. Returns the analysis with parsed findingsJson.",
+        description: "Get a single analysis by id. Returns the analysis with parsed findingsJson.",
         args: {
-          id: tool.schema.string(),
+          id: z.string(),
         },
         execute: async (args) => {
           const result = getAnalysis(db, args.id);
@@ -1691,11 +1765,11 @@ export const NdomoPlugin: Plugin = async (
         description:
           "List analyses with optional filters: sourcePlanId, agent, projectPath, archived, limit.",
         args: {
-          sourcePlanId: tool.schema.string().optional(),
-          agent: tool.schema.string().optional(),
-          projectPath: tool.schema.string().optional(),
-          archived: tool.schema.boolean().optional(),
-          limit: tool.schema.number().optional(),
+          sourcePlanId: z.string().optional(),
+          agent: z.string().optional(),
+          projectPath: z.string().optional(),
+          archived: z.boolean().optional(),
+          limit: z.number().optional(),
         },
         execute: async (args) => {
           const opts: {
@@ -1723,8 +1797,8 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Full-text search over analyses (title + summary + findings) using FTS5. Returns matching analyses.",
         args: {
-          query: tool.schema.string(),
-          limit: tool.schema.number().optional(),
+          query: z.string(),
+          limit: z.number().optional(),
         },
         execute: async (args) => {
           const opts: { limit?: number } = {};
@@ -1742,10 +1816,10 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Update an existing analysis. Only provided fields are changed. Bumps updated_at.",
         args: {
-          id: tool.schema.string(),
-          title: tool.schema.string().optional(),
-          summary: tool.schema.string().optional(),
-          findingsJson: tool.schema.string().optional(),
+          id: z.string(),
+          title: z.string().optional(),
+          summary: z.string().optional(),
+          findingsJson: z.string().optional(),
         },
         execute: async (args, ctx) => {
           if (args.findingsJson !== undefined) {
@@ -1771,7 +1845,7 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Soft-delete an analysis by setting archived_at. Idempotent. The row is preserved but excluded from default list queries.",
         args: {
-          id: tool.schema.string(),
+          id: z.string(),
         },
         execute: async (args) => {
           const result = archiveAnalysis(db, args.id);
@@ -1787,17 +1861,13 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Link an existing analysis to a source plan (set source_plan_id). Pass null to unlink.",
         args: {
-          id: tool.schema.string(),
-          planId: tool.schema.string().nullable(),
+          id: z.string(),
+          planId: z.string().nullable(),
         },
         execute: async (args) => {
           if (args.planId === null) {
             const result = unlinkAnalysisFromPlan(db, args.id);
-            return JSON.stringify(
-              { ok: true, id: result.id, sourcePlanId: null },
-              null,
-              2,
-            );
+            return JSON.stringify({ ok: true, id: result.id, sourcePlanId: null }, null, 2);
           }
           const result = linkAnalysisToPlan(db, args.id, args.planId);
           return JSON.stringify(
@@ -1814,10 +1884,10 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Start a new ndomo session with a goal. Sessions track continuity across multiple agents.",
         args: {
-          id: tool.schema.string(),
-          goal: tool.schema.string(),
-          planId: tool.schema.string().optional(),
-          metadata: tool.schema.record(tool.schema.string(), tool.schema.unknown()).optional(),
+          id: z.string(),
+          goal: z.string(),
+          planId: z.string().optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
         },
         execute: async (args, ctx) => {
           const typedMeta = (args.metadata ?? {}) as SessionMetadata;
@@ -1838,21 +1908,23 @@ export const NdomoPlugin: Plugin = async (
         description:
           "Save a checkpoint in an active session with arbitrary state and optional key decisions.",
         args: {
-          id: tool.schema.string(),
-          state: tool.schema.record(tool.schema.string(), tool.schema.unknown()),
-          keyDecisions: tool.schema.string().optional(),
+          id: z.string(),
+          state: z.record(z.string(), z.unknown()),
+          keyDecisions: z.string().optional(),
         },
         execute: async (args) => {
           // projectDir from the plugin closure boot → each checkpoint writes a
           // portable ledger at <projectDir>/.ndomo/ledgers/{id}.md.
-          return JSON.stringify(checkpointSession(db, args.id, args.state, args.keyDecisions, { projectDir }));
+          return JSON.stringify(
+            checkpointSession(db, args.id, args.state, args.keyDecisions, { projectDir }),
+          );
         },
       }),
 
       session_end: tool({
         description:
           "Mark a session as ended. Sets ended_at. Reconciliación: planes con status='executing' o 'approved' sin cerrar en esta session → 'abandoned' con metadata.reason='session_ended'.",
-        args: { id: tool.schema.string() },
+        args: { id: z.string() },
         execute: async (args, ctx) => {
           const plansAbandoned = reconcileAbandonedPlans(db, args.id, ctx.agent ?? "unknown");
           const session = endSession(db, args.id);
@@ -1863,9 +1935,23 @@ export const NdomoPlugin: Plugin = async (
           });
         },
       }),
-    },
-  };
+    };
 
-  return hooks;
-};
+    await ctx.tool.transform((editor) => {
+      registerTools(editor, toolDefs, { directory, worktree });
+    });
+
+    return async () => {
+      await stopHttpServer();
+      process.off("SIGINT", onProcessSignal);
+      process.off("SIGTERM", onProcessSignal);
+      try {
+        closeDb(db);
+      } catch {
+        /* already closed */
+      }
+    };
+  },
+});
+
 export default NdomoPlugin;

@@ -1,9 +1,9 @@
 /**
  * ndomo — OpenCode multi-agent plugin.
  *
- * Entry point. Import as a plugin in opencode.json:
+ * Entry point. Import as a plugin in opencode v2 config:
  * ```jsonc
- * { "plugin": ["ndomo"] }
+ * { "plugins": ["ndomo"] }
  * ```
  */
 
@@ -35,3 +35,4 @@ export {
   verifyIntegrity,
 } from "./lib.ts";
 export { NdomoPlugin, type NdomoPluginOptions } from "./plugin.ts";
+export { default } from "./plugin.ts";

@@ -59,9 +59,11 @@
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.17.7",
+    "@opencode/plugin": "2.0.12",
     "bulma": "^1.0",
     "elysia": "^1.4.29",
-    "opencode-mem": "^2.17.1"
+    "opencode-mem": "^2.17.1",
+    "zod": "4.1.8"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.17.7"

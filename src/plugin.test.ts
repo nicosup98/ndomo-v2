@@ -6,7 +6,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,13 @@ import {
   updateTaskStatus,
 } from "./db/tasks.ts";
 import type { Plan } from "./db/types.ts";
-import { escalateToForeman, FileLock, mapTaskCreateBatchArg, reconcileAbandonedPlans } from "./plugin.ts";
+import {
+  escalateToForeman,
+  FileLock,
+  mapTaskCreateBatchArg,
+  NdomoPlugin,
+  reconcileAbandonedPlans,
+} from "./plugin.ts";
 
 let db: Database;
 
@@ -2742,5 +2748,288 @@ describe("analysis tools", () => {
     // Unlink
     const unlinked = unlinkAnalysisFromPlan(db, analysis.id);
     expect(unlinked.sourcePlanId).toBeNull();
+  });
+});
+
+// ─── v2 plugin registration (Plugin.define + ctx.tool.transform) ─────────────
+
+type PluginSetupCtx = Parameters<typeof NdomoPlugin["setup"]>[0];
+
+type HarnessTool = {
+  name: string;
+  description: string;
+  input: unknown;
+  execute: (input: Record<string, unknown>, context: unknown) => Promise<{ content: string }>;
+};
+
+type HarnessHook = { name: string; cb: (event: any) => Promise<void> | void };
+
+/**
+ * Minimal in-process stand-in for the v2 Plugin.Context. Only the surfaces
+ * src/plugin.ts touches are implemented; the rest is assumed by the cast.
+ */
+function makePluginHarness(projectDir: string) {
+  const tools: HarnessTool[] = [];
+  const sessionHooks: HarnessHook[] = [];
+  const toolHooks: HarnessHook[] = [];
+  const shellHooks: HarnessHook[] = [];
+  const disposals: string[] = [];
+  const registration = (label: string) => ({
+    dispose: async () => {
+      disposals.push(label);
+    },
+  });
+  const ctx = {
+    app: { name: "opencode", version: "2.0.12", channel: "latest" },
+    location: {
+      directory: projectDir,
+      project: { id: "proj_harness", directory: projectDir, canonical: projectDir },
+    },
+    options: {},
+    session: {
+      hook: async (name: string, cb: HarnessHook["cb"]) => {
+        sessionHooks.push({ name, cb });
+        return registration(`session:${name}`);
+      },
+    },
+    tool: {
+      hook: async (name: string, cb: HarnessHook["cb"]) => {
+        toolHooks.push({ name, cb });
+        return registration(`tool:${name}`);
+      },
+      transform: async (cb: (editor: unknown) => void) => {
+        cb({
+          add: (t: HarnessTool) => {
+            tools.push(t);
+          },
+          update: () => {},
+          remove: () => {},
+          list: () => tools,
+          get: () => undefined,
+          namespace: () => {},
+        });
+        return registration("tool:transform");
+      },
+    },
+    shell: {
+      hook: async (name: string, cb: HarnessHook["cb"]) => {
+        shellHooks.push({ name, cb });
+        return registration(`shell:${name}`);
+      },
+    },
+  } as unknown as PluginSetupCtx;
+  const toolCtx = (sessionID: string, agent = "craftsman") => ({
+    sessionID,
+    agent,
+    messageID: "msg_harness",
+    id: "call_harness",
+    signal: new AbortController().signal,
+    progress: async () => {},
+  });
+  return { ctx, tools, sessionHooks, toolHooks, shellHooks, disposals, toolCtx };
+}
+
+describe("NdomoPlugin v2 registration", () => {
+  const priorEnv = {
+    skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
+    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
+  };
+
+  afterAll(() => {
+    if (priorEnv.skipFrontmatter === undefined) delete process.env.NDOMO_SKIP_FRONTMATTER_SYNC;
+    else process.env.NDOMO_SKIP_FRONTMATTER_SYNC = priorEnv.skipFrontmatter;
+    if (priorEnv.httpEnabled === undefined) delete process.env.NDOMO_HTTP_ENABLED;
+    else process.env.NDOMO_HTTP_ENABLED = priorEnv.httpEnabled;
+  });
+
+  const setupPlugin = async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-plugin-"));
+    process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
+    process.env.NDOMO_HTTP_ENABLED = "false";
+    const harness = makePluginHarness(projectDir);
+    const cleanup = await NdomoPlugin.setup(harness.ctx);
+    if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
+    return { projectDir, harness, cleanup };
+  };
+
+  test("setup registers 46 tools, all 4 hooks, and returns a cleanup fn", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      expect(typeof cleanup).toBe("function");
+      expect(harness.tools).toHaveLength(46);
+      const names = harness.tools.map((t) => t.name);
+      expect(names).toContain("plan_create");
+      expect(names).toContain("task_update_status");
+      expect(names).toContain("status");
+      expect(names).toContain("route");
+      expect(new Set(names).size).toBe(46);
+      expect(harness.sessionHooks.map((h) => h.name)).toEqual(["compaction"]);
+      expect(harness.toolHooks.map((h) => h.name).sort()).toEqual([
+        "execute.after",
+        "execute.before",
+      ]);
+      expect(harness.shellHooks.map((h) => h.name)).toEqual(["create.before"]);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("tool execute returns v2 { content } and injects directory from setup ctx", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const status = harness.tools.find((t) => t.name === "status");
+      expect(status).toBeDefined();
+      const res = await status!.execute({}, harness.toolCtx("ses_v2_status"));
+      expect(typeof res.content).toBe("string");
+      const parsed = JSON.parse(res.content) as {
+        plugin: string;
+        directory: string;
+        worktree: string | null;
+      };
+      expect(parsed.plugin).toBe("ndomo");
+      expect(parsed.directory).toBe(projectDir);
+      expect(parsed.worktree).toBe(projectDir);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plan_create tool persists agent + session audit fields in the v2 path", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    const pluginDb = new Database(join(projectDir, ".ndomo", "state.db"));
+    try {
+      const planCreate = harness.tools.find((t) => t.name === "plan_create");
+      expect(planCreate).toBeDefined();
+      const res = await planCreate!.execute(
+        {
+          slug: "t1-harness",
+          title: "T1 harness",
+          overview: "v2 registration smoke",
+          priority: 3,
+        },
+        harness.toolCtx("ses_v2_plancreate", "js-smith"),
+      );
+      const created = JSON.parse(res.content) as { id: string; status: string };
+      expect(created.id).toBeTruthy();
+      expect(created.status).toBe("draft");
+      const row = pluginDb
+        .query("SELECT created_by, source_session_id, status FROM plans WHERE id = ?")
+        .get(created.id) as { created_by: string; source_session_id: string; status: string };
+      expect(row.created_by).toBe("js-smith");
+      expect(row.source_session_id).toBe("ses_v2_plancreate");
+    } finally {
+      pluginDb.close();
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("compaction hook injects orchestrator state into event.system", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const hook = harness.sessionHooks.find((h) => h.name === "compaction");
+      expect(hook).toBeDefined();
+      const event = {
+        sessionID: "ses_v2_compaction",
+        model: { providerID: "test", modelID: "test" },
+        system: [] as Array<{ type: "text"; text: string }>,
+        messages: [],
+        options: {},
+        agent: "craftsman",
+        tools: {},
+      };
+      await hook!.cb(event);
+      expect(event.system.length).toBeGreaterThan(0);
+      expect(event.system.some((p) => p.text.includes("## ndomo orchestrator state"))).toBe(true);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("execute.before/after wire the FileLock lifecycle through v2 events", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const before = harness.toolHooks.find((h) => h.name === "execute.before");
+      const after = harness.toolHooks.find((h) => h.name === "execute.after");
+      expect(before).toBeDefined();
+      expect(after).toBeDefined();
+      const filePath = join(projectDir, "locked.txt");
+      const base = { tool: "write", sessionID: "ses_v2_lock", agent: "craftsman", messageID: "msg_1" };
+
+      await before!.cb({ ...base, id: "call_1", input: { filePath } });
+      await expect(before!.cb({ ...base, id: "call_2", input: { filePath } })).rejects.toThrow(
+        /file locked/,
+      );
+      await after!.cb({
+        ...base,
+        id: "call_1",
+        input: { filePath },
+        status: "completed",
+        result: { content: "ok" },
+      });
+      // Lock released → a fresh call can acquire it again.
+      await before!.cb({ ...base, id: "call_3", input: { filePath } });
+      await after!.cb({
+        ...base,
+        id: "call_3",
+        input: { filePath },
+        status: "completed",
+        result: { content: "ok" },
+      });
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("shell create.before hook injects NDOMO_* env vars", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const hook = harness.shellHooks.find((h) => h.name === "create.before");
+      expect(hook).toBeDefined();
+      const env: Record<string, string | undefined> = {};
+      await hook!.cb({
+        command: "ls",
+        cwd: projectDir,
+        timeout: 1000,
+        shell: "/bin/bash",
+        env,
+      });
+      expect(env.NDOMO_PRESET).toBe("default");
+      expect(env.NDOMO_PROJECT).toBe(projectDir);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("cleanup is idempotent and a fresh instance can register after reload", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-plugin-"));
+    process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
+    process.env.NDOMO_HTTP_ENABLED = "false";
+    try {
+      const first = makePluginHarness(projectDir);
+      const firstCleanup = await NdomoPlugin.setup(first.ctx);
+      if (typeof firstCleanup !== "function") throw new Error("setup did not return a cleanup fn");
+      expect(first.tools).toHaveLength(46);
+      await firstCleanup();
+      await firstCleanup(); // idempotent — a second dispose must not throw
+
+      // Reload semantics: a new setup on the same project opens its own DB
+      // and registers its own tools/hooks without inheriting the old ones.
+      const second = makePluginHarness(projectDir);
+      const secondCleanup = await NdomoPlugin.setup(second.ctx);
+      if (typeof secondCleanup !== "function") {
+        throw new Error("setup did not return a cleanup fn");
+      }
+      expect(second.tools).toHaveLength(46);
+      expect(first.tools).toHaveLength(46);
+      await secondCleanup();
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 });
