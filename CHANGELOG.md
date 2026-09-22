@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-09-22
+
+### Changed
+
+- Unified the seven code-smith agents (`smith`, `go-smith`, `js-smith`,
+  `python-smith`, `vue-smith`, `zig-smith`, `rust-smith`) on
+  `opencode-go/deepseek-v4.1-flash` in the default preset — both in
+  `config/ndomo.config.json` and in the agent frontmatter — keeping
+  `temperature: 0.1` and `reasoning_effort: high`.
+
 ## [Unreleased]
 
 ### Added
@@ -176,6 +186,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven medium-priority `craftsman` fixes shipped alongside the Bun skill
   bootstrap for the `js-smith` specialist
 
+[0.5.1]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.0...v0.5.1
 [Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/nicosup98/ndomo-v2/releases/tag/v0.1.0
