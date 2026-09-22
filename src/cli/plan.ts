@@ -9,6 +9,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { runMigrations } from "../db/migrations.ts";
 import {
   approvePlan,
   createPlan,
@@ -20,7 +21,6 @@ import {
   updatePlanStatus,
 } from "../db/plans.ts";
 import { createTask } from "../db/tasks.ts";
-import { runMigrations } from "../db/migrations.ts";
 import type { Plan, PlanCategory, PlanOwner, PlanStatus } from "../db/types.ts";
 
 const NDOMO_DIR = ".ndomo";
@@ -104,7 +104,9 @@ function validateCategory(value: string | boolean | undefined): PlanCategory | n
   if (value === undefined) return null;
   const str = String(value);
   if (!VALID_CATEGORIES.has(str)) {
-    throw new Error(`[plan] error: invalid category "${str}" — must be one of: ${Array.from(VALID_CATEGORIES).join(", ")}`);
+    throw new Error(
+      `[plan] error: invalid category "${str}" — must be one of: ${Array.from(VALID_CATEGORIES).join(", ")}`,
+    );
   }
   return str as PlanCategory;
 }
@@ -114,7 +116,9 @@ function validateOwner(value: string | boolean | undefined): PlanOwner {
   if (value === undefined) return "foreman"; // default
   const str = String(value);
   if (!VALID_OWNERS.has(str)) {
-    throw new Error(`[plan] error: invalid owner "${str}" — must be one of: ${Array.from(VALID_OWNERS).join(", ")}`);
+    throw new Error(
+      `[plan] error: invalid owner "${str}" — must be one of: ${Array.from(VALID_OWNERS).join(", ")}`,
+    );
   }
   return str as PlanOwner;
 }
@@ -211,7 +215,11 @@ function handleList(db: Database, args: Record<string, string | boolean>): void 
 }
 
 /** Handle plan show subcommand. */
-function handleShow(db: Database, _args: Record<string, string | boolean>, positional: string[]): void {
+function handleShow(
+  db: Database,
+  _args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const idOrSlug = positional[0];
   if (!idOrSlug) throw new Error("[plan] error: plan id or slug is required");
 
@@ -230,11 +238,17 @@ function handleShow(db: Database, _args: Record<string, string | boolean>, posit
 }
 
 /** Handle plan update subcommand. */
-function handleUpdate(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleUpdate(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const planId = positional[0];
   if (!planId) throw new Error("[plan] error: plan id is required");
 
-  const fields: Partial<Pick<Plan, "title" | "overview" | "approach" | "complexity" | "category" | "owner">> = {};
+  const fields: Partial<
+    Pick<Plan, "title" | "overview" | "approach" | "complexity" | "category" | "owner">
+  > = {};
 
   if (args.title !== undefined) fields.title = args.title as string;
   if (args.overview !== undefined) fields.overview = args.overview as string;
@@ -244,7 +258,9 @@ function handleUpdate(db: Database, args: Record<string, string | boolean>, posi
   if (args.owner !== undefined) fields.owner = validateOwner(args.owner);
 
   if (Object.keys(fields).length === 0) {
-    throw new Error("[plan] error: at least one field to update is required (--title, --overview, --approach, --complexity, --category, --owner)");
+    throw new Error(
+      "[plan] error: at least one field to update is required (--title, --overview, --approach, --complexity, --category, --owner)",
+    );
   }
 
   const plan = updatePlanFields(db, planId, fields, { updatedBy: "cli" });
@@ -256,7 +272,11 @@ function handleUpdate(db: Database, args: Record<string, string | boolean>, posi
 }
 
 /** Handle plan approve subcommand. */
-function handleApprove(db: Database, _args: Record<string, string | boolean>, positional: string[]): void {
+function handleApprove(
+  db: Database,
+  _args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const planId = positional[0];
   if (!planId) throw new Error("[plan] error: plan id is required");
 
@@ -269,7 +289,11 @@ function handleApprove(db: Database, _args: Record<string, string | boolean>, po
 }
 
 /** Handle plan complete subcommand. */
-function handleComplete(db: Database, _args: Record<string, string | boolean>, positional: string[]): void {
+function handleComplete(
+  db: Database,
+  _args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const planId = positional[0];
   if (!planId) throw new Error("[plan] error: plan id is required");
 
@@ -282,7 +306,11 @@ function handleComplete(db: Database, _args: Record<string, string | boolean>, p
 }
 
 /** Handle plan delete subcommand. */
-function handleDelete(db: Database, _args: Record<string, string | boolean>, positional: string[]): void {
+function handleDelete(
+  db: Database,
+  _args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const planId = positional[0];
   if (!planId) throw new Error("[plan] error: plan id is required");
 
@@ -291,7 +319,11 @@ function handleDelete(db: Database, _args: Record<string, string | boolean>, pos
 }
 
 /** Handle plan assign-task subcommand. */
-function handleAssignTask(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleAssignTask(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const planId = positional[0];
   if (!planId) throw new Error("[plan] error: plan id is required");
 
@@ -339,7 +371,9 @@ export function runPlan(args: string[]): void {
   try {
     const subcommand = args[0];
     if (!subcommand) {
-      throw new Error("[plan] error: subcommand is required (create|list|show|update|approve|complete|delete|assign-task)");
+      throw new Error(
+        "[plan] error: subcommand is required (create|list|show|update|approve|complete|delete|assign-task)",
+      );
     }
 
     const restArgs = args.slice(1);

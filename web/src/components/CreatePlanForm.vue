@@ -5,9 +5,9 @@
  * Validates client-side before calling usePlanMutations().create().
  * Emits `created` with the Plan on success, `cancel` on abort.
  */
-import { ref, computed } from "vue";
+import { computed, ref } from "vue";
 import { usePlanMutations } from "@/composables/usePlanMutations";
-import type { Plan, PlanCreateBody, PlanCategory, PlanOwner } from "@/types/api";
+import type { Plan, PlanCategory, PlanCreateBody, PlanOwner } from "@/types/api";
 
 const emit = defineEmits<{
   created: [plan: Plan];
@@ -31,7 +31,8 @@ const slugPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 const slugError = computed(() => {
   if (!slug.value) return "Slug is required";
-  if (!slugPattern.test(slug.value)) return "Lowercase letters, numbers, hyphens only (e.g. my-plan)";
+  if (!slugPattern.test(slug.value))
+    return "Lowercase letters, numbers, hyphens only (e.g. my-plan)";
   return null;
 });
 

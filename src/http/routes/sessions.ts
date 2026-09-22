@@ -25,14 +25,11 @@ export function sessionsRoute(db: Database) {
         }),
       },
     )
-    .get(
-      "/api/sessions/active",
-      async () => {
-        // Fetch all recent sessions and filter active (endedAt === null)
-        const all = listSessions(db, { limit: 20 });
-        return all.filter((s) => s.endedAt === null);
-      },
-    )
+    .get("/api/sessions/active", async () => {
+      // Fetch all recent sessions and filter active (endedAt === null)
+      const all = listSessions(db, { limit: 20 });
+      return all.filter((s) => s.endedAt === null);
+    })
     .get(
       "/api/sessions/:id",
       async ({ params: { id }, set }) => {

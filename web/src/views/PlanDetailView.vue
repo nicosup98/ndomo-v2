@@ -1,19 +1,19 @@
 <script setup lang="ts">
+import { useTimeAgo } from "@vueuse/core";
 import { computed } from "vue";
-import { useApi } from "@/composables/useApi";
-import { useSseRefresh } from "@/composables/useSseRefresh";
+import { useRouter } from "vue-router";
 import { getPlan } from "@/api/plans";
 import { listTasks } from "@/api/tasks";
-import type { Task, TaskStatus } from "@/types/api";
+import CreateTaskForm from "@/components/CreateTaskForm.vue";
+import EditPlanForm from "@/components/EditPlanForm.vue";
+import ErrorState from "@/components/ErrorState.vue";
+import LoadingSpinner from "@/components/LoadingSpinner.vue";
+import StatusActions from "@/components/StatusActions.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
 import TaskRow from "@/components/TaskRow.vue";
-import LoadingSpinner from "@/components/LoadingSpinner.vue";
-import ErrorState from "@/components/ErrorState.vue";
-import EditPlanForm from "@/components/EditPlanForm.vue";
-import StatusActions from "@/components/StatusActions.vue";
-import CreateTaskForm from "@/components/CreateTaskForm.vue";
-import { useRouter } from "vue-router";
-import { useTimeAgo } from "@vueuse/core";
+import { useApi } from "@/composables/useApi";
+import { useSseRefresh } from "@/composables/useSseRefresh";
+import type { Task, TaskStatus } from "@/types/api";
 
 const props = defineProps<{
   id: string;

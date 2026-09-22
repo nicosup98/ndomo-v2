@@ -14,12 +14,7 @@ import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "./migrations.ts";
 import { createPlan } from "./plans.ts";
-import {
-  createTasksBatch,
-  getTask,
-  recordTaskVerification,
-  updateTaskStatus,
-} from "./tasks.ts";
+import { createTasksBatch, getTask, recordTaskVerification, updateTaskStatus } from "./tasks.ts";
 import type { Plan } from "./types.ts";
 
 let db: Database;
@@ -131,9 +126,9 @@ describe("updateTaskStatus — execution gate (T1)", () => {
     updateTaskStatus(db, task!.id, "running", undefined, "js-smith", {
       agent: "js-smith",
     });
-    expect(() =>
-      updateTaskStatus(db, task!.id, "done", undefined, "js-smith"),
-    ).toThrowError(/requires verification/);
+    expect(() => updateTaskStatus(db, task!.id, "done", undefined, "js-smith")).toThrowError(
+      /requires verification/,
+    );
     // Status stayed running.
     const still = getTask(db, task!.id);
     expect(still!.status).toBe("running");
@@ -195,9 +190,9 @@ describe("updateTaskStatus — execution gate (T1)", () => {
     const [task] = createTasksBatch(db, plan.id, [
       { ...baseTaskInput(), verificationRequired: true },
     ]);
-    expect(() =>
-      updateTaskStatus(db, task!.id, "done", { force: true }, "foreman"),
-    ).toThrowError(/requires verification/);
+    expect(() => updateTaskStatus(db, task!.id, "done", { force: true }, "foreman")).toThrowError(
+      /requires verification/,
+    );
     expect(() =>
       updateTaskStatus(db, task!.id, "done", { force: true, forceReason: "   " }, "foreman"),
     ).toThrowError(/requires verification/);
@@ -208,13 +203,7 @@ describe("updateTaskStatus — execution gate (T1)", () => {
     const [task] = createTasksBatch(db, plan.id, [
       { ...baseTaskInput(), verificationRequired: true },
     ]);
-    updateTaskStatus(
-      db,
-      task!.id,
-      "done",
-      { force: true, forceReason: "first waive" },
-      "foreman",
-    );
+    updateTaskStatus(db, task!.id, "done", { force: true, forceReason: "first waive" }, "foreman");
     // Re-open as running, then done again — gate is now open (waived).
     updateTaskStatus(db, task!.id, "running", undefined, "js-smith");
     expect(() =>
@@ -242,13 +231,7 @@ describe("recordTaskVerification — authority rules (T1)", () => {
     const [task] = createTasksBatch(db, plan.id, [
       { ...baseTaskInput(), verificationRequired: true },
     ]);
-    const result = recordTaskVerification(
-      db,
-      task!.id,
-      "passed",
-      { coverage: 0.92 },
-      "inspector",
-    );
+    const result = recordTaskVerification(db, task!.id, "passed", { coverage: 0.92 }, "inspector");
     expect(result.verificationStatus).toBe("passed");
     expect(result.verificationResult).toEqual({ coverage: 0.92 });
     expect(result.verificationPassedAt).toBeTypeOf("number");
@@ -303,9 +286,9 @@ describe("recordTaskVerification — authority rules (T1)", () => {
     const [task] = createTasksBatch(db, plan.id, [
       { ...baseTaskInput(), verificationRequired: true },
     ]);
-    expect(() =>
-      recordTaskVerification(db, task!.id, "waived", undefined, "foreman"),
-    ).toThrowError(/requires a non-blank reason/);
+    expect(() => recordTaskVerification(db, task!.id, "waived", undefined, "foreman")).toThrowError(
+      /requires a non-blank reason/,
+    );
     const ok = recordTaskVerification(db, task!.id, "waived", undefined, "foreman", {
       reason: "out of scope — will be reworked in next plan",
     });

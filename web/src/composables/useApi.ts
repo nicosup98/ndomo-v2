@@ -5,7 +5,7 @@
  * Auto-fetches on mount. Returns refs for template binding.
  */
 
-import { ref, type Ref } from "vue";
+import { type Ref, ref } from "vue";
 import { HttpError } from "@/api/client";
 
 export interface UseApiResult<T> {

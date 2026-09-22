@@ -16,11 +16,7 @@
  */
 
 import { onUnmounted, type Ref } from "vue";
-import {
-  useEvents,
-  type SseStatus,
-  type UseEventsResult,
-} from "./useEvents";
+import { type SseStatus, type UseEventsResult, useEvents } from "./useEvents.ts";
 
 // ─── Singleton useEvents ─────────────────────────────────────────────────────
 
@@ -89,9 +85,7 @@ export interface UseSseRefreshResult {
   status: Ref<SseStatus>;
 }
 
-export function useSseRefresh(
-  options: UseSseRefreshOptions,
-): UseSseRefreshResult {
+export function useSseRefresh(options: UseSseRefreshOptions): UseSseRefreshResult {
   const { events, refreshKey, refresh, filter } = options;
   const { status, on } = getSharedEvents();
 

@@ -88,9 +88,9 @@ describe("migration v17 — plan_tasks verification columns (T1)", () => {
     runMigrations(db);
     const v2 = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number };
     expect(v2).toEqual(v1);
-    const count = db
-      .query("SELECT COUNT(*) as c FROM schema_version WHERE version=17")
-      .get() as { c: number };
+    const count = db.query("SELECT COUNT(*) as c FROM schema_version WHERE version=17").get() as {
+      c: number;
+    };
     expect(count.c).toBe(1);
   });
 
@@ -108,7 +108,9 @@ describe("migration v17 — plan_tasks verification columns (T1)", () => {
        VALUES (?, ?, ?, ?, ?, '[]', 1, 'pending', '[]', ?, ?, '{}')`,
     ).run("tk1", "p1", 0, "legacy task", "smith", "cli", "cli");
 
-    const row = db.query("SELECT verification_required, verification_status FROM plan_tasks WHERE id=?").get("tk1") as {
+    const row = db
+      .query("SELECT verification_required, verification_status FROM plan_tasks WHERE id=?")
+      .get("tk1") as {
       verification_required: number;
       verification_status: string;
     };

@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { useTimeAgo } from "@vueuse/core";
 import type { Plan } from "@/types/api";
 import StatusBadge from "./StatusBadge.vue";
-import { useTimeAgo } from "@vueuse/core";
 
 const props = defineProps<{
   plan: Plan;

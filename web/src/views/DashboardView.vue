@@ -1,13 +1,13 @@
 <script setup lang="ts">
+import { useTimeAgo } from "@vueuse/core";
+import { apiGet } from "@/api/client";
+import { listPlans } from "@/api/plans";
+import ErrorState from "@/components/ErrorState.vue";
+import LoadingSpinner from "@/components/LoadingSpinner.vue";
+import StatusBadge from "@/components/StatusBadge.vue";
 import { useApi } from "@/composables/useApi";
 import { useSseRefresh } from "@/composables/useSseRefresh";
-import { listPlans } from "@/api/plans";
-import { apiGet } from "@/api/client";
 import type { Health, Plan } from "@/types/api";
-import StatusBadge from "@/components/StatusBadge.vue";
-import LoadingSpinner from "@/components/LoadingSpinner.vue";
-import ErrorState from "@/components/ErrorState.vue";
-import { useTimeAgo } from "@vueuse/core";
 
 const health = useApi<Health>(() => apiGet<Health>("/health"));
 const plans = useApi<Plan[]>(() => listPlans({ limit: 5 }));
@@ -15,12 +15,22 @@ const plans = useApi<Plan[]>(() => listPlans({ limit: 5 }));
 // SSE: refresh on any plan/task/session event
 const { status: sseStatus } = useSseRefresh({
   events: [
-    "plan.created", "plan.updated", "plan.status_changed", "plan.archived",
-    "task.created", "task.updated", "task.status_changed",
-    "session.started", "session.checkpoint", "session.ended",
+    "plan.created",
+    "plan.updated",
+    "plan.status_changed",
+    "plan.archived",
+    "task.created",
+    "task.updated",
+    "task.status_changed",
+    "session.started",
+    "session.checkpoint",
+    "session.ended",
   ],
   refreshKey: "/api/health",
-  refresh: () => { health.refresh(); plans.refresh(); },
+  refresh: () => {
+    health.refresh();
+    plans.refresh();
+  },
 });
 
 function formatUptime(ms: number): string {

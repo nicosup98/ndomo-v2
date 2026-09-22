@@ -34,8 +34,8 @@
  * messages arrive in the same tick.
  */
 
-import { watch, type Ref } from "vue";
 import { useEventSource } from "@vueuse/core";
+import { type Ref, watch } from "vue";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 

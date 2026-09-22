@@ -8,21 +8,10 @@
  * via useSseRefresh — no manual cache invalidation needed here.
  */
 
-import { ref, type Ref } from "vue";
-import {
-  createPlan,
-  updatePlan,
-  patchPlanStatus,
-  approvePlan,
-  deletePlan,
-} from "@/api/plans";
+import { type Ref, ref } from "vue";
 import { HttpError } from "@/api/client";
-import type {
-  Plan,
-  PlanCreateBody,
-  PlanUpdateBody,
-  PlanStatusPatch,
-} from "@/types/api";
+import { approvePlan, createPlan, deletePlan, patchPlanStatus, updatePlan } from "@/api/plans";
+import type { Plan, PlanCreateBody, PlanStatusPatch, PlanUpdateBody } from "@/types/api";
 
 export interface UsePlanMutationsResult {
   create: (body: PlanCreateBody) => Promise<Plan>;

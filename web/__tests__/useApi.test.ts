@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
-import { useApi } from "../src/composables/useApi";
-import { HttpError } from "../src/api/client";
+import { describe, expect, it, vi } from "vitest";
+import { HttpError } from "../src/api/client.ts";
+import { useApi } from "../src/composables/useApi.ts";
 
 describe("useApi", () => {
   it("sets loading true during fetch, false after", async () => {

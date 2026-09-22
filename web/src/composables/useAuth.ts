@@ -6,7 +6,7 @@
  */
 
 import { ref } from "vue";
-import { getPassword, setPassword, clearPassword } from "@/api/client";
+import { clearPassword, getPassword, setPassword } from "@/api/client";
 
 const isAuthed = ref(getPassword() !== null);
 

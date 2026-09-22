@@ -112,10 +112,7 @@ describe("loadDotenv", () => {
   });
 
   test("skips invalid lines without throwing", () => {
-    writeFileSync(
-      join(tmpDir, ".env"),
-      "INVALID LINE\nTEST_BASIC=valid\nno_equals_sign\n",
-    );
+    writeFileSync(join(tmpDir, ".env"), "INVALID LINE\nTEST_BASIC=valid\nno_equals_sign\n");
     const loaded = loadDotenv(tmpDir);
     expect(loaded).toBe(1);
     expect(process.env.TEST_BASIC).toBe("valid");

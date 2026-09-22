@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
+import { listPlans } from "@/api/plans";
+import ErrorState from "@/components/ErrorState.vue";
+import LoadingSpinner from "@/components/LoadingSpinner.vue";
+import PlanListItem from "@/components/PlanListItem.vue";
 import { useApi } from "@/composables/useApi";
 import { useSseRefresh } from "@/composables/useSseRefresh";
-import { listPlans } from "@/api/plans";
 import type { PlanStatus } from "@/types/api";
-import PlanListItem from "@/components/PlanListItem.vue";
-import LoadingSpinner from "@/components/LoadingSpinner.vue";
-import ErrorState from "@/components/ErrorState.vue";
 
 const router = useRouter();
 const statusFilter = ref<PlanStatus | "">("");

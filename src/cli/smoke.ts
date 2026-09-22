@@ -59,7 +59,9 @@ check("craftsman.md exists", existsSync(join(REPO_ROOT, craftsmanPath)));
 
 const craftsman = existsSync(join(REPO_ROOT, craftsmanPath)) ? readFile(craftsmanPath) : "";
 
-check("craftsman primary mode", craftsman.includes("mode: primary"));
+// craftsman runs as ad-hoc primary AND dispatched subagent → `mode: all`
+// (v2 schema allows: "subagent" | "primary" | "all")
+check("craftsman mode all", craftsman.includes("mode: all"));
 
 check(
   "craftsman Estado 1 ≤2 archivos",

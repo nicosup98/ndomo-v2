@@ -944,7 +944,8 @@ export const MIGRATIONS: Array<{
   },
   {
     version: 16,
-    description: "plan owner tracking (ADR-010): plans.owner column with CHECK(foreman|craftsman|warden)",
+    description:
+      "plan owner tracking (ADR-010): plans.owner column with CHECK(foreman|craftsman|warden)",
     sql: SCHEMA_V16_SQL,
   },
   {

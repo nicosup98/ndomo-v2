@@ -1,10 +1,10 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import AppShell from "@/components/AppShell.vue";
 import AuthPrompt from "@/components/AuthPrompt.vue";
 import { useAuth } from "@/composables/useAuth";
 import { useSseRefresh } from "@/composables/useSseRefresh";
-import { useRoute } from "vue-router";
-import { computed, ref, watch } from "vue";
 
 const { isAuthed } = useAuth();
 const route = useRoute();

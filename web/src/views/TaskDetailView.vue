@@ -1,13 +1,13 @@
 <script setup lang="ts">
+import { useTimeAgo } from "@vueuse/core";
+import { getTask } from "@/api/tasks";
+import AgentReassignDropdown from "@/components/AgentReassignDropdown.vue";
+import ErrorState from "@/components/ErrorState.vue";
+import LoadingSpinner from "@/components/LoadingSpinner.vue";
+import StatusActions from "@/components/StatusActions.vue";
+import StatusBadge from "@/components/StatusBadge.vue";
 import { useApi } from "@/composables/useApi";
 import { useSseRefresh } from "@/composables/useSseRefresh";
-import { getTask } from "@/api/tasks";
-import StatusBadge from "@/components/StatusBadge.vue";
-import LoadingSpinner from "@/components/LoadingSpinner.vue";
-import ErrorState from "@/components/ErrorState.vue";
-import StatusActions from "@/components/StatusActions.vue";
-import AgentReassignDropdown from "@/components/AgentReassignDropdown.vue";
-import { useTimeAgo } from "@vueuse/core";
 
 const props = defineProps<{
   id: string;

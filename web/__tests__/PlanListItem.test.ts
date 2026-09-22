@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
+import { describe, expect, it } from "vitest";
 import PlanListItem from "../src/components/PlanListItem.vue";
-import type { Plan } from "../src/types/api";
+import type { Plan } from "../src/types/api.ts";
 
 const mockPlan: Plan = {
   id: "abc-123",

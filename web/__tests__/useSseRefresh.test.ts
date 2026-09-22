@@ -5,8 +5,8 @@
  * filtering, and lifecycle wiring.
  */
 
-import { describe, expect, test, vi, beforeEach } from "vitest";
-import { ref, nextTick } from "vue";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { nextTick, ref } from "vue";
 
 // ─── Mock useEvents ──────────────────────────────────────────────────────────
 
@@ -52,7 +52,9 @@ vi.mock("../src/composables/useEvents.ts", () => ({
 
 // ─── Imports (after mock) ────────────────────────────────────────────────────
 
-const { useSseRefresh, _resetSseRefreshScheduler } = await import("../src/composables/useSseRefresh.ts");
+const { useSseRefresh, _resetSseRefreshScheduler } = await import(
+  "../src/composables/useSseRefresh.ts"
+);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

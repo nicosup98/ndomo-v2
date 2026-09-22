@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { apiGet, HttpError, setPassword, clearPassword, authHeader, getPassword } from "../src/api/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { apiGet, authHeader, clearPassword, HttpError, setPassword } from "../src/api/client.ts";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -26,7 +26,7 @@ describe("authHeader", () => {
     // authHeader reads from sessionStorage
     vi.mocked(sessionStorage.getItem).mockReturnValue("secret123");
     const header = authHeader();
-    expect(header).toBe("Basic " + btoa("anonymous:secret123"));
+    expect(header).toBe(`Basic ${btoa("anonymous:secret123")}`);
   });
 });
 
@@ -92,7 +92,7 @@ describe("apiGet", () => {
     await apiGet("/plans");
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(opts.headers).toMatchObject({
-      Authorization: "Basic " + btoa("anonymous:mypw"),
+      Authorization: `Basic ${btoa("anonymous:mypw")}`,
     });
   });
 

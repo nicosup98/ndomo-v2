@@ -529,9 +529,7 @@ describe("DELETE /api/tasks/:id", () => {
     expect(deleteRes.status).toBe(204);
 
     // Subsequent GET should return 404
-    const getRes = await app.handle(
-      jsonRequest(`/api/tasks/${taskId}`, { auth }),
-    );
+    const getRes = await app.handle(jsonRequest(`/api/tasks/${taskId}`, { auth }));
     expect(getRes.status).toBe(404);
   });
 });

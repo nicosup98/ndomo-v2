@@ -33,9 +33,10 @@ function addColumnIfMissing(db: Database, table: string, column: string, type: s
  * Pure data migration — no DDL. Safe to call repeatedly.
  */
 export function backfillAnalysisFindings(db: Database): number {
-  const rows = db
-    .query("SELECT id, findings_json FROM analyses")
-    .all() as Array<{ id: string; findings_json: string }>;
+  const rows = db.query("SELECT id, findings_json FROM analyses").all() as Array<{
+    id: string;
+    findings_json: string;
+  }>;
 
   let renamed = 0;
   const txn = db.transaction(() => {
@@ -142,7 +143,12 @@ export function runMigrations(db: Database): void {
         // CHECK on verification_status is app-layer only (same SQLite limitation
         // as v16 owner). Defaults preserve legacy behavior: not required + not_required.
         if (m.version === 17) {
-          addColumnIfMissing(db, "plan_tasks", "verification_required", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissing(
+            db,
+            "plan_tasks",
+            "verification_required",
+            "INTEGER NOT NULL DEFAULT 0",
+          );
           addColumnIfMissing(
             db,
             "plan_tasks",

@@ -12,13 +12,14 @@ import {
   updateAnalysis,
   validateAnalysisFindings,
 } from "./analyses.ts";
-import { createPlan } from "./plans.ts";
 import { runMigrations } from "./migrations.ts";
-
+import { createPlan } from "./plans.ts";
 
 let db: Database;
 
-function makePlan(overrides?: Partial<ReturnType<typeof createPlan>>): ReturnType<typeof createPlan> {
+function makePlan(
+  overrides?: Partial<ReturnType<typeof createPlan>>,
+): ReturnType<typeof createPlan> {
   return createPlan(db, {
     id: "plan-1",
     slug: "test-plan",
@@ -94,9 +95,9 @@ describe("analyses.ts", () => {
 
     test("throws on duplicate slug+project_path", () => {
       createAnalysis(db, { slug: "dup", title: "A", projectPath: "/p" });
-      expect(() =>
-        createAnalysis(db, { slug: "dup", title: "B", projectPath: "/p" }),
-      ).toThrow("already exists");
+      expect(() => createAnalysis(db, { slug: "dup", title: "B", projectPath: "/p" })).toThrow(
+        "already exists",
+      );
     });
 
     test("same slug different project_path is OK", () => {
@@ -106,15 +107,15 @@ describe("analyses.ts", () => {
     });
 
     test("throws on empty slug", () => {
-      expect(() =>
-        createAnalysis(db, { slug: "", title: "T", projectPath: "/p" }),
-      ).toThrow("slug cannot be empty");
+      expect(() => createAnalysis(db, { slug: "", title: "T", projectPath: "/p" })).toThrow(
+        "slug cannot be empty",
+      );
     });
 
     test("throws on empty projectPath", () => {
-      expect(() =>
-        createAnalysis(db, { slug: "ok", title: "T", projectPath: "" }),
-      ).toThrow("projectPath cannot be empty");
+      expect(() => createAnalysis(db, { slug: "ok", title: "T", projectPath: "" })).toThrow(
+        "projectPath cannot be empty",
+      );
     });
 
     test("trims slug and title", () => {
@@ -408,7 +409,7 @@ describe("analyses.ts", () => {
 
     test("no-op when JSON is not an array", () => {
       expect(() => validateAnalysisFindings("{}", "ranger")).not.toThrow();
-      expect(() => validateAnalysisFindings("\"hello\"", "ranger")).not.toThrow();
+      expect(() => validateAnalysisFindings('"hello"', "ranger")).not.toThrow();
       expect(() => validateAnalysisFindings("null", "ranger")).not.toThrow();
     });
 

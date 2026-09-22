@@ -7,9 +7,9 @@
  *
  * Read-only fields: slug, status, owner, createdBy, createdAt.
  */
-import { ref, computed } from "vue";
+import { computed, ref } from "vue";
 import { usePlanMutations } from "@/composables/usePlanMutations";
-import type { Plan, PlanUpdateBody, PlanCategory, PlanOwner } from "@/types/api";
+import type { Plan, PlanCategory, PlanOwner, PlanUpdateBody } from "@/types/api";
 
 const props = defineProps<{
   plan: Plan;

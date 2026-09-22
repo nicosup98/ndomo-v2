@@ -5,26 +5,51 @@
  * Named re-exports only (no `export *`) for explicitness and tree-shaking clarity.
  */
 
+// ─── Analyses (v14) ────────────────────────────────────────────────────────
+export {
+  archiveAnalysis,
+  createAnalysis,
+  getAnalysis,
+  getAnalysisBySlug,
+  linkAnalysisToPlan,
+  listAnalyses,
+  searchAnalyses,
+  unlinkAnalysisFromPlan,
+  updateAnalysis,
+} from "./analyses.ts";
 // ─── Client ──────────────────────────────────────────────────────────────────
 export { closeDb, openDb } from "./client.ts";
-// ─── Migrations ──────────────────────────────────────────────────────────────
-export { runMigrations } from "./migrations.ts";
-// ─── Critic review protocol (v17 / T2) ─────────────────────────────────────
-export {
-  buildCriticReview,
-  toTaskVerification,
-  CRITIC_VERDICTS,
-} from "./critic.ts";
 export type {
   CriticReview,
   CriticReviewInput,
   CriticScores,
   CriticVerdict,
 } from "./critic.ts";
-export type { ArchiveResult } from "./plan-archive.ts";
-// ─── Plan Archive ────────────────────────────────────────────────────────────
-export { archivePlan, resolveArchiveDir } from "./plan-archive.ts";
-export type { PlanProgress } from "./plans.ts";
+// ─── Critic review protocol (v17 / T2) ─────────────────────────────────────
+export {
+  buildCriticReview,
+  CRITIC_VERDICTS,
+  toTaskVerification,
+} from "./critic.ts";
+// Design types live in designs.ts (filesystem-backed module, not the SQL types file).
+export type {
+  DesignInput,
+  DesignOption,
+  DesignResult,
+  DesignStatus,
+} from "./designs.ts";
+// ─── Design documents (filesystem-backed, no DB) ────────────────────────────
+export {
+  buildDesignFilename,
+  createDesign,
+  deriveDesignStatus,
+  resolveDesignDir,
+  sanitizeDesignSlug,
+  serializeDesignToMarkdown,
+  validateDesignDate,
+  validateDesignSlug,
+} from "./designs.ts";
+export type { LedgerData, LedgerWriteResult } from "./ledgers.ts";
 // ─── Session ledgers (filesystem continuity, no DB) ─────────────────────────
 export {
   getLedgerFilePath,
@@ -38,7 +63,12 @@ export {
   validateSessionId,
   writeLedger,
 } from "./ledgers.ts";
-export type { LedgerData, LedgerWriteResult } from "./ledgers.ts";
+// ─── Migrations ──────────────────────────────────────────────────────────────
+export { runMigrations } from "./migrations.ts";
+export type { ArchiveResult } from "./plan-archive.ts";
+// ─── Plan Archive ────────────────────────────────────────────────────────────
+export { archivePlan, resolveArchiveDir } from "./plan-archive.ts";
+export type { PlanProgress } from "./plans.ts";
 // ─── Plans ───────────────────────────────────────────────────────────────────
 export {
   addPlanTag,
@@ -59,6 +89,7 @@ export {
 export type { ProjectDirContext } from "./resolve-project-dir.ts";
 // ─── Project dir resolution ──────────────────────────────────────────────────
 export { resolveProjectDir } from "./resolve-project-dir.ts";
+export type { CheckpointLedgerOptions } from "./sessions.ts";
 // ─── Sessions ────────────────────────────────────────────────────────────────
 export {
   appendAgentHistory,
@@ -68,9 +99,9 @@ export {
   listSessions,
   startSession,
 } from "./sessions.ts";
-export type { CheckpointLedgerOptions } from "./sessions.ts";
-export type { TaskTruncationInfo, TaskUpdateResult } from "./tasks.ts";
 export type {
+  TaskTruncationInfo,
+  TaskUpdateResult,
   TaskVerificationResult,
   TaskVerificationVerdict,
 } from "./tasks.ts";
@@ -83,39 +114,13 @@ export {
   getTaskTags,
   listTasksByPlan,
   nextTaskForAgent,
+  reassignTask,
   recordTaskVerification,
   removeTaskTag,
-  reassignTask,
   searchTasks,
   splitFilesByStack,
   updateTaskStatus,
 } from "./tasks.ts";
-
-// ─── Analyses (v14) ────────────────────────────────────────────────────────
-export {
-  archiveAnalysis,
-  createAnalysis,
-  getAnalysis,
-  getAnalysisBySlug,
-  linkAnalysisToPlan,
-  listAnalyses,
-  searchAnalyses,
-  unlinkAnalysisFromPlan,
-  updateAnalysis,
-} from "./analyses.ts";
-
-// ─── Design documents (filesystem-backed, no DB) ────────────────────────────
-export {
-  buildDesignFilename,
-  createDesign,
-  deriveDesignStatus,
-  resolveDesignDir,
-  sanitizeDesignSlug,
-  serializeDesignToMarkdown,
-  validateDesignDate,
-  validateDesignSlug,
-} from "./designs.ts";
-
 // ─── Types ───────────────────────────────────────────────────────────────────
 export type {
   Analysis,
@@ -133,10 +138,3 @@ export type {
   TaskStatus,
   TaskVerificationStatus,
 } from "./types.ts";
-// Design types live in designs.ts (filesystem-backed module, not the SQL types file).
-export type {
-  DesignInput,
-  DesignOption,
-  DesignResult,
-  DesignStatus,
-} from "./designs.ts";

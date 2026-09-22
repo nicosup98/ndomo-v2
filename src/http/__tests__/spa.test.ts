@@ -5,11 +5,11 @@
  * depending on `bun run web:build` output in CI.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { HttpConfig } from "../../config/schema.ts";
 import { runMigrations } from "../../db/migrations.ts";
 import { buildHttpServer } from "../server.ts";
@@ -51,14 +51,8 @@ beforeEach(() => {
     '<!DOCTYPE html><html><body><div id="app"></div></body></html>',
   );
   mkdirSync(join(webDir, "assets"), { recursive: true });
-  writeFileSync(
-    join(webDir, "assets", "index-abc123.js"),
-    'console.log("spa");',
-  );
-  writeFileSync(
-    join(webDir, "assets", "index-abc123.css"),
-    "body{margin:0}",
-  );
+  writeFileSync(join(webDir, "assets", "index-abc123.js"), 'console.log("spa");');
+  writeFileSync(join(webDir, "assets", "index-abc123.css"), "body{margin:0}");
 });
 
 afterEach(() => {
@@ -110,9 +104,7 @@ describe("SPA static assets", () => {
       httpConfig: NO_AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/assets/index-abc123.js"),
-    );
+    const res = await app.handle(new Request("http://localhost/assets/index-abc123.js"));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("application/javascript");
@@ -126,9 +118,7 @@ describe("SPA static assets", () => {
       httpConfig: NO_AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/assets/index-abc123.css"),
-    );
+    const res = await app.handle(new Request("http://localhost/assets/index-abc123.css"));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/css");
@@ -142,9 +132,7 @@ describe("SPA static assets", () => {
       httpConfig: NO_AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/assets/DashboardView-OLDHASH.css"),
-    );
+    const res = await app.handle(new Request("http://localhost/assets/DashboardView-OLDHASH.css"));
 
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type") ?? "").not.toContain("text/html");
@@ -156,9 +144,7 @@ describe("SPA static assets", () => {
       httpConfig: NO_AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/assets/DashboardView-OLDHASH.js"),
-    );
+    const res = await app.handle(new Request("http://localhost/assets/DashboardView-OLDHASH.js"));
 
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type") ?? "").not.toContain("text/html");
@@ -247,9 +233,7 @@ describe("SPA is public (no auth required for non-/api paths)", () => {
       httpConfig: AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/plans/some-uuid"),
-    );
+    const res = await app.handle(new Request("http://localhost/plans/some-uuid"));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/html");
@@ -263,9 +247,7 @@ describe("SPA is public (no auth required for non-/api paths)", () => {
       httpConfig: AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/assets/index-abc123.js"),
-    );
+    const res = await app.handle(new Request("http://localhost/assets/index-abc123.js"));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("application/javascript");
@@ -279,9 +261,7 @@ describe("SPA path traversal defense", () => {
       httpConfig: NO_AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/../../etc/passwd"),
-    );
+    const res = await app.handle(new Request("http://localhost/../../etc/passwd"));
 
     // Must not serve /etc/passwd — either 200 (SPA fallback) or 400
     if (res.status === 200) {
@@ -316,9 +296,7 @@ describe("SPA non-GET methods", () => {
       httpConfig: NO_AUTH_CONFIG,
       webDistDir: webDir,
     });
-    const res = await app.handle(
-      new Request("http://localhost/some/path", { method: "POST" }),
-    );
+    const res = await app.handle(new Request("http://localhost/some/path", { method: "POST" }));
 
     // Elysia .get() does not match POST → 404
     expect(res.status).toBe(404);

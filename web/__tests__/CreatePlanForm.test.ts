@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import CreatePlanForm from "../src/components/CreatePlanForm.vue";
 
 // Mock usePlanMutations
@@ -26,7 +26,7 @@ describe("CreatePlanForm", () => {
     // Fill form
     await wrapper.find('input[placeholder="my-plan"]').setValue("test-plan");
     await wrapper.find('input[placeholder="Plan title"]').setValue("Test Plan");
-    await wrapper.find('textarea').setValue("A valid overview with enough characters");
+    await wrapper.find("textarea").setValue("A valid overview with enough characters");
 
     // Submit
     await wrapper.find("form").trigger("submit");
@@ -53,7 +53,7 @@ describe("CreatePlanForm", () => {
 
     // Leave slug empty, fill other fields
     await wrapper.find('input[placeholder="Plan title"]').setValue("Title");
-    await wrapper.find('textarea').setValue("A valid overview with enough characters");
+    await wrapper.find("textarea").setValue("A valid overview with enough characters");
 
     // Submit should not call create
     await wrapper.find("form").trigger("submit");
@@ -71,7 +71,7 @@ describe("CreatePlanForm", () => {
 
     await wrapper.find('input[placeholder="my-plan"]').setValue("Invalid Slug!");
     await wrapper.find('input[placeholder="Plan title"]').setValue("Title");
-    await wrapper.find('textarea').setValue("A valid overview with enough characters");
+    await wrapper.find("textarea").setValue("A valid overview with enough characters");
 
     const submitBtn = wrapper.find('button[type="submit"]');
     expect(submitBtn.attributes("disabled")).toBeDefined();
@@ -82,7 +82,7 @@ describe("CreatePlanForm", () => {
 
     await wrapper.find('input[placeholder="my-plan"]').setValue("plan");
     await wrapper.find('input[placeholder="Plan title"]').setValue("Title");
-    await wrapper.find('textarea').setValue("Short");
+    await wrapper.find("textarea").setValue("Short");
 
     const submitBtn = wrapper.find('button[type="submit"]');
     expect(submitBtn.attributes("disabled")).toBeDefined();

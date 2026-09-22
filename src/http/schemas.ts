@@ -19,13 +19,7 @@ export const PlanStatusValues = [
   "abandoned",
 ] as const;
 
-export const TaskStatusValues = [
-  "pending",
-  "running",
-  "done",
-  "failed",
-  "blocked",
-] as const;
+export const TaskStatusValues = ["pending", "running", "done", "failed", "blocked"] as const;
 
 /** v17 (T1): valid verifier verdicts. */
 export const TaskVerificationVerdictValues = ["passed", "failed", "waived"] as const;

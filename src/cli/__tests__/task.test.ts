@@ -27,7 +27,11 @@ import { runTask } from "../task.ts";
 let tmpDir: string;
 let origCwd: string;
 
-function captureOutput(fn: () => void): { stdout: string; stderr: string; exitCode: number | null } {
+function captureOutput(fn: () => void): {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+} {
   const originalLog = console.log;
   const originalError = console.error;
   const originalExit = process.exit;
@@ -37,10 +41,10 @@ function captureOutput(fn: () => void): { stdout: string; stderr: string; exitCo
   let exitCode: number | null = null;
 
   console.log = (...args: unknown[]) => {
-    stdout += args.map(String).join(" ") + "\n";
+    stdout += `${args.map(String).join(" ")}\n`;
   };
   console.error = (...args: unknown[]) => {
-    stderr += args.map(String).join(" ") + "\n";
+    stderr += `${args.map(String).join(" ")}\n`;
   };
   process.exit = ((code?: number) => {
     exitCode = code ?? 0;

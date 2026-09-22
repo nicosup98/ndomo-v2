@@ -147,9 +147,15 @@ export interface EventBus {
   /** Type-safe emit — TS narrows payload from the literal event.type field. */
   emit<E extends NdomoEvent>(event: E): void;
   /** Type-safe subscribe — handler receives the strongly-typed payload. */
-  on<E extends NdomoEventType>(type: E, handler: EventHandler<Extract<NdomoEvent, { type: E }>>): void;
+  on<E extends NdomoEventType>(
+    type: E,
+    handler: EventHandler<Extract<NdomoEvent, { type: E }>>,
+  ): void;
   /** Unsubscribe a previously-registered handler. */
-  off<E extends NdomoEventType>(type: E, handler: EventHandler<Extract<NdomoEvent, { type: E }>>): void;
+  off<E extends NdomoEventType>(
+    type: E,
+    handler: EventHandler<Extract<NdomoEvent, { type: E }>>,
+  ): void;
   /** Subscribe to ALL event types (diagnostics / metrics). */
   onAny(handler: EventHandler): void;
   /** Unsubscribe from wildcard. */

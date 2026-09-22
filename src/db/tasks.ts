@@ -15,12 +15,7 @@ import { bus } from "../events/bus.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { setExecutedByOnce } from "./plans.ts";
 import { ensureSession } from "./sessions.ts";
-import type {
-  PlanTask,
-  TaskMetadata,
-  TaskStatus,
-  TaskVerificationStatus,
-} from "./types.ts";
+import type { PlanTask, TaskMetadata, TaskStatus, TaskVerificationStatus } from "./types.ts";
 import { taskFromRow } from "./types.ts";
 
 // ─── M7: Cross-stack file splitting ─────────────────────────────────────────
@@ -296,8 +291,7 @@ export function createTasksBatch(
         // (preferred path on PlanTask) OR metadata.verificationRequired === true
         // (backwards-compatible opt-in for callers that don't yet send the field).
         const verificationRequired =
-          effectiveTask.verificationRequired === true ||
-          taskMetadata.verificationRequired === true;
+          effectiveTask.verificationRequired === true || taskMetadata.verificationRequired === true;
         const verificationStatus: TaskVerificationStatus = verificationRequired
           ? "pending"
           : "not_required";
@@ -437,11 +431,7 @@ export function createTasksBatch(
  * Create a single task on a plan.
  * Thin wrapper around createTasksBatch — auto-allocates next order_index.
  */
-export function createTask(
-  db: Database,
-  planId: string,
-  task: TaskCreateInput,
-): PlanTask {
+export function createTask(db: Database, planId: string, task: TaskCreateInput): PlanTask {
   const created = createTasksBatch(db, planId, [{ ...task }]);
   return created[0]!;
 }
@@ -462,8 +452,11 @@ export function reassignTask(
   const now = Date.now();
   // plan_tasks has created_by/updated_by (v3 audit fixes) but no updated_at column.
   // The original_plan_data JSON snapshot (v6) captures the agent at creation time.
-  db.query("UPDATE plan_tasks SET agent = ?, updated_by = ? WHERE id = ?")
-    .run(newAgent, opts.updatedBy, taskId);
+  db.query("UPDATE plan_tasks SET agent = ?, updated_by = ? WHERE id = ?").run(
+    newAgent,
+    opts.updatedBy,
+    taskId,
+  );
   bus.emit({
     type: "task.updated",
     taskId: taskId,
@@ -847,7 +840,11 @@ export function updateTaskStatus(
   // T1 (v17): if the execution-gate bypass fired above, persist the waived
   // status to its column so subsequent reads (and re-issued done calls) see
   // an open gate. The metadata.verificationBypass audit trail was written above.
-  if (status === "done" && priorRow?.verification_required === 1 && priorRow.verification_status === "waived") {
+  if (
+    status === "done" &&
+    priorRow?.verification_required === 1 &&
+    priorRow.verification_status === "waived"
+  ) {
     setClauses.push("verification_status = ?");
     params.push("waived");
   }
@@ -1109,9 +1106,9 @@ export function resolveTaskDependencies(
   missingDeps: string[];
   dependencies: string[];
 } {
-  const row = db
-    .query("SELECT dependencies FROM plan_tasks WHERE id = ?")
-    .get(taskId) as { dependencies: string } | undefined;
+  const row = db.query("SELECT dependencies FROM plan_tasks WHERE id = ?").get(taskId) as
+    | { dependencies: string }
+    | undefined;
   if (!row) throw new Error(`ndomo: task ${taskId} not found`);
 
   const dependencies: string[] = (JSON.parse(row.dependencies) as string[]) ?? [];
@@ -1163,8 +1160,7 @@ export function resolveTaskDependencies(
     }
   }
 
-  const canStart =
-    doneDeps.length === dependencies.length;
+  const canStart = doneDeps.length === dependencies.length;
 
   return {
     canStart,

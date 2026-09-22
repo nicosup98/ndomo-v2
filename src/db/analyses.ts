@@ -300,9 +300,7 @@ export function updateAnalysis(
   setClauses.push("updated_at = datetime('now')");
   params.push(id);
 
-  db.query(
-    `UPDATE analyses SET ${setClauses.join(", ")} WHERE id = ?`,
-  ).run(...params);
+  db.query(`UPDATE analyses SET ${setClauses.join(", ")} WHERE id = ?`).run(...params);
 
   return getAnalysis(db, id)!;
 }
@@ -329,27 +327,22 @@ export function archiveAnalysis(db: Database, id: string): Analysis {
  * Link analysis to a plan (set source_plan_id).
  * Use when analysis is created standalone and later linked to a plan.
  */
-export function linkAnalysisToPlan(
-  db: Database,
-  id: string,
-  planId: string,
-): Analysis {
+export function linkAnalysisToPlan(db: Database, id: string, planId: string): Analysis {
   const existing = getAnalysis(db, id);
   if (!existing) {
     throw new Error(`ndomo: analysis '${id}' not found`);
   }
 
   // FK enforces plan existence, but validate at app level for better error message
-  const plan = db.query("SELECT id FROM plans WHERE id = ?").get(planId) as
-    | { id: string }
-    | null;
+  const plan = db.query("SELECT id FROM plans WHERE id = ?").get(planId) as { id: string } | null;
   if (!plan) {
     throw new Error(`ndomo: plan '${planId}' not found (FK violation)`);
   }
 
-  db.query(
-    "UPDATE analyses SET source_plan_id = ?, updated_at = datetime('now') WHERE id = ?",
-  ).run(planId, id);
+  db.query("UPDATE analyses SET source_plan_id = ?, updated_at = datetime('now') WHERE id = ?").run(
+    planId,
+    id,
+  );
 
   return getAnalysis(db, id)!;
 }
@@ -358,10 +351,7 @@ export function linkAnalysisToPlan(
  * Unlink analysis from its source plan (set source_plan_id to NULL).
  * Idempotent: if already unlinked, just returns the analysis.
  */
-export function unlinkAnalysisFromPlan(
-  db: Database,
-  id: string,
-): Analysis {
+export function unlinkAnalysisFromPlan(db: Database, id: string): Analysis {
   const existing = getAnalysis(db, id);
   if (!existing) {
     throw new Error(`ndomo: analysis '${id}' not found`);

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import StatusActions from "../src/components/StatusActions.vue";
-import type { Plan, Task } from "../src/types/api";
+import type { Plan, Task } from "../src/types/api.ts";
 
 // Mock mutations
 const mockPlanApprove = vi.fn();

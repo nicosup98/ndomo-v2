@@ -69,7 +69,8 @@ const COMMANDS: Record<
     },
   },
   plan: {
-    description: "Manage plans: create | list | show | update | approve | complete | delete | assign-task",
+    description:
+      "Manage plans: create | list | show | update | approve | complete | delete | assign-task",
     run: async (args) => {
       const { runPlan } = await import("./plan.ts");
       runPlan(args);

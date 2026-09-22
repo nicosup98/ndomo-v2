@@ -9,6 +9,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { runMigrations } from "../db/migrations.ts";
 import {
   createTask,
   getTask,
@@ -17,7 +18,6 @@ import {
   recordTaskVerification,
   updateTaskStatus,
 } from "../db/tasks.ts";
-import { runMigrations } from "../db/migrations.ts";
 import type { PlanTask, TaskStatus } from "../db/types.ts";
 
 const NDOMO_DIR = ".ndomo";
@@ -72,7 +72,9 @@ function validateStatus(value: string | boolean | undefined): TaskStatus {
   if (value === undefined) throw new Error("[task] error: --status is required");
   const str = String(value);
   if (!VALID_STATUSES.has(str)) {
-    throw new Error(`[task] error: invalid status "${str}" — must be one of: ${Array.from(VALID_STATUSES).join(", ")}`);
+    throw new Error(
+      `[task] error: invalid status "${str}" — must be one of: ${Array.from(VALID_STATUSES).join(", ")}`,
+    );
   }
   return str as TaskStatus;
 }
@@ -111,7 +113,8 @@ function printTasksTable(tasks: PlanTask[]): void {
   for (const t of tasks) {
     const id = t.id.slice(0, 8);
     const agent = t.agent.length > 14 ? `${t.agent.slice(0, 11)}...` : t.agent;
-    const description = t.description.length > 38 ? `${t.description.slice(0, 35)}...` : t.description;
+    const description =
+      t.description.length > 38 ? `${t.description.slice(0, 35)}...` : t.description;
     console.log(
       `${id.padEnd(10)}${agent.padEnd(16)}${t.status.padEnd(12)}${String(t.complexity).padEnd(12)}${description.padEnd(40)}`,
     );
@@ -130,7 +133,9 @@ function handleCreate(db: Database, args: Record<string, string | boolean>): voi
 
   const files = args.files ? (args.files as string).split(",").map((f: string) => f.trim()) : [];
   const complexity = validateComplexity(args.complexity);
-  const dependencies = args.dependencies ? (args.dependencies as string).split(",").map((d: string) => d.trim()) : [];
+  const dependencies = args.dependencies
+    ? (args.dependencies as string).split(",").map((d: string) => d.trim())
+    : [];
 
   const task = createTask(db, planId, {
     description,
@@ -170,7 +175,11 @@ function handleList(db: Database, args: Record<string, string | boolean>): void 
 }
 
 /** Handle task show subcommand. */
-function handleShow(db: Database, _args: Record<string, string | boolean>, positional: string[]): void {
+function handleShow(
+  db: Database,
+  _args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const taskId = positional[0];
   if (!taskId) throw new Error("[task] error: task id is required");
 
@@ -183,7 +192,11 @@ function handleShow(db: Database, _args: Record<string, string | boolean>, posit
 }
 
 /** Handle task update subcommand. */
-function handleUpdate(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleUpdate(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const taskId = positional[0];
   if (!taskId) throw new Error("[task] error: task id is required");
 
@@ -215,7 +228,11 @@ function handleUpdate(db: Database, args: Record<string, string | boolean>, posi
 }
 
 /** Handle task reassign subcommand. */
-function handleReassign(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleReassign(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const taskId = positional[0];
   if (!taskId) throw new Error("[task] error: task id is required");
 
@@ -231,7 +248,11 @@ function handleReassign(db: Database, args: Record<string, string | boolean>, po
 }
 
 /** Handle task complete subcommand. */
-function handleComplete(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleComplete(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const taskId = positional[0];
   if (!taskId) throw new Error("[task] error: task id is required");
 
@@ -255,7 +276,11 @@ function handleComplete(db: Database, args: Record<string, string | boolean>, po
 }
 
 /** Handle task verify subcommand (v17/T1). */
-function handleVerify(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleVerify(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const taskId = positional[0];
   if (!taskId) throw new Error("[task] error: task id is required");
 
@@ -298,16 +323,26 @@ function handleVerify(db: Database, args: Record<string, string | boolean>, posi
 }
 
 /** Handle task fail subcommand. */
-function handleFail(db: Database, args: Record<string, string | boolean>, positional: string[]): void {
+function handleFail(
+  db: Database,
+  args: Record<string, string | boolean>,
+  positional: string[],
+): void {
   const taskId = positional[0];
   if (!taskId) throw new Error("[task] error: task id is required");
 
   const error = args.error as string;
   if (!error) throw new Error("[task] error: --error is required");
 
-  const task = updateTaskStatus(db, taskId, "failed", {
-    error,
-  }, "cli");
+  const task = updateTaskStatus(
+    db,
+    taskId,
+    "failed",
+    {
+      error,
+    },
+    "cli",
+  );
 
   if (!task) {
     throw new Error(`[task] error: task not found: ${taskId}`);
@@ -331,7 +366,9 @@ export function runTask(args: string[]): void {
   try {
     const subcommand = args[0];
     if (!subcommand) {
-      throw new Error("[task] error: subcommand is required (create|list|show|update|reassign|complete|fail|verify)");
+      throw new Error(
+        "[task] error: subcommand is required (create|list|show|update|reassign|complete|fail|verify)",
+      );
     }
 
     const restArgs = args.slice(1);

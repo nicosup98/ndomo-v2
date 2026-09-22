@@ -139,9 +139,7 @@ const taskActions = computed(() => {
   return actions;
 });
 
-const actions = computed(() =>
-  props.kind === "plan" ? planActions.value : taskActions.value,
-);
+const actions = computed(() => (props.kind === "plan" ? planActions.value : taskActions.value));
 </script>
 
 <template>

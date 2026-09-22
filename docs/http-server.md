@@ -185,7 +185,7 @@ The request's `Origin` is not in `NDOMO_HTTP_CORS_ORIGINS` and `*` is not set. E
 **SSE appears to hang / no events arrive.**
 Two common causes:
 1. **nginx buffering.** SSE responses need `X-Accel-Buffering: no` (the server sets this header, but a proxy might strip it). Configure your proxy: `proxy_buffering off;` (nginx) or `flush_interval -1` (HAProxy).
-2. **OpenCode server unreachable.** The `/api/events` endpoint depends on `OPENCODE_SERVER_URL` (default `http://localhost:4096`). Verify with `curl -fsS localhost:4096/config`. If the OpenCode server is down, the endpoint returns `503 sdk_unavailable`.
+2. **OpenCode server unreachable.** The `/api/events` endpoint depends on `OPENCODE_SERVER_URL` (default `http://localhost:4096`). Verify with `curl -fsS localhost:4096/api/info`. If the OpenCode server is down, the endpoint returns `503 sdk_unavailable`.
 
 **Connection drops after ~60s behind a load balancer.**
 The server sends `: keepalive` every 30s. If you still see drops, the proxy is closing idle TCP connections faster than 30s. Either lower the keepalive in your proxy or configure TCP keepalive at the OS level.

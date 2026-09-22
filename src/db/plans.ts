@@ -259,7 +259,10 @@ export function updatePlanStatus(
 
   // Set completed_at on terminal status (idempotent — only if NULL)
   if (TERMINAL_STATUSES.has(status)) {
-    db.query("UPDATE plans SET completed_at = ? WHERE id = ? AND completed_at IS NULL").run(now, id);
+    db.query("UPDATE plans SET completed_at = ? WHERE id = ? AND completed_at IS NULL").run(
+      now,
+      id,
+    );
   }
 
   // Live-reactivity hook: re-read after the transaction so subscribers see
@@ -299,7 +302,9 @@ export function updatePlanStatus(
 export function updatePlanFields(
   db: Database,
   planId: string,
-  fields: Partial<Pick<Plan, "title" | "overview" | "approach" | "complexity" | "category" | "owner">>,
+  fields: Partial<
+    Pick<Plan, "title" | "overview" | "approach" | "complexity" | "category" | "owner">
+  >,
   opts: { updatedBy: string },
 ): Plan | null {
   const validOwners = new Set(["foreman", "craftsman", "warden"]);

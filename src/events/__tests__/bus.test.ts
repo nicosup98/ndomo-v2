@@ -12,9 +12,9 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  type EventBus,
   bus,
   createBus,
+  type EventBus,
   type PlanCreatedEvent,
   type PlanStatusChangedEvent,
   type SessionStartedEvent,

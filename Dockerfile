@@ -18,7 +18,6 @@ COPY agents/ ./agents/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 COPY bin/ ./bin/
-COPY tools/ ./tools/
 COPY opencode.json tsconfig.json biome.json ./
 
 # ---- Stage 2: Runtime ----

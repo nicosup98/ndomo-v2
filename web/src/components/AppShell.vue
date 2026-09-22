@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useRoute } from "vue-router";
 import { computed, ref } from "vue";
+import { useRoute } from "vue-router";
 import { useSseRefresh } from "@/composables/useSseRefresh";
 
 const route = useRoute();

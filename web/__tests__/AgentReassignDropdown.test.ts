@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentReassignDropdown from "../src/components/AgentReassignDropdown.vue";
 
 // Mock useTaskMutations
@@ -31,9 +31,19 @@ describe("AgentReassignDropdown", () => {
     });
 
     const agentNames = [
-      "craftsman", "js-smith", "vue-smith", "go-smith", "python-smith",
-      "smith", "rust-smith", "ranger", "scout", "scribe", "inspector",
-      "chronicler", "painter",
+      "craftsman",
+      "js-smith",
+      "vue-smith",
+      "go-smith",
+      "python-smith",
+      "smith",
+      "rust-smith",
+      "ranger",
+      "scout",
+      "scribe",
+      "inspector",
+      "chronicler",
+      "painter",
     ];
 
     for (const agent of agentNames) {

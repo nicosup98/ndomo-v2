@@ -131,9 +131,7 @@ export function planUpdateStatusExecutor(
   // orphan_plan — warning only
   const totalTasks = (
     db
-      .query(
-        "SELECT COUNT(*) as cnt FROM plan_tasks WHERE plan_id = ? AND archived_at IS NULL",
-      )
+      .query("SELECT COUNT(*) as cnt FROM plan_tasks WHERE plan_id = ? AND archived_at IS NULL")
       .get(args.id) as { cnt: number }
   ).cnt;
   if (totalTasks === 0) warnings.push("orphan_plan");
@@ -230,9 +228,7 @@ export function planUpdateStatusExecutor(
     // Re-validate status transition inside transaction
     const freshAllowed = VALID_TRANSITIONS[freshPlan.status] ?? [];
     if (args.status !== freshPlan.status && !freshAllowed.includes(args.status)) {
-      throw new Error(
-        `ndomo: invalid status transition '${freshPlan.status}' → '${args.status}'`,
-      );
+      throw new Error(`ndomo: invalid status transition '${freshPlan.status}' → '${args.status}'`);
     }
 
     // Force audit insert
@@ -265,9 +261,7 @@ export function planUpdateStatusExecutor(
         archiveResult = archivePlan(db, updated.id, { memDir: archiveDir });
       } catch (err) {
         archiveError = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[ndomo] auto-archive failed for plan ${updated.id}: ${archiveError}`,
-        );
+        console.warn(`[ndomo] auto-archive failed for plan ${updated.id}: ${archiveError}`);
         // Re-throw so the outer transaction rolls back (atomicity)
         throw err;
       }

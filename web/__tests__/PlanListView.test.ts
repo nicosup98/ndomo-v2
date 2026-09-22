@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
-import { createRouter, createMemoryHistory } from "vue-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory, createRouter } from "vue-router";
+import type { Plan } from "../src/types/api.ts";
 import PlanListView from "../src/views/PlanListView.vue";
-import type { Plan } from "../src/types/api";
 
 // Mock the API modules
 vi.mock("../src/api/plans", () => ({
@@ -14,7 +14,7 @@ vi.mock("../src/composables/useSseRefresh", () => ({
   useSseRefresh: () => ({ status: { value: "CONNECTING" } }),
 }));
 
-import { listPlans } from "../src/api/plans";
+import { listPlans } from "../src/api/plans.ts";
 
 const mockPlans: Plan[] = [
   {

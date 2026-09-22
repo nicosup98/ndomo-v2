@@ -2,15 +2,15 @@
  * ndomo web — Plans API endpoints.
  */
 
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from "./client";
 import type {
   Plan,
-  PlanStatus,
   PlanCreateBody,
-  PlanUpdateBody,
-  PlanStatusPatch,
   PlanDeleteBody,
+  PlanStatus,
+  PlanStatusPatch,
+  PlanUpdateBody,
 } from "@/types/api";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "./client.ts";
 
 export interface PlanFilters {
   status?: PlanStatus;
@@ -19,7 +19,10 @@ export interface PlanFilters {
 }
 
 export function listPlans(filters?: PlanFilters): Promise<Plan[]> {
-  return apiGet<Plan[]>("/api/plans", filters as Record<string, string | number | boolean> | undefined);
+  return apiGet<Plan[]>(
+    "/api/plans",
+    filters as Record<string, string | number | boolean> | undefined,
+  );
 }
 
 export function getPlan(id: string): Promise<Plan> {

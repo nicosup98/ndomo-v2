@@ -12,9 +12,7 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createAnalysis } from "./analyses.ts";
-import { backfillAnalysisFindings } from "./migrations.ts";
-import { runMigrations } from "./migrations.ts";
-
+import { backfillAnalysisFindings, runMigrations } from "./migrations.ts";
 
 let db: Database;
 
@@ -42,9 +40,7 @@ function insertRawFindings(slug: string, findings: unknown): void {
 
 function readFindings(slug: string): unknown[] {
   const row = db
-    .query<{ findings_json: string }, [string]>(
-      "SELECT findings_json FROM analyses WHERE slug = ?",
-    )
+    .query<{ findings_json: string }, [string]>("SELECT findings_json FROM analyses WHERE slug = ?")
     .get(slug);
   if (!row) throw new Error(`no analysis with slug=${slug}`);
   return JSON.parse(row.findings_json);
@@ -52,9 +48,7 @@ function readFindings(slug: string): unknown[] {
 
 describe("backfillAnalysisFindings (v15)", () => {
   test("renames description → observation", () => {
-    insertRawFindings("a", [
-      { severity: "high", description: "auth missing" },
-    ]);
+    insertRawFindings("a", [{ severity: "high", description: "auth missing" }]);
     const count = backfillAnalysisFindings(db);
     expect(count).toBe(1);
     const findings = readFindings("a") as Array<Record<string, unknown>>;
@@ -90,9 +84,7 @@ describe("backfillAnalysisFindings (v15)", () => {
   });
 
   test("skips findings already in new shape (presence of observation)", () => {
-    insertRawFindings("d", [
-      { severity: "high", observation: "ok", proposedAction: "do X" },
-    ]);
+    insertRawFindings("d", [{ severity: "high", observation: "ok", proposedAction: "do X" }]);
     const count = backfillAnalysisFindings(db);
     expect(count).toBe(0);
     const findings = readFindings("d") as Array<Record<string, unknown>>;
@@ -128,10 +120,7 @@ describe("backfillAnalysisFindings (v15)", () => {
 
   test("skips malformed JSON rows without throwing", () => {
     insertRawFindings("f", [{ description: "ok" }]);
-    db.query("UPDATE analyses SET findings_json = ? WHERE slug = ?").run(
-      "not-valid-json{{{",
-      "f",
-    );
+    db.query("UPDATE analyses SET findings_json = ? WHERE slug = ?").run("not-valid-json{{{", "f");
     expect(() => backfillAnalysisFindings(db)).not.toThrow();
     // Malformed row should be left untouched (still has the bad JSON)
     const row = db
@@ -166,9 +155,7 @@ describe("backfillAnalysisFindings (v15)", () => {
     expect(count).toBe(2);
     expect((readFindings("m1")[0] as Record<string, unknown>).observation).toBe("a");
     expect((readFindings("m2")[0] as Record<string, unknown>).observation).toBe("b");
-    expect((readFindings("m3")[0] as Record<string, unknown>).observation).toBe(
-      "already new",
-    );
+    expect((readFindings("m3")[0] as Record<string, unknown>).observation).toBe("already new");
   });
 
   test("returns 0 when there are no analyses rows", () => {

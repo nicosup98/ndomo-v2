@@ -19,8 +19,8 @@ import {
   unlinkAnalysisFromPlan,
   updateAnalysis,
 } from "../../src/db/analyses.ts";
-import { createPlan } from "../../src/db/plans.ts";
 import { runMigrations } from "../../src/db/migrations.ts";
+import { createPlan } from "../../src/db/plans.ts";
 
 let db: Database;
 

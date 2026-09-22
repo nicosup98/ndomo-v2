@@ -6,12 +6,7 @@
     "foreman": {
       "description": "Master orchestrator and scheduler",
       "mode": "primary",
-      "delegates_to": [
-        "scout",
-        "sage",
-        "guild",
-        "chronicler"
-      ]
+      "delegates_to": ["scout", "sage", "guild", "chronicler"]
     },
     "craftsman": {
       "description": "Implementador artesano — ejecuta bugs/features/refactors acotados",

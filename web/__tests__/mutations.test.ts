@@ -1,7 +1,15 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { apiPost, apiPut, apiPatch, apiDelete, HttpError, setPassword, clearPassword } from "../src/api/client";
-import { usePlanMutations } from "../src/composables/usePlanMutations";
-import { useTaskMutations } from "../src/composables/useTaskMutations";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  apiDelete,
+  apiPatch,
+  apiPost,
+  apiPut,
+  clearPassword,
+  HttpError,
+  setPassword,
+} from "../src/api/client.ts";
+import { usePlanMutations } from "../src/composables/usePlanMutations.ts";
+import { useTaskMutations } from "../src/composables/useTaskMutations.ts";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -27,7 +35,12 @@ describe("apiPost", () => {
       status: 201,
       json: () => Promise.resolve(created),
     });
-    const result = await apiPost("/api/plans", { slug: "test", title: "T", overview: "O", createdBy: "user" });
+    const result = await apiPost("/api/plans", {
+      slug: "test",
+      title: "T",
+      overview: "O",
+      createdBy: "user",
+    });
     expect(result).toEqual(created);
   });
 
@@ -117,7 +130,9 @@ describe("apiDelete", () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 204 });
     await apiDelete("/api/plans/p1");
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect((opts.headers as Record<string, string>).Authorization).toBe("Basic " + btoa("anonymous:pw123"));
+    expect((opts.headers as Record<string, string>).Authorization).toBe(
+      `Basic ${btoa("anonymous:pw123")}`,
+    );
   });
 });
 
@@ -145,7 +160,9 @@ describe("usePlanMutations", () => {
       json: () => Promise.resolve({ error: "validation", message: "bad input" }),
     });
     const { create, isLoading, error } = usePlanMutations();
-    await expect(create({ slug: "", title: "", overview: "", createdBy: "" })).rejects.toBeInstanceOf(HttpError);
+    await expect(
+      create({ slug: "", title: "", overview: "", createdBy: "" }),
+    ).rejects.toBeInstanceOf(HttpError);
     expect(isLoading.value).toBe(false);
     expect(error.value).toBe("bad input");
   });
@@ -190,7 +207,9 @@ describe("useTaskMutations", () => {
       json: () => Promise.resolve({ error: "bad_status", message: "invalid transition" }),
     });
     const { patchStatus, error } = useTaskMutations();
-    await expect(patchStatus("t1", { status: "done", updatedBy: "u" })).rejects.toBeInstanceOf(HttpError);
+    await expect(patchStatus("t1", { status: "done", updatedBy: "u" })).rejects.toBeInstanceOf(
+      HttpError,
+    );
     expect(error.value).toBe("invalid transition");
   });
 

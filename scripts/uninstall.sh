@@ -197,15 +197,22 @@ if [[ -f "$CONFIG_DIR/package.json" ]] && command -v jq &>/dev/null; then
   ok "Removed ndomo entry from $CONFIG_DIR/package.json"
 fi
 
-# ── Step 6: Remove custom tools symlink ─────────────────────────────────────
-TOOLS_DIR="${CONFIG_DIR}/tools"
-if [[ -L "$TOOLS_DIR" ]]; then
-  rm "$TOOLS_DIR"
-  ok "Removed custom tools symlink"
-elif [[ -d "$TOOLS_DIR" ]]; then
-  info "Custom tools directory at $TOOLS_DIR is not a symlink — skipping"
+# ── Step 6: Deregister ndomo plugin from opencode.json ──────────────────────
+# v2 has no custom-tools directory (`~/.config/opencode/tools/` was removed).
+# ndomo registers itself via the `plugins` array, so uninstalling means
+# removing the ndomo entry from that array (string or {package, options} form).
+OPENCODE_JSON_PATH="${CONFIG_DIR}/opencode.json"
+if [[ -f "$OPENCODE_JSON_PATH" ]] && command -v jq &>/dev/null; then
+  if jq -e '(.plugins // []) | map(select(. == "ndomo" or (.package? == "ndomo"))) | length > 0' "$OPENCODE_JSON_PATH" >/dev/null 2>&1; then
+    jq '.plugins = ((.plugins // []) | map(select(. != "ndomo" and (.package? != "ndomo"))))' \
+      "$OPENCODE_JSON_PATH" > "${OPENCODE_JSON_PATH}.tmp" \
+      && mv "${OPENCODE_JSON_PATH}.tmp" "$OPENCODE_JSON_PATH"
+    ok "Removed ndomo from opencode.json plugins"
+  else
+    info "No ndomo entry in opencode.json plugins"
+  fi
 else
-  info "No custom tools symlink at $TOOLS_DIR"
+  info "No opencode.json found (or jq missing) — skipping plugin deregistration"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
