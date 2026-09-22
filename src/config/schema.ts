@@ -25,6 +25,34 @@ export type HttpConfig = {
   };
 };
 
+// ─── JEV (TypeSafe AI) Configuration ──────────────────────────────────────────
+/**
+ * JEV (TypeSafe AI System One) classification config for the hybrid router.
+ *
+ * Every field is overridable per-field from the `jev` block of ndomo.json:
+ * - enabled: "false" to disable JEV entirely (default: true)
+ * - model: TypeSafe model identifier (default: "jev-latest")
+ * - timeoutMs: per-request timeout applied via AbortSignal (default: 3000)
+ *
+ * The API key is NOT part of this config: it is read from the
+ * TYPESAFE_API_KEY environment variable only (see src/orchestrator/jev.ts).
+ * Without a key, JEV stays silently disabled and routing falls back to rules.
+ */
+export type JevConfig = {
+  enabled: boolean;
+  model: string;
+  timeoutMs: number;
+};
+
+/**
+ * Default JEV configuration.
+ */
+export const JEV_DEFAULTS: JevConfig = {
+  enabled: true,
+  model: "jev-latest",
+  timeoutMs: 3000,
+};
+
 // ─── NdomoConfig Schema ───────────────────────────────────────────────────────
 /**
  * Full ndomo configuration as read from ndomo.config.json / ndomo.json.
@@ -40,6 +68,7 @@ export type NdomoConfig = {
     Record<string, { model?: string; temperature?: number; reasoning_effort?: string }>
   >;
   http?: HttpConfig;
+  jev?: JevConfig;
   [key: string]: unknown;
 };
 
@@ -154,6 +183,41 @@ export function loadHttpConfig(configPath?: string): HttpConfig {
     auth: {
       required: parseBoolEnv(process.env.NDOMO_HTTP_AUTH_REQUIRED, true),
     },
+  };
+}
+
+/**
+ * Load JEV configuration with precedence: ndomo.json jev block > defaults.
+ * Per-field resolution: invalid or missing fields fall back to defaults
+ * individually, so a partial `jev` block is always safe.
+ *
+ * @param configPath - Optional explicit path to ndomo.json
+ * @returns JevConfig with resolved values
+ *
+ * @example
+ * // ndomo.json: { "jev": { "timeoutMs": 1500 } }
+ * loadJevConfig();
+ * // → { enabled: true, model: "jev-latest", timeoutMs: 1500 }
+ */
+export function loadJevConfig(configPath?: string): JevConfig {
+  const fileConfig = loadNdomoConfig(configPath);
+  const jev = fileConfig.jev;
+  if (typeof jev !== "object" || jev === null || Array.isArray(jev)) {
+    return { ...JEV_DEFAULTS };
+  }
+  const obj = jev as Record<string, unknown>;
+  return {
+    enabled: typeof obj.enabled === "boolean" ? obj.enabled : JEV_DEFAULTS.enabled,
+    model:
+      typeof obj.model === "string" && obj.model.trim().length > 0
+        ? obj.model
+        : JEV_DEFAULTS.model,
+    timeoutMs:
+      typeof obj.timeoutMs === "number" &&
+      Number.isFinite(obj.timeoutMs) &&
+      obj.timeoutMs > 0
+        ? Math.floor(obj.timeoutMs)
+        : JEV_DEFAULTS.timeoutMs,
   };
 }
 

@@ -43,7 +43,9 @@ import {
   mapTaskCreateBatchArg,
   NdomoPlugin,
   reconcileAbandonedPlans,
+  registerTools,
 } from "./plugin.ts";
+import { z } from "zod";
 
 let db: Database;
 
@@ -2988,6 +2990,100 @@ describe("NdomoPlugin v2 registration", () => {
       await after!.cb({
         ...base,
         id: "call_3",
+        input: { filePath },
+        status: "completed",
+        result: { content: "ok" },
+      });
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("v1→v2 adapter reinjects legacy context fields and wraps results", async () => {
+    const added: HarnessTool[] = [];
+    let seen: Record<string, unknown> | null = null;
+    registerTools(
+      { add: (t: unknown) => added.push(t as HarnessTool) } as never,
+      {
+        demo_json: {
+          description: "returns a json object",
+          args: { filePath: z.string() },
+          execute: (args: unknown, context: unknown) => {
+            seen = context as Record<string, unknown>;
+            return { ok: true, filePath: (args as { filePath: string }).filePath };
+          },
+        },
+        demo_text: {
+          description: "returns plain text",
+          args: {},
+          execute: () => "plain output",
+        },
+      },
+      { directory: "/proj/dir", worktree: "/proj/wt" },
+    );
+
+    expect(added).toHaveLength(2);
+    const jsonTool = added.find((t) => t.name === "demo_json");
+    const textTool = added.find((t) => t.name === "demo_text");
+    if (!jsonTool || !textTool) throw new Error("adapter did not register both tools");
+
+    const signal = new AbortController().signal;
+    const json = await jsonTool.execute(
+      { filePath: "/a.ts" },
+      { sessionID: "ses", messageID: "msg", agent: "ranger", id: "call-123", signal },
+    );
+    expect(json).toEqual({ content: JSON.stringify({ ok: true, filePath: "/a.ts" }) });
+    // v2 → legacy context translation: id → callID, signal → abort, plus the
+    // directory/worktree pair captured at registration time.
+    expect(seen).toMatchObject({
+      sessionID: "ses",
+      messageID: "msg",
+      agent: "ranger",
+      callID: "call-123",
+      directory: "/proj/dir",
+      worktree: "/proj/wt",
+    });
+    expect((seen as Record<string, unknown> | null)?.abort).toBe(signal);
+
+    const text = await textTool.execute(
+      {},
+      { sessionID: "ses", messageID: "msg", agent: "ranger", id: "call-9", signal },
+    );
+    // String results are passed through verbatim (no JSON quoting).
+    expect(text).toEqual({ content: "plain output" });
+  });
+
+  test("execute.before ignores non-write/edit tools and after does not release them", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const before = harness.toolHooks.find((h) => h.name === "execute.before");
+      const after = harness.toolHooks.find((h) => h.name === "execute.after");
+      if (!before || !after) throw new Error("hooks not registered");
+      const filePath = join(projectDir, "shared-file.ts");
+      const base = { sessionID: "ses_v2_ignore", agent: "craftsman", messageID: "msg_i" };
+
+      // A write acquires the lock…
+      await before.cb({ ...base, id: "w1", tool: "write", input: { filePath } });
+      // …reads are not serialized by the lock manager…
+      await before.cb({ ...base, id: "r1", tool: "read", input: { filePath } });
+      // …and an execute.after for the read must not release the write lock.
+      await after.cb({
+        ...base,
+        id: "r1",
+        tool: "read",
+        input: { filePath },
+        status: "completed",
+        result: { content: "contents" },
+      });
+      await expect(
+        before.cb({ ...base, id: "w2", tool: "edit", input: { filePath } }),
+      ).rejects.toThrow(/file locked/);
+
+      await after.cb({
+        ...base,
+        id: "w1",
+        tool: "write",
         input: { filePath },
         status: "completed",
         result: { content: "ok" },

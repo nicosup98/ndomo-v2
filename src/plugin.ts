@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import { z } from "zod";
-import { loadHttpConfig } from "./config/schema.ts";
+import { loadHttpConfig, loadJevConfig } from "./config/schema.ts";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -138,7 +138,7 @@ function tool<Args extends z.ZodRawShape>(input: {
  *  - executor results are wrapped into v2 `{ content }` results
  *  - the legacy context fields (directory/worktree/callID) are injected
  */
-function registerTools(
+export function registerTools(
   editor: ToolEditor,
   tools: Record<string, LegacyToolDef>,
   base: { directory: string; worktree: string },
@@ -637,6 +637,15 @@ export const NdomoPlugin = Plugin.define({
       );
     }
 
+    // JEV config — per-field resolution from ndomo.json with defaults.
+    // The API key lives in TYPESAFE_API_KEY; without it JEV is silently skipped.
+    const jevConfig = loadJevConfig();
+    if (jevConfig.enabled) {
+      console.log(
+        `[ndomo] JEV routing enabled: model=${jevConfig.model} timeoutMs=${jevConfig.timeoutMs}`,
+      );
+    }
+
     // Shared state — lives for the lifetime of the plugin instance
     // Single resolution point: projectDir is reused for the DB, the
     // auto-checkpoint ledger wiring, and the session_checkpoint tool so all
@@ -919,13 +928,16 @@ export const NdomoPlugin = Plugin.define({
           files: z.array(z.string()).optional(),
         },
         execute: async (args) => {
-          const decision = routeTask({
-            description: args.description,
-            type: args.type,
-            stack: args.stack ?? "unknown",
-            risk: args.risk ?? "low",
-            files: args.files ?? [],
-          });
+          const decision = await routeTask(
+            {
+              description: args.description,
+              type: args.type,
+              stack: args.stack ?? "unknown",
+              risk: args.risk ?? "low",
+              files: args.files ?? [],
+            },
+            { jev: jevConfig },
+          );
           return JSON.stringify(decision);
         },
       }),

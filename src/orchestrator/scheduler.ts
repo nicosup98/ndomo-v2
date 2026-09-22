@@ -1,7 +1,15 @@
 /**
  * Agent routing logic for the ndomo orchestrator.
  * Pure functions that determine which specialist agent handles a task.
+ *
+ * Routing is hybrid: when JEV (TypeSafe AI) is configured and available, its
+ * classification overrides agent/type/risk; otherwise the heuristic rules below
+ * apply unchanged. See ./jev.ts.
  */
+
+import { classifyTaskWithJev } from "./jev.ts";
+import type { JevClassifierDeps, JevDecision } from "./jev.ts";
+import type { JevConfig } from "../config/schema.ts";
 
 /** Decision returned by the scheduler after routing a task. */
 export interface RoutingDecision {
@@ -15,6 +23,8 @@ export interface RoutingDecision {
   dependencies: string[];
   /** Agent that should review output before merge (advisory, not blocking). */
   requiresReview?: string;
+  /** Which classifier produced the decision (hybrid routing audit trail). */
+  source?: "jev" | "rules";
 }
 
 /** Incoming task request from the foreman. */
@@ -41,7 +51,9 @@ const STACK_AGENTS: Record<string, string> = {
 };
 
 /**
- * Route a task to the appropriate specialist agent.
+ * Heuristic routing rules (JEV-free). This is the original `routeTask` logic;
+ * it is kept pure and synchronous so the hybrid router can reuse it for the
+ * fields JEV does not classify (parallelism, dependencies, review advisory).
  *
  * Priority order:
  *  1. Explore  → scout
@@ -56,7 +68,7 @@ const STACK_AGENTS: Record<string, string> = {
  * 10. High risk + implement → sage (advisory) + stack-smith
  * 11. Default → smith
  */
-export function routeTask(task: TaskRequest): RoutingDecision {
+function routeTaskWithRules(task: TaskRequest): RoutingDecision {
   const { type, stack, risk } = task;
 
   // 1. Explore → scout
@@ -178,6 +190,70 @@ export function routeTask(task: TaskRequest): RoutingDecision {
     parallel: true,
     dependencies: [],
   };
+}
+
+/** Options for the hybrid router. */
+export interface RouteOptions {
+  /**
+   * JEV config. Omit to skip JEV entirely: routing is pure heuristic and
+   * no network access is attempted (backwards-compatible behavior).
+   */
+  jev?: JevConfig;
+  /** Injectable JEV dependencies (tests). */
+  jevDeps?: JevClassifierDeps;
+}
+
+/**
+ * Route a task to the appropriate specialist agent (hybrid).
+ *
+ * When `options.jev` is provided and JEV is enabled, one System One request
+ * classifies agent/type/risk. Valid JEV fields override the request before the
+ * heuristic rules run, so `parallel`/`dependencies`/`requiresReview` stay
+ * consistent with the effective type/risk. A valid JEV agent wins over the
+ * heuristic agent.
+ *
+ * Fallback: JEV disabled, missing key, timeout, API error, or an answer outside
+ * the accepted enums → heuristic rules only (`source: "rules"`), identical to
+ * the pre-JEV behavior.
+ *
+ * @param task - Task request from the foreman.
+ * @param options - JEV config and injectable deps (optional).
+ * @returns Routing decision with `source` indicating which classifier ran.
+ */
+export async function routeTask(
+  task: TaskRequest,
+  options: RouteOptions = {},
+): Promise<RoutingDecision> {
+  if (!options.jev) {
+    return { ...routeTaskWithRules(task), source: "rules" };
+  }
+
+  let jev: JevDecision | null = null;
+  try {
+    jev = await classifyTaskWithJev(
+      { description: task.description, files: task.files, stack: task.stack },
+      options.jev,
+      options.jevDeps ?? {},
+    );
+  } catch {
+    // classifyTaskWithJev never rejects; belt-and-suspenders for the router.
+    jev = null;
+  }
+
+  const effective: TaskRequest = { ...task };
+  if (jev?.type) effective.type = jev.type;
+  if (jev?.risk) effective.risk = jev.risk;
+  const base = routeTaskWithRules(effective);
+
+  if (jev?.agent) {
+    return {
+      ...base,
+      agent: jev.agent,
+      reason: `JEV (TypeSafe) classified as ${effective.type}/${effective.risk}; routed to ${jev.agent}.`,
+      source: "jev",
+    };
+  }
+  return { ...base, source: jev ? "jev" : "rules" };
 }
 
 /**
