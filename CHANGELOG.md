@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/nicosup98/ndomo-v2/compare/v0.5.0...v0.6.0) (2026-09-23)
+
+
+### Features
+
+* jev classifier toolkit, embedded memory DB, smiths on mimo-v2.6-flash ([6fabc07](https://github.com/nicosup98/ndomo-v2/commit/6fabc073542414072f199aadf85fbf6b039ac56c))
+
+
+### Bug Fixes
+
+* **agents:** unify code smiths on opencode-go/deepseek-v4.1-flash ([0a06328](https://github.com/nicosup98/ndomo-v2/commit/0a06328935f7c8d89654b2248a0a1d41e1ef71e7))
+
 ## [0.5.1] - 2026-09-22
 
 ### Changed
