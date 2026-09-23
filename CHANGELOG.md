@@ -17,8 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-23
+
 ### Added
 
+- **JEV classifier toolkit** — 4 new plugin tools backed by
+  `src/orchestrator/jev-{intent,tests,risk,deps}.ts` + `risk-patterns.ts`:
+  `classify_intent`, `classify_tests`, `code_traffic_light`,
+  `validate_task_dependencies` (deterministic heuristics + tests).
+- **Embedded memory system** — SQLite + FTS5 + FlexSearch store
+  (`src/mem/{store,schema,search,tags,migrate}.ts`) replaces the
+  `opencode-mem` plugin: tools `mem_add`, `mem_search`, `mem_list`,
+  `mem_forget`, `mem_stats`; 394 memories migrated with `ndomo_` tags
+  (`scripts/migrate-memory.ts`).
 - **Ranger agent** — 4th primary agent (`mode: primary`, `model:
   minimax/MiniMax-M3`, `temp: 0.3`) for analysis/cartography/onboarding
   workflows. Read-write guard rails: `edit: deny` for source code,
@@ -51,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **10 smith agents** (`smith`, `go-smith`, `js-smith`, `python-smith`,
+  `vue-smith`, `zig-smith`, `rust-smith`, `ci-smith`, `deploy-smith`,
+  `release-smith`) switched to `opencode-go/mimo-v2.6-flash` in the
+  default preset and agent frontmatter (`temperature: 0.1`,
+  `reasoning_effort: high` unchanged).
+- Biome cleanup: VCS-mode config, autofixes, and import ordering
+  (no behavior change).
 - Updated `docs/agents.md` from 21 agents (3 primaries) to 22 agents
   (4 primaries), including cross-primary routing table for the new
   ranger entry point.
@@ -186,7 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven medium-priority `craftsman` fixes shipped alongside the Bun skill
   bootstrap for the `js-smith` specialist
 
+[0.6.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.0...v0.5.1
-[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.6.0...HEAD
 [0.3.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/nicosup98/ndomo-v2/releases/tag/v0.1.0

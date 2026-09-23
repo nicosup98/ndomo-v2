@@ -1,6 +1,6 @@
 {
   "name": "ndomo",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "OpenCode multi-agent plugin. Taller de artesanos: foreman + 3 peer primaries (craftsman, warden, ranger) + specialists (scout, scribe, painter, smith, sage, guild, inspector, chronicler) + stack-smiths + ops (ci-smith, deploy-smith, release-smith, ops-scout). Caveman-native. Embedded memory. DCP peer optional.",
   "type": "module",
   "license": "MIT",
