@@ -117,17 +117,20 @@ function handleList(db: Database, args: string[]): void {
   let limit: number | undefined;
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
+    const arg = args[i];
+    if (arg === undefined) break;
     if (arg === "--agent" && i + 1 < args.length) {
-      agent = args[++i]!;
+      agent = args[++i];
     } else if (arg === "--source-plan" && i + 1 < args.length) {
-      sourcePlanId = args[++i]!;
+      sourcePlanId = args[++i];
     } else if (arg === "--project" && i + 1 < args.length) {
-      projectPath = args[++i]!;
+      projectPath = args[++i];
     } else if (arg === "--archived") {
       archived = true;
     } else if (arg === "--limit" && i + 1 < args.length) {
-      const n = Number.parseInt(args[++i]!, 10);
+      const raw = args[++i];
+      if (raw === undefined) break;
+      const n = Number.parseInt(raw, 10);
       if (Number.isNaN(n) || n < 1) {
         console.error("error: --limit must be a positive integer");
         process.exit(1);
@@ -148,17 +151,17 @@ function handleList(db: Database, args: string[]): void {
 }
 
 function handleGet(db: Database, args: string[]): void {
-  if (args.length === 0) {
+  const identifier = args[0];
+  if (identifier === undefined) {
     console.error("error: get requires an ID or slug argument");
     process.exit(1);
   }
 
-  const identifier = args[0]!;
   let projectPath: string | undefined;
 
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--project" && i + 1 < args.length) {
-      projectPath = args[++i]!;
+      projectPath = args[++i];
     }
   }
 
@@ -187,17 +190,19 @@ function handleGet(db: Database, args: string[]): void {
 }
 
 function handleSearch(db: Database, args: string[]): void {
-  if (args.length === 0) {
+  const query = args[0];
+  if (query === undefined) {
     console.error("error: search requires a query argument");
     process.exit(1);
   }
 
-  const query = args[0]!;
   let limit = 20;
 
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--limit" && i + 1 < args.length) {
-      const n = Number.parseInt(args[++i]!, 10);
+      const raw = args[++i];
+      if (raw === undefined) break;
+      const n = Number.parseInt(raw, 10);
       if (Number.isNaN(n) || n < 1) {
         console.error("error: --limit must be a positive integer");
         process.exit(1);
@@ -211,12 +216,11 @@ function handleSearch(db: Database, args: string[]): void {
 }
 
 function handleArchive(db: Database, args: string[]): void {
-  if (args.length === 0) {
+  const id = args[0];
+  if (id === undefined) {
     console.error("error: archive requires an ID argument");
     process.exit(1);
   }
-
-  const id = args[0]!;
   try {
     const archived = archiveAnalysis(db, id);
     console.log(`archived analysis: ${shortId(archived.id)} (${archived.slug})`);

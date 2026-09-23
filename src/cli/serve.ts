@@ -136,8 +136,9 @@ export function loadDotenv(cwd: string = process.cwd()): number {
     const m = cleaned.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
     if (!m) continue;
 
-    const key = m[1]!;
-    let value = m[2]!;
+    const key = m[1];
+    let value = m[2];
+    if (key === undefined || value === undefined) continue;
     // strip optional surrounding quotes (single or double)
     if (
       (value.startsWith('"') && value.endsWith('"')) ||

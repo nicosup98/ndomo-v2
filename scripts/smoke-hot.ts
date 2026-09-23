@@ -249,7 +249,7 @@ try {
 
   // Set task 0 to running
   const runningTask = updateTaskStatus(db, t0.id, "running");
-  if (!runningTask || runningTask.status !== "running") {
+  if (runningTask?.status !== "running") {
     fail(testN, `task[0] status expected "running", got "${runningTask?.status}"`);
   }
   if (runningTask.startedAt === null) {
@@ -261,7 +261,7 @@ try {
   const doneTask0 = updateTaskStatus(db, t0.id, "done", {
     result: "completed successfully",
   });
-  if (!doneTask0 || doneTask0.status !== "done") {
+  if (doneTask0?.status !== "done") {
     fail(testN, `task[0] status expected "done", got "${doneTask0?.status}"`);
   }
   if (doneTask0.completedAt === null) {
@@ -271,7 +271,7 @@ try {
 
   // Set task 1 to done with result
   const doneTask1 = updateTaskStatus(db, t1.id, "done", { result: "ok" });
-  if (!doneTask1 || doneTask1.status !== "done") {
+  if (doneTask1?.status !== "done") {
     fail(testN, `task[1] status expected "done", got "${doneTask1?.status}"`);
   }
   console.log(`[${testN}/7] task[1] status=done... OK`);
@@ -294,7 +294,7 @@ try {
 testN++;
 try {
   const updated = updatePlanStatus(db, "hp1", "completed");
-  if (!updated || updated.status !== "completed") {
+  if (updated?.status !== "completed") {
     fail(testN, `updatePlanStatus expected "completed", got "${updated?.status}"`);
   }
   console.log(`[${testN}/7] updatePlanStatus(completed)... OK`);
