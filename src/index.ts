@@ -26,7 +26,6 @@ export {
   createWorktree,
   getProjectTag,
   listActive,
-  memorySearchOptions,
   prepareForMemory,
   reconcileResults,
   removeWorktree,

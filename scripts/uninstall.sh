@@ -28,7 +28,7 @@ for arg in "$@"; do
       echo "Usage: ./uninstall.sh [--keep-data]"
       echo ""
       echo "Options:"
-      echo "  --keep-data    Skip removal of .slim/ directory and opencode-mem data"
+      echo "  --keep-data    Skip removal of .slim/ directory and ~/.ndomo/mem memory data"
       exit 0
       ;;
     *)
@@ -226,6 +226,8 @@ printf "  Agents:  %d file(s)\n" "$AGENT_REMOVED"
 printf "  Skills:  %d directory(ies)\n" "$SKILL_REMOVED"
 printf "  Config:  %d file(s)\n" "$CONFIG_REMOVED"
 echo ""
-printf "${BOLD}Note:${NC} This does NOT uninstall opencode-mem or @tarquinen/opencode-dcp.\n"
-printf "  Those are separate plugins managed by opencode.\n"
+printf "${BOLD}Note:${NC} This does NOT uninstall @tarquinen/opencode-dcp.\n"
+printf "  That is a separate plugin managed by opencode.\n"
+printf "  Memory is now embedded in ndomo (data: ~/.ndomo/mem).\n"
+printf "  Legacy shards can be migrated with: bun scripts/migrate-memory.ts\n"
 echo ""

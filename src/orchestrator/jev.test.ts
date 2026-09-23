@@ -28,7 +28,12 @@ type Impl = (
 function depsWith(
   impl: Impl,
   apiKey = "test-key",
-): { deps: JevClassifierDeps; calls: JevSystemOneRequest[]; opts: JevRequestOptions[]; factoryCalls: () => number } {
+): {
+  deps: JevClassifierDeps;
+  calls: JevSystemOneRequest[];
+  opts: JevRequestOptions[];
+  factoryCalls: () => number;
+} {
   const calls: JevSystemOneRequest[] = [];
   const opts: JevRequestOptions[] = [];
   let factoryCalls = 0;
@@ -98,7 +103,10 @@ describe("classifyTaskWithJev", () => {
 
   test("timeout → null via AbortSignal race", async () => {
     const { deps } = depsWith(
-      () => new Promise((resolve) => setTimeout(() => resolve({ answers: { agent: answer("warden") } }), 50)),
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ answers: { agent: answer("warden") } }), 50),
+        ),
     );
     const started = Date.now();
     const decision = await classifyTaskWithJev(task, cfg({ timeoutMs: 10 }), deps);
@@ -119,9 +127,12 @@ describe("classifyTaskWithJev", () => {
   });
 
   test("missing API key → null and factory is never called", async () => {
-    const { deps, factoryCalls } = depsWith(async () => ({
-      answers: { agent: answer("ranger") },
-    }), "");
+    const { deps, factoryCalls } = depsWith(
+      async () => ({
+        answers: { agent: answer("ranger") },
+      }),
+      "",
+    );
     const decision = await classifyTaskWithJev(task, cfg(), deps);
     expect(decision).toBeNull();
     expect(factoryCalls()).toBe(0);

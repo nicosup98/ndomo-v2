@@ -6,10 +6,11 @@
  */
 
 import { Database } from "bun:sqlite";
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -45,7 +46,6 @@ import {
   reconcileAbandonedPlans,
   registerTools,
 } from "./plugin.ts";
-import { z } from "zod";
 
 let db: Database;
 
@@ -2856,11 +2856,11 @@ describe("NdomoPlugin v2 registration", () => {
     return { projectDir, harness, cleanup };
   };
 
-  test("setup registers 51 tools, all 4 hooks, and returns a cleanup fn", async () => {
+  test("setup registers 59 tools, all 4 hooks, and returns a cleanup fn", async () => {
     const { projectDir, harness, cleanup } = await setupPlugin();
     try {
       expect(typeof cleanup).toBe("function");
-      expect(harness.tools).toHaveLength(51);
+      expect(harness.tools).toHaveLength(59);
       const names = harness.tools.map((t) => t.name);
       expect(names).toContain("plan_create");
       expect(names).toContain("task_update_status");
@@ -2872,7 +2872,14 @@ describe("NdomoPlugin v2 registration", () => {
       expect(names).toContain("ledger_update");
       expect(names).toContain("design_create");
       expect(names).toContain("critic_review");
-      expect(new Set(names).size).toBe(51);
+      // Embedded memory surface (replaces the former external memory plugin tool).
+      expect(names).toContain("memory_compress");
+      expect(names).toContain("mem_add");
+      expect(names).toContain("mem_search");
+      expect(names).toContain("mem_list");
+      expect(names).toContain("mem_forget");
+      expect(names).toContain("mem_stats");
+      expect(new Set(names).size).toBe(59);
       expect(harness.sessionHooks.map((h) => h.name)).toEqual(["compaction"]);
       expect(harness.toolHooks.map((h) => h.name).sort()).toEqual([
         "execute.after",
@@ -3123,7 +3130,7 @@ describe("NdomoPlugin v2 registration", () => {
       const first = makePluginHarness(projectDir);
       const firstCleanup = await NdomoPlugin.setup(first.ctx);
       if (typeof firstCleanup !== "function") throw new Error("setup did not return a cleanup fn");
-      expect(first.tools).toHaveLength(51);
+      expect(first.tools).toHaveLength(59);
       await firstCleanup();
       await firstCleanup(); // idempotent — a second dispose must not throw
 
@@ -3134,8 +3141,8 @@ describe("NdomoPlugin v2 registration", () => {
       if (typeof secondCleanup !== "function") {
         throw new Error("setup did not return a cleanup fn");
       }
-      expect(second.tools).toHaveLength(51);
-      expect(first.tools).toHaveLength(51);
+      expect(second.tools).toHaveLength(59);
+      expect(first.tools).toHaveLength(59);
       await secondCleanup();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
@@ -3205,6 +3212,470 @@ describe("NdomoPlugin v2 registration", () => {
         ).content,
       ) as { executionGate: { verdict: string } };
       expect(critic.executionGate.verdict).toBe("passed");
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Plugin-level smoke tests for the 4 JEV toolkit tools, exercised with JEV
+ * disabled (no TYPESAFE_API_KEY → `callJev` returns null before building any
+ * client). Every test therefore pins the *deterministic* path: parser rules
+ * and fallbacks, never a network round-trip.
+ */
+describe("JEV toolkit tools — deterministic smoke (no network)", () => {
+  const priorEnv = {
+    skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
+    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
+    typesafeKey: process.env.TYPESAFE_API_KEY,
+  };
+
+  beforeAll(() => {
+    // Force the no-key path: `callJev` returns null before constructing a
+    // client, so no request can ever leave the process (zero network).
+    delete process.env.TYPESAFE_API_KEY;
+  });
+
+  afterAll(() => {
+    if (priorEnv.skipFrontmatter === undefined) delete process.env.NDOMO_SKIP_FRONTMATTER_SYNC;
+    else process.env.NDOMO_SKIP_FRONTMATTER_SYNC = priorEnv.skipFrontmatter;
+    if (priorEnv.httpEnabled === undefined) delete process.env.NDOMO_HTTP_ENABLED;
+    else process.env.NDOMO_HTTP_ENABLED = priorEnv.httpEnabled;
+    // Restore the exact prior value (undefined → delete, not "undefined").
+    if (priorEnv.typesafeKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = priorEnv.typesafeKey;
+  });
+
+  const setupPlugin = async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-jev-smoke-"));
+    process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
+    process.env.NDOMO_HTTP_ENABLED = "false";
+    const harness = makePluginHarness(projectDir);
+    const cleanup = await NdomoPlugin.setup(harness.ctx);
+    if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
+    return { projectDir, harness, cleanup };
+  };
+
+  const toolByName = (harness: ReturnType<typeof makePluginHarness>, name: string) => {
+    const tool = harness.tools.find((t) => t.name === name);
+    if (!tool) throw new Error(`tool not registered: ${name}`);
+    return tool;
+  };
+
+  test("classify_intent returns JSON null when JEV is disabled", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const res = await toolByName(harness, "classify_intent").execute(
+        { prompt: "add a logout button to the settings page" },
+        harness.toolCtx("ses_jev_intent"),
+      );
+      expect(res.content).toBe("null");
+      expect(JSON.parse(res.content)).toBeNull();
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("classify_tests uses the deterministic parser when the output is conclusive", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const output = [
+        "bun test v1.2.0",
+        "",
+        "✓ a",
+        "✓ b",
+        "",
+        " 2 pass",
+        " 0 fail",
+        "Ran 2 tests across 1 file.",
+      ].join("\n");
+      const res = await toolByName(harness, "classify_tests").execute(
+        { output, exitCode: 0 },
+        harness.toolCtx("ses_jev_tests_conclusive"),
+      );
+      const parsed = JSON.parse(res.content) as {
+        verdict: string;
+        source: string;
+        counts: { total: number };
+        warnings: string[];
+      };
+      expect(parsed.verdict).toBe("green");
+      expect(parsed.source).toBe("parser");
+      expect(parsed.counts.total).toBeGreaterThanOrEqual(2);
+      expect(parsed.warnings.some((w) => w.includes("JEV unavailable"))).toBe(false);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("classify_tests falls back deterministically on ambiguous output", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const res = await toolByName(harness, "classify_tests").execute(
+        { output: "something went wrong\nno tests here" },
+        harness.toolCtx("ses_jev_tests_ambiguous"),
+      );
+      const parsed = JSON.parse(res.content) as {
+        verdict: string;
+        source: string;
+        warnings: string[];
+      };
+      expect(parsed.source).toBe("fallback");
+      expect(parsed.warnings.some((w) => w.includes("JEV unavailable"))).toBe(true);
+      // Observed deterministic value with no parsed evidence: "none".
+      expect(parsed.verdict).toBe("none");
+      expect(["green", "red", "mixed", "none"]).toContain(parsed.verdict);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("code_traffic_light returns green via rules for a clean diff", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const diff = `diff --git a/x.ts b/x.ts
+index 1111111..2222222 100644
+--- a/x.ts
++++ b/x.ts
+@@ -1,1 +1,2 @@
+ const items = [1, 2, 3];
++const total = items.length;
+`;
+      const res = await toolByName(harness, "code_traffic_light").execute(
+        { diff },
+        harness.toolCtx("ses_jev_risk_green"),
+      );
+      const parsed = JSON.parse(res.content) as {
+        light: string;
+        source: string;
+        findings: unknown[];
+      };
+      expect(parsed.light).toBe("green");
+      expect(parsed.source).toBe("rules");
+      expect(parsed.findings).toHaveLength(0);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("code_traffic_light returns red via rules for an eval() addition", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const diff = `diff --git a/x.ts b/x.ts
+index 1111111..2222222 100644
+--- a/x.ts
++++ b/x.ts
+@@ -1,1 +1,2 @@
+ const x = 1;
++eval("boom")
+`;
+      const res = await toolByName(harness, "code_traffic_light").execute(
+        { diff },
+        harness.toolCtx("ses_jev_risk_red"),
+      );
+      const parsed = JSON.parse(res.content) as {
+        light: string;
+        source: string;
+        findings: Array<{ patternId: string; file: string; line: number }>;
+      };
+      expect(parsed.light).toBe("red");
+      expect(parsed.source).toBe("rules");
+      expect(parsed.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining({ patternId: "eval-call", file: "x.ts" })]),
+      );
+      const evalFinding = parsed.findings.find((f) => f.patternId === "eval-call");
+      expect(evalFinding?.line).toBe(2);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("code_traffic_light falls back to yellow for a medium-severity finding", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const diff = `diff --git a/x.test.ts b/x.test.ts
+index 1111111..2222222 100644
+--- a/x.test.ts
++++ b/x.test.ts
+@@ -1,1 +1,2 @@
+ describe("x", () => {
++  it.skip("skipped", () => {});
+`;
+      const res = await toolByName(harness, "code_traffic_light").execute(
+        { diff },
+        harness.toolCtx("ses_jev_risk_yellow"),
+      );
+      const parsed = JSON.parse(res.content) as {
+        light: string;
+        source: string;
+        warnings: string[];
+      };
+      expect(parsed.light).toBe("yellow");
+      expect(parsed.source).toBe("fallback");
+      expect(parsed.warnings.length).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("validate_task_dependencies advisory then apply (pending tasks only)", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const planCreate = toolByName(harness, "plan_create");
+      const taskBatch = toolByName(harness, "task_create_batch");
+      const validate = toolByName(harness, "validate_task_dependencies");
+      const taskList = toolByName(harness, "task_list");
+
+      // ── Advisory path: A "core module" + B "docs after core lands" ─────────
+      const plan = JSON.parse(
+        (
+          await planCreate.execute(
+            {
+              slug: "jev-deps-advisory",
+              title: "JEV deps advisory",
+              overview: "smoke",
+              priority: 3,
+            },
+            harness.toolCtx("ses_jev_deps_1"),
+          )
+        ).content,
+      ) as { id: string };
+
+      const created = JSON.parse(
+        (
+          await taskBatch.execute(
+            {
+              planId: plan.id,
+              tasks: [
+                { description: "core module", agent: "craftsman", files: ["src/core.ts"] },
+                {
+                  description: "docs after core lands",
+                  agent: "craftsman",
+                  files: ["docs/x.md"],
+                },
+              ],
+            },
+            harness.toolCtx("ses_jev_deps_1"),
+          )
+        ).content,
+      ) as Array<{ id: string }>;
+      const [taskA, taskB] = created;
+      if (!taskA || !taskB) throw new Error("task_create_batch did not return 2 tasks");
+
+      const advisory = JSON.parse(
+        (await validate.execute({ planId: plan.id }, harness.toolCtx("ses_jev_deps_1"))).content,
+      ) as {
+        source: string;
+        pairs: Array<{ a: string; b: string }>;
+        edges: Array<{ from: string; to: string }>;
+        waves: string[][];
+        applied: unknown[];
+      };
+      expect(advisory.source).toBe("rules");
+      expect(advisory.pairs).toHaveLength(1);
+      expect(advisory.pairs[0]).toMatchObject({ a: taskA.id, b: taskB.id });
+      expect(advisory.edges).toEqual([{ from: taskA.id, to: taskB.id }]);
+      expect(advisory.waves).toEqual([[taskA.id], [taskB.id]]);
+      expect(advisory.applied).toEqual([]);
+
+      // ── Apply path: same plan, deps merged into the pending task B ─────────
+      const applied = JSON.parse(
+        (
+          await validate.execute(
+            { planId: plan.id, apply: true },
+            harness.toolCtx("ses_jev_deps_1"),
+          )
+        ).content,
+      ) as {
+        applied: Array<{ taskId: string; added: string[]; dependencies: string[] }>;
+      };
+      expect(applied.applied).toEqual([
+        { taskId: taskB.id, added: [taskA.id], dependencies: [taskA.id] },
+      ]);
+
+      // Persistence + pending-only: read back via the task_list tool.
+      const listed = JSON.parse(
+        (await taskList.execute({ planId: plan.id }, harness.toolCtx("ses_jev_deps_1"))).content,
+      ) as Array<{ id: string; status: string; dependencies: string[] }>;
+      const persistedB = listed.find((t) => t.id === taskB.id);
+      expect(persistedB?.status).toBe("pending");
+      expect(persistedB?.dependencies).toContain(taskA.id);
+      // Every applied task must have been pending.
+      for (const entry of applied.applied) {
+        expect(listed.find((t) => t.id === entry.taskId)?.status).toBe("pending");
+      }
+
+      // ── Pending-only guard: a done task must NOT receive suggestions ───────
+      const plan2 = JSON.parse(
+        (
+          await planCreate.execute(
+            {
+              slug: "jev-deps-pending-guard",
+              title: "JEV deps guard",
+              overview: "smoke",
+              priority: 3,
+            },
+            harness.toolCtx("ses_jev_deps_2"),
+          )
+        ).content,
+      ) as { id: string };
+      const created2 = JSON.parse(
+        (
+          await taskBatch.execute(
+            {
+              planId: plan2.id,
+              tasks: [
+                { description: "core module", agent: "craftsman", files: ["src/core.ts"] },
+                {
+                  description: "docs after core lands",
+                  agent: "craftsman",
+                  files: ["docs/x.md"],
+                },
+                {
+                  description: "audit after core lands",
+                  agent: "craftsman",
+                  files: ["src/core.ts"],
+                },
+              ],
+            },
+            harness.toolCtx("ses_jev_deps_2"),
+          )
+        ).content,
+      ) as Array<{ id: string }>;
+      const [guardA, guardB, guardC] = created2;
+      if (!guardA || !guardB || !guardC) throw new Error("guard plan needs 3 tasks");
+
+      // Mark C done → the apply loop must skip it (only pending tasks get deps).
+      await toolByName(harness, "task_update_status").execute(
+        { id: guardC.id, status: "done", result: "already landed" },
+        harness.toolCtx("ses_jev_deps_2"),
+      );
+
+      const guarded = JSON.parse(
+        (
+          await validate.execute(
+            { planId: plan2.id, apply: true },
+            harness.toolCtx("ses_jev_deps_2"),
+          )
+        ).content,
+      ) as {
+        suggestions: Record<string, string[]>;
+        applied: Array<{ taskId: string; added: string[] }>;
+      };
+      // C is a suggestion target but was done → skipped.
+      expect(guarded.suggestions[guardC.id]).toEqual([guardA.id]);
+      expect(guarded.applied.map((e) => e.taskId)).toEqual([guardB.id]);
+      expect(guarded.applied[0]?.added).toEqual([guardA.id]);
+
+      const listed2 = JSON.parse(
+        (await taskList.execute({ planId: plan2.id }, harness.toolCtx("ses_jev_deps_2"))).content,
+      ) as Array<{ id: string; status: string; dependencies: string[] }>;
+      const doneC = listed2.find((t) => t.id === guardC.id);
+      expect(doneC?.status).toBe("done");
+      expect(doneC?.dependencies).toEqual([]);
+      expect(listed2.find((t) => t.id === guardB.id)?.dependencies).toContain(guardA.id);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Memory tools (mem_*) — end-to-end smoke through the v2 registration path.
+ *
+ * Each test points NDOMO_MEM_STORAGE_PATH at its own tmp dir so the
+ * module-level FlexSearch cache (keyed by `storagePath::projectTag`) is never
+ * shared across tests, and uses unique content to avoid any stale index hit.
+ */
+describe("memory tools (mem_*)", () => {
+  // Captured at module load (pre-test values) so each test restores the env it
+  // touched — an unreleased NDOMO_HTTP_ENABLED would leak into later files.
+  const priorEnv = {
+    storage: process.env.NDOMO_MEM_STORAGE_PATH,
+    skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
+    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
+  };
+  const restoreEnv = (key: string, value: string | undefined): void => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  };
+  let memDir: string;
+
+  beforeEach(() => {
+    memDir = mkdtempSync(join(tmpdir(), "ndomo-mem-"));
+    process.env.NDOMO_MEM_STORAGE_PATH = memDir;
+  });
+
+  afterEach(() => {
+    restoreEnv("NDOMO_MEM_STORAGE_PATH", priorEnv.storage);
+    restoreEnv("NDOMO_SKIP_FRONTMATTER_SYNC", priorEnv.skipFrontmatter);
+    restoreEnv("NDOMO_HTTP_ENABLED", priorEnv.httpEnabled);
+    rmSync(memDir, { recursive: true, force: true });
+  });
+
+  test("mem_add → mem_search → dedup → mem_list → mem_stats → mem_forget round-trip", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-mem-"));
+    process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
+    process.env.NDOMO_HTTP_ENABLED = "false";
+    const harness = makePluginHarness(projectDir);
+    const cleanup = await NdomoPlugin.setup(harness.ctx);
+    if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
+    try {
+      const find = (name: string) => {
+        const tool = harness.tools.find((t) => t.name === name);
+        if (!tool) throw new Error(`tool not registered: ${name}`);
+        return tool;
+      };
+      const content = `smoke memory alpha unique-${Date.now()}-${Math.random()}`;
+
+      const added = JSON.parse(
+        (await find("mem_add").execute({ content }, harness.toolCtx("ses_mem"))).content,
+      ) as { id: string; deduplicated: boolean; projectTag: string };
+      expect(added.deduplicated).toBe(false);
+      expect(typeof added.id).toBe("string");
+      expect(added.projectTag).toMatch(/^ndomo_project_/);
+
+      const searched = JSON.parse(
+        (await find("mem_search").execute({ query: "alpha" }, harness.toolCtx("ses_mem"))).content,
+      ) as { results: Array<{ id: string; content: string }>; count: number; scope: string };
+      expect(searched.count).toBeGreaterThanOrEqual(1);
+      expect(searched.results.some((r) => r.content.includes(content))).toBe(true);
+
+      // Same exact content → deduplicated, same id.
+      const again = JSON.parse(
+        (await find("mem_add").execute({ content }, harness.toolCtx("ses_mem"))).content,
+      ) as { id: string; deduplicated: boolean };
+      expect(again.deduplicated).toBe(true);
+      expect(again.id).toBe(added.id);
+
+      const listed = JSON.parse(
+        (await find("mem_list").execute({}, harness.toolCtx("ses_mem"))).content,
+      ) as { memories: Array<{ id: string }>; total: number; scope: string };
+      expect(listed.total).toBeGreaterThanOrEqual(1);
+
+      const stats = JSON.parse(
+        (await find("mem_stats").execute({}, harness.toolCtx("ses_mem"))).content,
+      ) as { stats: { total: number }; scope: string };
+      expect(stats.stats.total).toBeGreaterThanOrEqual(1);
+
+      const forgotten = JSON.parse(
+        (await find("mem_forget").execute({ id: added.id }, harness.toolCtx("ses_mem"))).content,
+      ) as { id: string; removed: boolean };
+      expect(forgotten.removed).toBe(true);
+
+      const after = JSON.parse(
+        (await find("mem_search").execute({ query: "alpha" }, harness.toolCtx("ses_mem"))).content,
+      ) as { count: number };
+      expect(after.count).toBe(0);
     } finally {
       await cleanup();
       rmSync(projectDir, { recursive: true, force: true });

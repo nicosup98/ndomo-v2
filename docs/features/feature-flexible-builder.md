@@ -405,8 +405,8 @@ Tabla de routing actual (`agents/craftsman.md:151-164`) incluye:
 - Si >5 archivos o requiere diseño → continuar con planificación
 
 #### Paso 2: Exploración
-- `memory({mode:"search", scope:"project"})` — decisiones pasadas
-- `memory({mode:"search", scope:"all-projects"})` — conocimiento cross-proyecto
+- `mem_search({query: "...", scope:"project"})` — decisiones pasadas
+- `mem_search({query: "...", scope:"all-projects"})` — conocimiento cross-proyecto
 - Delegar a subagentes según necesidad:
   - `scout` — mapear repo, encontrar archivos, detectar stack
   - `scribe` — investigar APIs, versiones, docs externas

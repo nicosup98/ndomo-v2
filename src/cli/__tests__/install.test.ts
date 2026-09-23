@@ -432,7 +432,7 @@ describe("stepRegisterPlugins", () => {
     writeFileSync(opencodePath, JSON.stringify({ plugin: ["existing-plugin"] }));
 
     const config: NdomoConfig = {
-      plugins: ["ndomo", "opencode-mem"],
+      plugins: ["ndomo", "test-plugin"],
       optionalPlugins: ["@tarquinen/opencode-dcp"],
     };
 
@@ -440,7 +440,7 @@ describe("stepRegisterPlugins", () => {
 
     const written = JSON.parse(readFileSync(opencodePath, "utf-8"));
     expect(written.plugins).toContain("ndomo");
-    expect(written.plugins).toContain("opencode-mem");
+    expect(written.plugins).toContain("test-plugin");
     expect(written.plugins).toContain("@tarquinen/opencode-dcp");
     expect(written.plugins).toContain("existing-plugin");
   });
@@ -450,7 +450,7 @@ describe("stepRegisterPlugins", () => {
     writeFileSync(opencodePath, JSON.stringify({ plugins: [] }));
 
     const config: NdomoConfig = {
-      plugins: ["ndomo", "opencode-mem"],
+      plugins: ["ndomo", "test-plugin"],
     };
 
     stepRegisterPlugins(configDir, config, backupDir, false);
@@ -666,7 +666,7 @@ describe("idempotency", () => {
     const opencodePath = join(configDir, "opencode.json");
     writeFileSync(opencodePath, JSON.stringify({ plugins: [] }));
 
-    const config: NdomoConfig = { plugins: ["ndomo", "opencode-mem"] };
+    const config: NdomoConfig = { plugins: ["ndomo", "test-plugin"] };
 
     stepRegisterPlugins(configDir, config, backupDir, false);
     const first = readFileSync(opencodePath, "utf-8");

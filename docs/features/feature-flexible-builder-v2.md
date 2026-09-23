@@ -420,7 +420,7 @@ seguridad, acciones irreversibles o ambigüedad multi-paso.
 - Si >5 archivos o requiere diseño → continuar con planificación
 
 #### Paso 2: Exploración
-- `memory({mode:"search", scope:"project"})` — decisiones pasadas
+- `mem_search({query: "...", scope:"project"})` — decisiones pasadas
 - Delegar a subagentes según necesidad:
   - `scout` — mapear repo, encontrar archivos, detectar stack
   - `scribe` — investigar APIs, versiones, docs externas

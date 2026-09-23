@@ -78,16 +78,16 @@ Tu trabajo es devolver respuestas fundamentadas con fuentes verificables, snippe
 - Marca si la respuesta está aceptada, votada, o es solo una sugerencia.
 - Devuelve: enlace + resumen de la solución + voto de la comunidad + confianza.
 
-### 5. Integración de Memoria (opencode-mem)
+### 5. Integración de Memoria (mem_* tools)
 
 #### Recuperación de Conocimiento Previo:
 - Antes de buscar externamente, consulta memoria existente:
-  - `memory({mode:"search", query, scope:"project"})` — decisiones previas del proyecto actual.
-  - `memory({mode:"search", query, scope:"all-projects"})` — conocimiento cross-proyecto.
+  - `mem_search({query, scope: "project"})` — decisiones previas del proyecto actual.
+  - `mem_search({query, scope: "all-projects"})` — conocimiento cross-proyecto.
 - Si hay hit en memoria, úsalo como base y verifica siguiendo vigente con búsqueda externa rápida.
 
 #### Almacenamiento de Conocimiento Nuevo:
-- Antes de `memory({mode:"add", content})`, comprime el contenido a formato caveman:
+- Antes de `mem_add({content})`, comprime el contenido a formato caveman:
   - Elimina artículos (el, la, un, una, los, las).
   - Normaliza whitespace (sin líneas vacías múltiples).
   - Reduce a fragmentos técnicos densos.

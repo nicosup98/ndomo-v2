@@ -1,39 +1,70 @@
 # Integration Guide
 
-## opencode-mem (required)
+## Embedded Memory (built-in)
 
-opencode-mem is a persistent memory system for OpenCode. It provides a local vector database (SQLite + USearch) with semantic search across sessions.
-
-**License:** MIT
+ndomo ships its own persistent memory system — no external service required. It embeds
+**bun:sqlite** (one database per project, WAL mode) as the source of truth and
+**FlexSearch** (in-process, per-project document index) for full-text ranking.
+There is no web UI and no separate daemon — everything runs inside the plugin process.
 
 ### What it is
 
-opencode-mem stores and retrieves developer knowledge across sessions. ndomo uses it as the primary persistence layer — every agent stores and searches memories before planning or executing tasks.
+ndomo memory stores and retrieves developer knowledge across sessions. Every agent can
+store and search memories before planning or executing tasks. Dedup is exact: re-adding
+the same text returns the existing record (`content_hash` = sha256 of trimmed content).
 
 ### How ndomo uses it
 
-The foreman searches memory before every planning cycle:
+Agents consult memory before planning or exploring:
 
-1. **Project search** — `memory({mode:"search", query, scope:"project"})` retrieves past decisions from the current project.
-2. **Cross-project search** — `memory({mode:"search", query, scope:"all-projects"})` retrieves knowledge from all projects.
-3. **Compressed storage** — before calling `memory({mode:"add"})`, ndomo compresses content using caveman regex patterns (0 LLM tokens).
+1. **Project search** — `mem_search({query, scope: "project"})` retrieves past decisions from the current project.
+2. **Cross-project search** — `mem_search({query, scope: "all-projects"})` retrieves knowledge from all projects.
+3. **Compressed storage** — before calling `mem_add`, ndomo compresses content with caveman regex patterns (`memory_compress`, 0 LLM tokens).
+
+### Storage layout
+
+| Path | Purpose |
+|---|---|
+| `~/.ndomo/mem/projects/<projectTag>.db` | One SQLite DB per project (WAL). Tables: `memories`, `memory_tags`, `schema_version` |
+| `~/.ndomo/mem/` | Storage root; configurable via `mem.storagePath` or the `NDOMO_MEM_STORAGE_PATH` env var |
+
+Project identity tags (`ndomo_project_<sha256(...).slice(0,16)>`) are derived from the
+git common dir → remote URL → normalized path, in that order of precedence; user tags
+(`ndomo_user_<sha256(email)>`) from the git email. The same project always resolves to
+the same DB regardless of the working directory.
 
 ### Tool usage
 
-| Mode | Call | Purpose |
+| Tool | Call | Purpose |
 |---|---|---|
-| search | `memory({mode:"search", query, scope:"project"})` | Search current project memories |
-| search | `memory({mode:"search", query, scope:"all-projects"})` | Search all project memories |
-| add | `memory({mode:"add", content, topic})` | Store a new memory entry |
-| add | `memory({mode:"add", content, topic, tags})` | Store with tags for filtering |
+| add | `mem_add({content, type?, tags?, pinned?})` | Store a memory; returns `{id, deduplicated, projectTag}` |
+| search | `mem_search({query, scope?, type?, tag?, limit?})` | Ranked full-text search; returns `{results, count, scope}` with `score` + `excerpt` |
+| list | `mem_list({scope?, type?, tag?, limit?, offset?})` | List memories (pinned first, newest first) |
+| forget | `mem_forget({id})` | Delete a memory by id |
+| stats | `mem_stats({scope?})` | Aggregate stats: `{total, byType, byTag, pinned, oldest, newest}` |
+| compress | `memory_compress({text})` | Pre-storage caveman compression (regex, 0 LLM tokens) |
 
-### Web UI
+`scope` is `"project"` (default) or `"all-projects"`. Ranking uses FlexSearch over
+content/tags/type fields; the excerpt is ±80 chars around the first query term and the
+index is rebuilt lazily from SQLite per process — deliberately not persisted.
 
-opencode-mem includes a web UI at `http://localhost:4747` for browsing and managing memory entries.
+### Migration from legacy shards
+
+If you used the previous memory backend, run the one-shot migration:
+
+```bash
+bun scripts/migrate-memory.ts [--dry-run] [--source <dir>] [--target <dir>]
+```
+
+Defaults: `--source ~/.opencode-mem/data/projects`, `--target ~/.ndomo/mem`.
+Idempotent (dedup by `content_hash`); the legacy `opencode_` tag prefix is remapped to
+`ndomo_` and provenance is recorded in `metadata.migratedFrom`. Prints a JSON report
+`{source, target, dryRun, projects, migrated, skipped, errors}`; exits 1 if any errors.
 
 ### Config
 
-See [configuration.md](configuration.md#memory-config) for memory-specific settings (`storagePath`, `defaultScope`, `autoCaptureEnabled`, `cavemanCompress`).
+See [configuration.md](configuration.md#memory-config) for memory settings
+(`storagePath`, `defaultScope`, `autoCaptureEnabled`, `cavemanCompress`).
 
 ## DCP (optional)
 
@@ -101,22 +132,14 @@ All compression is regex-based — zero LLM tokens consumed for compression. The
 
 ## Troubleshooting
 
-### opencode-mem not found
+### Memory DB not found / empty search results
 
-```
-Error: Cannot find module 'opencode-mem'
-```
+Memories live in `~/.ndomo/mem/projects/*.db`. If `mem_search` returns nothing:
 
-Ensure opencode-mem is installed. ndomo lists it as a dependency in `package.json` — `bun install` should install it automatically. If not: `bun add opencode-mem`.
-
-### Web UI not accessible
-
-```
-curl http://localhost:4747
-Connection refused
-```
-
-Verify opencode-mem is running. Start it manually: `npx opencode-mem serve`. Default port is 4747.
+1. Verify the storage path: `mem.storagePath` in `ndomo.json`, or the `NDOMO_MEM_STORAGE_PATH` env var.
+2. Check the DB exists: `ls ~/.ndomo/mem/projects/` (one file per project tag).
+3. The FlexSearch index rebuilds lazily on first search — a fresh process picks up rows written by a previous one automatically.
+4. No migration needed for new installs; run `bun scripts/migrate-memory.ts` only if you are upgrading from the previous backend.
 
 ### DCP commands not available
 

@@ -1,10 +1,10 @@
 # ndomo
 
-Plugin multi-agente para OpenCode. Taller de artesanos: 19 especialistas bajo un Foreman, un Craftsman y un Warden. Nativo en caveman. opencode-mem integrado. DCP peer opcional.
+Plugin multi-agente para OpenCode. Taller de artesanos: 19 especialistas bajo un Foreman, un Craftsman y un Warden. Nativo en caveman. Memoria embedded (bun:sqlite + FlexSearch). DCP peer opcional.
 
 ## Qué es ndomo
 
-ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.com/opencode-ai). Enruta tareas de desarrollo a 19 agentes especializados (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler, y ops agents) coordinados por 3 primaries: Foreman (planificación), Craftsman (implementación), Warden (operaciones). Todos los agentes usan el protocolo de salida Caveman para comunicación eficiente en tokens. La persistencia de memoria entre sesiones la gestiona opencode-mem. El plugin opcional DCP proporciona poda de contexto adicional para sesiones largas.
+ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.com/opencode-ai). Enruta tareas de desarrollo a 19 agentes especializados (scout, scribe, painter, smith, sage, guild, stack-smiths, inspector, chronicler, y ops agents) coordinados por 3 primaries: Foreman (planificación), Craftsman (implementación), Warden (operaciones). Todos los agentes usan el protocolo de salida Caveman para comunicación eficiente en tokens. La persistencia de memoria entre sesiones la gestiona el store de memoria embedded de ndomo (bun:sqlite + FlexSearch, una DB SQLite por proyecto). El plugin opcional DCP proporciona poda de contexto adicional para sesiones largas.
 
 ## Agentes
 
@@ -146,7 +146,7 @@ Ver [docs/configuration.md](docs/configuration.md) para referencia completa. Los
 
 ## Skills
 
-ndomo incluye 7 skills en `skills/`:
+ndomo incluye 6 skills en `skills/`:
 
 | Skill | Descripción |
 |---|---|
@@ -156,11 +156,10 @@ ndomo incluye 7 skills en `skills/`:
 | `reflect` | Análisis de fricción en el flujo de trabajo y extracción de patrones |
 | `worktrees` | Gestión de git worktrees para carriles aislados de desarrollo |
 | `dcp-integration` | Guía de integración de Dynamic Context Pruning |
-| `mem-recall` | Uso de herramientas opencode-mem y patrones de recuperación |
 
 ## Integraciones
 
-- **opencode-mem** (requerido) — memoria persistente con SQLite + USearch vector DB. Interfaz web en `:4747`. Todos los agentes comprimen recuerdos antes de almacenar usando compresión caveman vía regex (0 tokens de LLM).
+- **Memoria embedded** (integrada) — memoria persistente con bun:sqlite + FlexSearch. Una DB SQLite por proyecto en `~/.ndomo/mem/projects/<projectTag>.db` (WAL). Tools: `mem_add`, `mem_search`, `mem_list`, `mem_forget`, `mem_stats`, y `memory_compress` (compresión caveman vía regex, 0 tokens de LLM). Los shards de memoria legacy pueden migrarse con `bun scripts/migrate-memory.ts`.
 - **DCP** (opcional) — `@tarquinen/opencode-dcp` para poda dinámica de contexto. Licencia AGPL-3.0. Se instala con flag `--with-dcp`.
 
 Ver [docs/integrations.md](docs/integrations.md) para detalles.
@@ -177,4 +176,3 @@ MIT
 
 - Repositorio: `<repo-url>`
 - OpenCode: [https://github.com/opencode-ai](https://github.com/opencode-ai)
-- opencode-mem: [https://github.com/opencode-ai/opencode-mem](https://github.com/opencode-ai/opencode-mem)

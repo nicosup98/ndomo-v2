@@ -470,13 +470,18 @@ export function reassignTask(
 
 /**
  * Generic task field updater — covers fields NOT handled by updateTaskStatus:
- * description, files, complexity, metadata.
+ * description, files, complexity, dependencies, metadata.
  * Does NOT touch status/agent (use updateTaskStatus/reassignTask for those).
+ *
+ * `dependencies` is written RAW (no merge with the existing array). The caller
+ * is responsible for computing the merged/union list it wants persisted — this
+ * keeps the function a dumb column writer and lets the dependency-analysis
+ * tooling (validate_task_dependencies) own the merge policy.
  */
 export function updateTaskFields(
   db: Database,
   taskId: string,
-  fields: Partial<Pick<PlanTask, "description" | "files" | "complexity">> & {
+  fields: Partial<Pick<PlanTask, "description" | "files" | "complexity" | "dependencies">> & {
     metadata?: Record<string, unknown>;
   },
   opts: { updatedBy: string },
@@ -495,6 +500,11 @@ export function updateTaskFields(
   if (fields.complexity !== undefined) {
     sets.push("complexity = ?");
     args.push(fields.complexity);
+  }
+  if (fields.dependencies !== undefined) {
+    // Raw replace (no merge) — caller owns the union/merge policy.
+    sets.push("dependencies = ?");
+    args.push(JSON.stringify(fields.dependencies));
   }
   if (fields.metadata !== undefined) {
     // Deep merge with existing metadata

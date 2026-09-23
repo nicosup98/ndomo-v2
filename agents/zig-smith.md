@@ -1,7 +1,7 @@
 ---
 description: Especialista en Zig (Zig Architect & Systems Engineer)
 mode: subagent
-model: opencode-go/deepseek-v4.1-flash
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.1
 permission:
   edit: allow

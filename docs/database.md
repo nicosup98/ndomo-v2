@@ -18,8 +18,9 @@ Survives OpenCode restarts. Indexed with FTS5 for full-text search.
 
 ### What is NOT stored here
 
-- `~/.ndomo/mem/` is the **opencode-mem** plugin's storage (USearch vector DB
-  for semantic memory, configured via `ndomo.json` `mem.storagePath`)
+- `~/.ndomo/mem/projects/<projectTag>.db` is ndomo's **embedded memory** store
+  (bun:sqlite + FlexSearch, one DB per project, WAL mode — configured via
+  `ndomo.json` `mem.storagePath`). See [Embedded memory store](#embedded-memory-store-ndomomem) below.
 - `docs/plans/<slug>.md` is the **opencode-planning-toolkit** markdown storage
   (different system, simpler, git-friendly)
 - The ndomo DB archive output goes to `<project>/.ndomo/archives/plans/` (markdown snapshots)
@@ -286,11 +287,11 @@ Done
 | ndomo plugin DB | `<project>/.ndomo/state.db` (SQLite) | Structured plans with FTS5 search, audit trail, tag taxonomy, cascade archive |
 | ndomo plan archive | `<project>/.ndomo/archives/plans/<slug>-YYYY-MM-DD.md` (markdown) | Auto-generated snapshot on plan completion/failure; not configurable via `mem.storagePath` |
 | opencode-planning-toolkit | `docs/plans/<slug>.md` (markdown) | Lightweight plan notes, git-committable, human-readable |
-| opencode-mem | `~/.ndomo/mem/` (USearch vector DB) | Semantic memory for cross-session recall only — path controlled by `mem.storagePath`, does NOT affect plan archive |
+| ndomo embedded memory | `~/.ndomo/mem/projects/*.db` (SQLite + FlexSearch) | Cross-session memory recall — path controlled by `mem.storagePath`, does NOT affect plan archive |
 
 These are complementary. Use ndomo DB for orchestration (plans → tasks → sessions);
 use the plan archive for auto-generated markdown snapshots per project;
-use planning-toolkit for plan-as-document; use opencode-mem for semantic recall.
+use planning-toolkit for plan-as-document; use ndomo embedded memory for cross-session recall.
 
 ## Inspection
 
@@ -362,3 +363,67 @@ environments ←─── deployments ───→ releases
   `DROP TABLE` in FK-safe order: `rollback_executions` → `incidents` → `deployments` → `releases` → `environments`.
   Then decrement `schema_version` to 12.
 - **Indices**: all FK columns + status/severity/created_at have indices for query performance.
+
+## Embedded memory store (`~/.ndomo/mem`)
+
+Separate from `state.db`: memory lives in a **user-global SQLite store**, one DB per
+project, at `<storage>/projects/<projectTag>.db` (default `<storage>` = `~/.ndomo/mem`,
+overridable via `mem.storagePath` or `NDOMO_MEM_STORAGE_PATH`). WAL mode, synchronous NORMAL,
+auto-vacuum INCREMENTAL (`src/mem/store.ts:113-123`). It never touches `.ndomo/state.db`
+nor any plan/task/session table (`src/mem/schema.ts:4-6`).
+
+### Identity tags
+
+- **Project tag:** `ndomo_project_<sha256(identity).slice(0,16)>` — identity precedence:
+  git common dir (realpath) → remote URL → normalized path (`src/mem/tags.ts:124-134`).
+- **User tag:** `ndomo_user_<sha256(email)>` (fallback: git name → `$USER`/`$USERNAME` → `"anonymous"`).
+
+### Schema (v1, `MEM_SCHEMA_VERSION = 1`)
+
+Idempotent `ensureMemSchema()` runs on every DB open (`src/mem/schema.ts:14-50`).
+
+#### `memories`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID v4 |
+| `content` | TEXT NOT NULL | Raw memory text (pre-compression by agents) |
+| `type` | TEXT NOT NULL | Default `'note'` |
+| `project_tag` | TEXT NOT NULL | `ndomo_project_<hash16>` |
+| `project_path` / `project_name` / `git_repo_url` | TEXT | Project metadata at insert time |
+| `user_name` / `user_email` | TEXT | Identity metadata at insert time |
+| `content_hash` | TEXT NOT NULL UNIQUE | sha256 of trimmed content — exact-dedup key |
+| `is_pinned` | INTEGER NOT NULL | Default 0; pinned memories sort first |
+| `source` | TEXT NOT NULL | Default `'manual'`; `'migration'` for migrated rows |
+| `created_at` / `updated_at` | INTEGER | Epoch ms |
+| `metadata` | TEXT | JSON blob (nullable) |
+
+#### `memory_tags` (M:N)
+
+| Column | Type | Notes |
+|---|---|---|
+| `memory_id` | TEXT NOT NULL | FK → `memories(id)` ON DELETE CASCADE |
+| `tag` | TEXT NOT NULL | PK `(memory_id, tag)` |
+
+#### `schema_version`
+
+| Column | Type | Notes |
+|---|---|---|
+| `version` | INTEGER PK | `1` inserted via `INSERT OR IGNORE` |
+
+Indexes: `idx_memories_created_at`, `idx_memories_type`, `idx_memories_pinned_created`,
+`idx_memory_tags_tag` (`src/mem/schema.ts:46-49`).
+
+### Search layer
+
+FlexSearch (in-process) ranks a project's memories; the index is **not persisted** —
+rebuilt lazily from SQLite on first search per process and kept coherent via
+incremental `indexMemory` / `removeFromIndex` on writes (`src/mem/search.ts:9-15`).
+Score is `1 / (rank + 1)`; excerpts are ±80 chars around the first query term.
+
+### Tools
+
+`mem_add`, `mem_search`, `mem_list`, `mem_forget`, `mem_stats`, `memory_compress` —
+registered in the plugin (`src/plugin.ts:1251-1394`). See
+[docs/integrations.md](integrations.md#embedded-memory-built-in) for the tool reference
+and [docs/configuration.md](configuration.md#memory-config) for `mem.*` settings.

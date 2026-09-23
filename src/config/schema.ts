@@ -209,13 +209,9 @@ export function loadJevConfig(configPath?: string): JevConfig {
   return {
     enabled: typeof obj.enabled === "boolean" ? obj.enabled : JEV_DEFAULTS.enabled,
     model:
-      typeof obj.model === "string" && obj.model.trim().length > 0
-        ? obj.model
-        : JEV_DEFAULTS.model,
+      typeof obj.model === "string" && obj.model.trim().length > 0 ? obj.model : JEV_DEFAULTS.model,
     timeoutMs:
-      typeof obj.timeoutMs === "number" &&
-      Number.isFinite(obj.timeoutMs) &&
-      obj.timeoutMs > 0
+      typeof obj.timeoutMs === "number" && Number.isFinite(obj.timeoutMs) && obj.timeoutMs > 0
         ? Math.floor(obj.timeoutMs)
         : JEV_DEFAULTS.timeoutMs,
   };

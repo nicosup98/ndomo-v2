@@ -64,6 +64,7 @@ import {
   resolveTaskDependencies,
   searchTasks,
   type TaskCreateInput,
+  updateTaskFields,
   updateTaskStatus,
 } from "./db/tasks.ts";
 import type {
@@ -84,13 +85,29 @@ import {
   canRunParallel,
   cavemanCompress,
   createWorktree,
-  getProjectTag,
   listActive,
-  memorySearchOptions,
   removeWorktree,
   routeTask,
   verifyIntegrity,
 } from "./lib.ts";
+import { indexMemory, removeFromIndex, searchMemories } from "./mem/search.ts";
+import {
+  addMemory,
+  deleteMemory,
+  type ListMemoriesOptions,
+  listMemories,
+  listProjectDbs,
+  type MemIdentity,
+  type MemRecord,
+  type MemStats,
+  openMemDb,
+  statsMemories,
+} from "./mem/store.ts";
+import { getProjectTagInfo, getUserTagInfo } from "./mem/tags.ts";
+import { analyzeTaskDependencies, type TaskDepInput } from "./orchestrator/jev-deps.ts";
+import { classifyIntentWithJev } from "./orchestrator/jev-intent.ts";
+import { classifyCodeRiskWithJev } from "./orchestrator/jev-risk.ts";
+import { classifyTestsWithJev } from "./orchestrator/jev-tests.ts";
 import { getSdkClient } from "./sdk/client.ts";
 
 // ─── v1 → v2 tool adapter ────────────────────────────────────────────────────
@@ -606,6 +623,70 @@ export function syncAgentFrontmatter(
   return { synced, skipped, errors };
 }
 
+// ─── Memory tool helpers ─────────────────────────────────────────────────────
+
+/**
+ * Build the {@link MemIdentity} for a directory: project tag/path/name from
+ * {@link getProjectTagInfo} plus the current user. Conditional spreads keep the
+ * optional fields absent (rather than `undefined`) so the object stays valid
+ * under `exactOptionalPropertyTypes`.
+ */
+function resolveMemIdentity(directory: string): MemIdentity {
+  const project = getProjectTagInfo(directory);
+  const user = getUserTagInfo();
+  return {
+    projectTag: project.tag,
+    projectPath: project.projectPath,
+    projectName: project.projectName,
+    ...(project.gitRepoUrl ? { gitRepoUrl: project.gitRepoUrl } : {}),
+    ...(user.userName ? { userName: user.userName } : {}),
+    ...(user.userEmail ? { userEmail: user.userEmail } : {}),
+  };
+}
+
+/**
+ * Open a project's memory DB, run `fn`, and always close the handle. The single
+ * open/close point for every mem_* tool keeps handle leaks impossible.
+ */
+function withMemDb<T>(projectTag: string, storagePath: string, fn: (db: Database) => T): T {
+  const db = openMemDb(projectTag, storagePath);
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
+/** Merge per-project stats across every DB under `storagePath` (all-projects scope). */
+function aggregateMemStats(storagePath: string): MemStats {
+  let total = 0;
+  let pinned = 0;
+  let oldest: number | null = null;
+  let newest: number | null = null;
+  const byType: Record<string, number> = {};
+  const byTag: Record<string, number> = {};
+
+  for (const { tag } of listProjectDbs(storagePath)) {
+    const stats = withMemDb(tag, storagePath, (db) => statsMemories(db));
+    total += stats.total;
+    pinned += stats.pinned;
+    for (const [key, value] of Object.entries(stats.byType)) {
+      byType[key] = (byType[key] ?? 0) + value;
+    }
+    for (const [key, value] of Object.entries(stats.byTag)) {
+      byTag[key] = (byTag[key] ?? 0) + value;
+    }
+    if (stats.oldest !== null) {
+      oldest = oldest === null ? stats.oldest : Math.min(oldest, stats.oldest);
+    }
+    if (stats.newest !== null) {
+      newest = newest === null ? stats.newest : Math.max(newest, stats.newest);
+    }
+  }
+
+  return { total, byType, byTag, pinned, oldest, newest };
+}
+
 // ─── Plugin entry ────────────────────────────────────────────────────────────
 
 export const NdomoPlugin = Plugin.define({
@@ -628,6 +709,11 @@ export const NdomoPlugin = Plugin.define({
     if (ndomoConfig) {
       syncAgentFrontmatter(ndomoConfig, effectivePreset);
     }
+
+    // Memory config — env override wins so tests/CI can point at a tmp dir.
+    const memStoragePath =
+      process.env.NDOMO_MEM_STORAGE_PATH ?? ndomoConfig?.mem?.storagePath ?? "~/.ndomo/mem";
+    const memDefaultScope = ndomoConfig?.mem?.defaultScope ?? "project";
 
     // HTTP config — merge from ndomoConfig.http or load from environment variables
     const httpConfig = ndomoConfig?.http ?? loadHttpConfig();
@@ -961,6 +1047,106 @@ export const NdomoPlugin = Plugin.define({
         },
       }),
 
+      classify_intent: tool({
+        description:
+          "Classify a user prompt with JEV: intent (bugfix|feature|refactor|question|other|none) and recommended flow (answer|adhoc|plan|none). Advisory only — never overrides agent judgment. Returns JSON decision with per-field validation, or null when JEV is unavailable/disabled.",
+        args: {
+          prompt: z.string(),
+          context: z.string().optional(),
+        },
+        execute: async (args) => {
+          const result = await classifyIntentWithJev(
+            { prompt: args.prompt, ...(args.context !== undefined && { context: args.context }) },
+            jevConfig,
+          );
+          return JSON.stringify(result);
+        },
+      }),
+
+      classify_tests: tool({
+        description:
+          "Parse test-runner output (bun/vitest/jest/pytest/go) and classify the battery verdict (green|red|mixed|none). Deterministic parser first; JEV resolves ambiguous/unparsed results. Advisory evidence only.",
+        args: {
+          output: z.string(),
+          exitCode: z.number().optional(),
+          expectedTests: z.array(z.string()).optional(),
+          runner: z.enum(["bun", "vitest", "jest", "pytest", "go", "unknown"]).optional(),
+          context: z.string().optional(),
+        },
+        execute: async (args) => {
+          const result = await classifyTestsWithJev(
+            {
+              output: args.output,
+              ...(args.exitCode !== undefined && { exitCode: args.exitCode }),
+              ...(args.expectedTests !== undefined && { expectedTests: args.expectedTests }),
+              ...(args.runner !== undefined && { runner: args.runner }),
+              ...(args.context !== undefined && { context: args.context }),
+            },
+            jevConfig,
+          );
+          return JSON.stringify(result);
+        },
+      }),
+
+      code_traffic_light: tool({
+        description:
+          "Scan a unified diff for obvious risk patterns (hardcoded secrets, injection, shell, filesystem, XSS...) and classify a traffic light (green|yellow|red|none). Deterministic catalog first; JEV refines low/medium findings. Advisory evidence only.",
+        args: {
+          diff: z.string(),
+          context: z.string().optional(),
+        },
+        execute: async (args) => {
+          const result = await classifyCodeRiskWithJev(
+            { diff: args.diff, ...(args.context !== undefined && { context: args.context }) },
+            jevConfig,
+          );
+          return JSON.stringify(result);
+        },
+      }),
+
+      validate_task_dependencies: tool({
+        description:
+          "Analyze pair-wise dependencies between tasks of a plan (cap 8 tasks / 28 pairs; deterministic hints: shared files + keywords after/depends/requires/once/then/builds-on) and classify each pair (a_first|b_first|independent|none) via JEV. Code builds the DAG, topological waves and merges suggestions (never-throw; rules fallback if JEV unavailable). With apply=true, merges suggested dependencies into PENDING tasks only (union with explicit deps). Advisory unless apply is true.",
+        args: {
+          planId: z.string(),
+          apply: z.boolean().optional(),
+        },
+        execute: async (args, ctx) => {
+          const tasks = listTasksByPlan(db, args.planId);
+          const input: TaskDepInput[] = tasks.map((t) => ({
+            id: t.id,
+            description: t.description,
+            ...(t.files && t.files.length > 0 && { files: t.files }),
+            ...(t.orderIndex !== undefined && { orderIndex: t.orderIndex }),
+          }));
+          const decision = await analyzeTaskDependencies(input, jevConfig);
+          const applied: Array<{ taskId: string; added: string[]; dependencies: string[] }> = [];
+          if (args.apply) {
+            for (const [taskId, suggested] of Object.entries(decision.suggestions)) {
+              const task = tasks.find((t) => t.id === taskId);
+              if (!task || task.status !== "pending") continue;
+              const merged = [...(task.dependencies ?? [])];
+              const added: string[] = [];
+              for (const dep of suggested) {
+                if (!merged.includes(dep)) {
+                  merged.push(dep);
+                  added.push(dep);
+                }
+              }
+              if (added.length === 0) continue;
+              updateTaskFields(
+                db,
+                taskId,
+                { dependencies: merged },
+                { updatedBy: ctx.agent ?? "validate_task_dependencies" },
+              );
+              applied.push({ taskId, added, dependencies: merged });
+            }
+          }
+          return JSON.stringify({ ...decision, applied });
+        },
+      }),
+
       // ── Background dispatch ────────────────────────────────────────────
 
       dispatch: tool({
@@ -1062,21 +1248,6 @@ export const NdomoPlugin = Plugin.define({
 
       // ── Memory ─────────────────────────────────────────────────────────
 
-      memory_search: tool({
-        description:
-          "Build memory search options for opencode-mem. The foreman agent passes the result to its mem tool.",
-        args: {
-          query: z.string(),
-          scope: z.enum(["project", "all-projects"]).optional(),
-        },
-        execute: async (args, ctx) => {
-          const tag = getProjectTag(ctx.directory);
-          const compressedQuery = cavemanCompress(args.query);
-          const options = memorySearchOptions(compressedQuery, args.scope ?? "project");
-          return JSON.stringify({ tag, options });
-        },
-      }),
-
       memory_compress: tool({
         description: "Compress arbitrary text into caveman format.",
         args: {
@@ -1089,6 +1260,136 @@ export const NdomoPlugin = Plugin.define({
             compressed: result.length,
             result,
           });
+        },
+      }),
+
+      mem_add: tool({
+        description:
+          "Add a memory to the current project. Deduplicates by exact content: re-adding the same text returns the existing id.",
+        args: {
+          content: z.string(),
+          type: z.string().optional(),
+          tags: z.array(z.string()).optional(),
+          pinned: z.boolean().optional(),
+        },
+        execute: async (args, ctx) => {
+          const identity = resolveMemIdentity(ctx.directory);
+          const { memory, deduplicated } = withMemDb(identity.projectTag, memStoragePath, (db) =>
+            addMemory(db, {
+              content: args.content,
+              ...(args.type ? { type: args.type } : {}),
+              ...(args.tags ? { tags: args.tags } : {}),
+              ...(args.pinned !== undefined ? { pinned: args.pinned } : {}),
+              identity,
+            }),
+          );
+          if (!deduplicated) indexMemory(memStoragePath, identity.projectTag, memory);
+          return JSON.stringify({
+            id: memory.id,
+            deduplicated,
+            projectTag: identity.projectTag,
+          });
+        },
+      }),
+
+      mem_search: tool({
+        description:
+          "Search memories in the current project (or across all projects) with FlexSearch ranking.",
+        args: {
+          query: z.string(),
+          scope: z.enum(["project", "all-projects"]).optional(),
+          type: z.string().optional(),
+          tag: z.string().optional(),
+          limit: z.number().int().positive().optional(),
+        },
+        execute: async (args, ctx) => {
+          const scope = args.scope ?? memDefaultScope;
+          const limit = args.limit ?? 10;
+          const results = searchMemories(
+            memStoragePath,
+            getProjectTagInfo(ctx.directory).tag,
+            args.query,
+            {
+              scope,
+              ...(args.type ? { type: args.type } : {}),
+              ...(args.tag ? { tag: args.tag } : {}),
+              limit,
+            },
+          );
+          return JSON.stringify({ results, count: results.length, scope });
+        },
+      }),
+
+      mem_list: tool({
+        description: "List memories in the current project (or across all projects).",
+        args: {
+          scope: z.enum(["project", "all-projects"]).optional(),
+          type: z.string().optional(),
+          tag: z.string().optional(),
+          limit: z.number().int().positive().optional(),
+          offset: z.number().int().min(0).optional(),
+        },
+        execute: async (args, ctx) => {
+          const scope = args.scope ?? memDefaultScope;
+          const limit = args.limit ?? 20;
+          const offset = args.offset ?? 0;
+          const filters: ListMemoriesOptions = {
+            ...(args.type ? { type: args.type } : {}),
+            ...(args.tag ? { tag: args.tag } : {}),
+          };
+
+          if (scope === "project") {
+            const projectTag = getProjectTagInfo(ctx.directory).tag;
+            const { memories, total } = withMemDb(projectTag, memStoragePath, (db) =>
+              listMemories(db, { ...filters, limit, offset }),
+            );
+            return JSON.stringify({ memories, total, scope });
+          }
+
+          const merged: MemRecord[] = [];
+          let total = 0;
+          for (const { tag } of listProjectDbs(memStoragePath)) {
+            const res = withMemDb(tag, memStoragePath, (db) =>
+              listMemories(db, { ...filters, limit: limit + offset }),
+            );
+            merged.push(...res.memories);
+            total += res.total;
+          }
+          merged.sort(
+            (a, b) => Number(b.isPinned) - Number(a.isPinned) || b.createdAt - a.createdAt,
+          );
+          return JSON.stringify({ memories: merged.slice(offset, offset + limit), total, scope });
+        },
+      }),
+
+      mem_forget: tool({
+        description: "Delete a memory by id from the current project.",
+        args: {
+          id: z.string(),
+        },
+        execute: async (args, ctx) => {
+          const projectTag = getProjectTagInfo(ctx.directory).tag;
+          const removed = withMemDb(projectTag, memStoragePath, (db) => deleteMemory(db, args.id));
+          if (removed) removeFromIndex(memStoragePath, projectTag, args.id);
+          return JSON.stringify({ id: args.id, removed });
+        },
+      }),
+
+      mem_stats: tool({
+        description:
+          "Aggregate memory statistics for the current project (or across all projects).",
+        args: {
+          scope: z.enum(["project", "all-projects"]).optional(),
+        },
+        execute: async (args, ctx) => {
+          const scope = args.scope ?? memDefaultScope;
+          const stats =
+            scope === "project"
+              ? withMemDb(getProjectTagInfo(ctx.directory).tag, memStoragePath, (db) =>
+                  statsMemories(db),
+                )
+              : aggregateMemStats(memStoragePath);
+          return JSON.stringify({ stats, scope });
         },
       }),
 

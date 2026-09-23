@@ -1,7 +1,7 @@
 /**
  * Pre-add caveman compression for memory entries.
  * Transforms verbose text into compressed caveman format before
- * storing in opencode-mem, saving tokens on retrieval.
+ * storing in ndomo embedded memory, saving tokens on retrieval.
  *
  * All compression is regex-based (0 LLM tokens).
  */

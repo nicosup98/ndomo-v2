@@ -155,6 +155,41 @@ Routing decisions are made by the scheduler (`src/orchestrator/scheduler.ts`):
 | implement | known stack | high | stack-smith + sage advisory |
 | any other | any | any | smith (fallback) |
 
+## JEV Configuration
+
+JEV (TypeSafe AI) is the optional LLM classifier behind four advisory MCP tools: `classify_intent`, `classify_tests`, `code_traffic_light`, and `validate_task_dependencies`. All four are deterministic-first, never throw, and return a deterministic fallback when JEV is unavailable — JEV only refines ambiguous classification.
+
+```json
+{
+  "jev": {
+    "enabled": true,
+    "model": "jev-latest",
+    "timeoutMs": 3000
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Master switch. `false` forces the deterministic path for all four tools. |
+| `model` | string | `"jev-latest"` | TypeSafe model identifier used for classification. |
+| `timeoutMs` | number | `3000` | Per-request timeout (AbortSignal). |
+
+The API key is **not** part of this config: it is read from the `TYPESAFE_API_KEY` environment variable only (see `src/orchestrator/jev.ts`). Without the key, JEV is a silent no-op and every tool falls back to deterministic rules — all four tools keep working identically, just without LLM refinement (`source` reports `"parser"`/`"rules"`/`"fallback"` instead of `"jev"`).
+
+### Tool usage examples
+
+- `classify_intent({prompt: "fix the broken login redirect"})` → `{intent: "bugfix", flow: "plan", warnings: []}` (or `null` when JEV is disabled/unavailable).
+- `classify_tests({output: "<bun output>", runner: "bun"})` → `{verdict: "green", source: "parser", runner: "bun", results: [...], counts: {total, pass, fail, skip, unresolved}, warnings: [...]}`.
+- `code_traffic_light({diff: "<unified diff>"})` → `{light: "red", source: "rules", findings: [{patternId, category, severity, file, line, snippet, description}], maxSeverity, truncated, warnings}`.
+- `validate_task_dependencies({planId: "<uuid>", apply: true})` → `{source: "rules"|"jev"|"hybrid", pairs, edges, waves, dropped, suggestions, truncated, warnings, applied}` — `apply: true` merges suggested dependencies into `pending` tasks only.
+
+### Caps
+
+- `classify_tests`: raw output truncated to the last 64 KiB, `expectedTests` capped at the first 50, JEV test questions capped at 20.
+- `code_traffic_light`: diff capped at 100 KiB (head-truncated).
+- `validate_task_dependencies`: max 8 tasks / 28 pairs per call.
+
 ## Caveman Settings
 
 ```json
@@ -206,15 +241,29 @@ Agents without explicit overrides use DCP defaults. The foreman monitors context
 
 | Field | Type | Description |
 |---|---|---|
-| `storagePath` | string | Directory for opencode-mem storage only. Does NOT control plan archive location. Supports `~` expansion. |
+| `storagePath` | string | Storage root for ndomo embedded memory. One SQLite DB per project at `<storagePath>/projects/<projectTag>.db`. Supports `~` expansion. Overridable via `NDOMO_MEM_STORAGE_PATH` (used by tests/CI). Does NOT control plan archive location. |
 | `defaultScope` | string | `"project"` — search only current project memories; `"all-projects"` — search across all projects. |
-| `autoCaptureEnabled` | boolean | Automatically capture insights during sessions without explicit `memory({mode:"add"})` calls. |
-| `cavemanCompress` | boolean | Apply caveman regex compression to memories before storage. Saves tokens on retrieval. |
+| `autoCaptureEnabled` | boolean | Automatically capture insights during sessions without explicit `mem_add` calls. |
+| `cavemanCompress` | boolean | Apply caveman regex compression to memories before storage (`memory_compress`). Saves tokens on retrieval. |
 
-> **Note:** `~/.ndomo/mem/` is the **opencode-mem** plugin's storage (USearch
-> vector DB for semantic memory). The **ndomo plugin's** database is at
-> `<project>/.ndomo/state.db` (SQLite) — see [docs/database.md](docs/database.md).
-> These are two separate systems; both can run simultaneously.
+### mem_* tools
+
+| Tool | Args | Returns | Purpose |
+|---|---|---|---|
+| `mem_add` | `content` (required), `type?`, `tags?` (string[]), `pinned?` | `{id, deduplicated, projectTag}` | Store a memory. Exact dedup via `content_hash` — re-adding the same text returns the existing id |
+| `mem_search` | `query` (required), `scope?` (`"project"`/`"all-projects"`), `type?`, `tag?`, `limit?` (default 10) | `{results: [{id, content, type, tags, projectTag, createdAt, score, excerpt}], count, scope}` | FlexSearch-ranked full-text search |
+| `mem_list` | `scope?`, `type?`, `tag?`, `limit?` (default 20), `offset?` (default 0) | `{memories, total, scope}` | List memories, pinned first then newest |
+| `mem_forget` | `id` | `{id, removed}` | Delete a memory by id |
+| `mem_stats` | `scope?` | `{stats: {total, byType, byTag, pinned, oldest, newest}, scope}` | Aggregate statistics |
+| `memory_compress` | `text` | `{original, compressed, result}` | Compress arbitrary text to caveman format (regex, 0 LLM tokens) |
+
+> **Note:** `~/.ndomo/mem/` is ndomo's **embedded memory** store (bun:sqlite +
+> FlexSearch — one SQLite DB per project under `projects/`, WAL mode, see
+> [docs/database.md](docs/database.md#embedded-memory-store-ndomomem)). The
+> **ndomo orchestration** database is at `<project>/.ndomo/state.db` (SQLite) —
+> see [docs/database.md](docs/database.md). These are two separate stores: the
+> memory store is user-global (shared across projects when `scope: "all-projects"`),
+> `state.db` is project-local.
 >
 > **Plan archive path:** The ndomo plugin auto-archives completed/failed plans
 > to `<project>/.ndomo/archives/plans/<slug>-YYYY-MM-DD.md` (markdown snapshots).
@@ -226,12 +275,12 @@ Agents without explicit overrides use DCP defaults. The foreman monitors context
 Tools listed in `protectedTools` cannot be disabled, overridden, or pruned from context by any subagent:
 
 ```json
-"protectedTools": ["memory", "compress", "task", "todowrite", "skill"]
+"protectedTools": ["mem_search", "compress", "task", "todowrite", "skill"]
 ```
 
 | Tool | Why Protected |
 |---|---|
-| `memory` | Required for cross-session persistence and context retrieval |
+| `mem_search` | Required for cross-session persistence and context retrieval |
 | `compress` | Required for DCP context pruning when near token limits |
 | `task` | Required for subagent delegation and background dispatch |
 | `todowrite` | Required for structured task tracking |

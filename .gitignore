@@ -17,8 +17,6 @@ bun.lockb
 .slim/
 .worktrees/
 
-# opencode-mem data
-.opencode-mem/
 *.sqlite
 *.sqlite-journal
 *.sqlite-shm

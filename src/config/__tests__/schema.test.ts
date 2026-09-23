@@ -150,7 +150,7 @@ describe("loadNdomoConfig", () => {
   test("reads and parses ndomo.json correctly", () => {
     const filePath = join(tmpDir, "ndomo.json");
     const data = {
-      plugins: ["ndomo", "opencode-mem"],
+      plugins: ["ndomo", "test-plugin"],
       optionalPlugins: ["@tarquinen/opencode-dcp"],
       presets: {
         default: {
@@ -162,7 +162,7 @@ describe("loadNdomoConfig", () => {
 
     const config = loadNdomoConfig(filePath);
 
-    expect(config.plugins).toEqual(["ndomo", "opencode-mem"]);
+    expect(config.plugins).toEqual(["ndomo", "test-plugin"]);
     expect(config.optionalPlugins).toEqual(["@tarquinen/opencode-dcp"]);
     expect(config.presets?.default?.foreman?.model).toBe("minimax/MiniMax-M3");
   });

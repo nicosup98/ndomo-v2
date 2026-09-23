@@ -14,13 +14,8 @@
  * The API key is read from the TYPESAFE_API_KEY environment variable only.
  */
 
-import { TypeSafeClient, choice } from "@typesafe-ai/sdk";
-import type {
-  ChoiceQuestion,
-  EntryType,
-  RequestOptions,
-  SystemOneRequest,
-} from "@typesafe-ai/sdk";
+import type { ChoiceQuestion, EntryType, RequestOptions, SystemOneRequest } from "@typesafe-ai/sdk";
+import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 import type { JevConfig } from "../config/schema.ts";
 import type { TaskRequest } from "./scheduler.ts";
 
@@ -164,7 +159,10 @@ function buildQuestions(): Record<string, unknown> {
 }
 
 /** Extracts a valid choice label from an answer, or `undefined` when invalid. */
-function pickChoice<T extends string>(answer: unknown, allowed: readonly T[]): T | undefined {
+export function pickChoice<T extends string>(
+  answer: unknown,
+  allowed: readonly T[],
+): T | undefined {
   if (typeof answer !== "object" || answer === null) return undefined;
   const candidate = (answer as { choice?: unknown }).choice;
   if (typeof candidate !== "string") return undefined;
@@ -185,18 +183,28 @@ function mergeAnswers(answers: Record<string, unknown> | undefined): JevDecision
 }
 
 /**
- * Classify a task with JEV. Always resolves; never rejects.
+ * Low-level JEV call: runs one `systemOne` request for arbitrary `state`/`questions`
+ * and returns the raw `answers` object. Shared primitive behind all classifiers.
  *
- * @param task - Task description plus optional files/stack sent as state.
+ * Semantics (never throws):
+ * - `cfg.enabled === false` → `null` without building a client.
+ * - Missing/blank API key → warn once (log-once) + `null`, factory never called.
+ * - Timeout (cfg.timeoutMs) → abort the request and resolve `null`.
+ * - Any error (config, network, malformed response) → `null`.
+ * - On success returns `response.answers` when it is an object, else `null`.
+ *
+ * @param state - Arbitrary state payload sent to JEV.
+ * @param questions - `choice()` question bag keyed by field name.
  * @param cfg - JEV config (`enabled`, `model`, `timeoutMs`).
  * @param deps - Injectable apiKey/clientFactory/log (tests).
- * @returns Validated partial decision, or `null` when JEV cannot answer.
+ * @returns Raw answers object, or `null` when JEV cannot answer.
  */
-export async function classifyTaskWithJev(
-  task: JevTaskInput,
+export async function callJev(
+  state: unknown,
+  questions: Record<string, unknown>,
   cfg: JevConfig,
   deps: JevClassifierDeps = {},
-): Promise<JevDecision | null> {
+): Promise<Record<string, unknown> | null> {
   if (!cfg.enabled) return null;
 
   const apiKey = (deps.apiKey ?? process.env.TYPESAFE_API_KEY ?? "").trim();
@@ -216,25 +224,39 @@ export async function classifyTaskWithJev(
         resolve(null);
       }, cfg.timeoutMs);
     });
-    const request: JevSystemOneRequest = {
-      state: buildState(task),
-      questions: buildQuestions(),
-      model: cfg.model,
-    };
+    const request: JevSystemOneRequest = { state, questions, model: cfg.model };
     const response = await Promise.race([
       client.systemOne(request, { signal: controller.signal, timeout: cfg.timeoutMs }),
       timeoutPromise,
     ]);
-    if (response === null) {
-      log("[jev] request timed out — falling back to heuristic routing.");
+    if (response === null || response === undefined) {
+      log("[jev] request timed out — returning null.");
       return null;
     }
-    return mergeAnswers(response.answers);
+    const answers = response.answers;
+    return answers !== null && typeof answers === "object" ? answers : null;
   } catch {
-    log("[jev] classification failed — falling back to heuristic routing.");
+    log("[jev] classification failed — returning null.");
     return null;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     controller.abort();
   }
+}
+
+/**
+ * Classify a task with JEV. Always resolves; never rejects.
+ *
+ * @param task - Task description plus optional files/stack sent as state.
+ * @param cfg - JEV config (`enabled`, `model`, `timeoutMs`).
+ * @param deps - Injectable apiKey/clientFactory/log (tests).
+ * @returns Validated partial decision, or `null` when JEV cannot answer.
+ */
+export async function classifyTaskWithJev(
+  task: JevTaskInput,
+  cfg: JevConfig,
+  deps: JevClassifierDeps = {},
+): Promise<JevDecision | null> {
+  const answers = await callJev(buildState(task), buildQuestions(), cfg, deps);
+  return answers ? mergeAnswers(answers) : null;
 }

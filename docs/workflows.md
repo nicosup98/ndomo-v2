@@ -42,7 +42,7 @@ User → Foreman (TUI)
 ```
 
 1. **Aclaración** — analiza intención en 1-2 frases. Si ambigüo, `question` al usuario. Si ≤5 archivos y bien definida → sugerir `craftsman` directamente.
-2. **Exploración** — `memory({mode:"search"})` + delegar a scout/scribe/sage/guild según necesidad. NO delegar a smiths/painter/inspector/chronicler.
+2. **Exploración** — `mem_search({query: "..."})` + delegar a scout/scribe/sage/guild según necesidad. NO delegar a smiths/painter/inspector/chronicler.
 3. **Plan Atómico** — desglosar en ≤5 steps. Cada step: `(Acción) → archivos esperados [paths] → dependencias`. Estimar complejidad (1-5) y riesgo (low/medium/high).
 4. **Persistir** — `plan_create` con slug/overview/approach. `task_create_batch` con steps (tasks asignadas a `craftsman`). **NO** crear `session_start` (lo hace craftsman). **NO** ejecutar tasks.
 
@@ -319,7 +319,7 @@ Two agents editing the same file simultaneously is forbidden. Before dispatching
 
 The foreman runs the following memory protocol on every request:
 
-1. **Before planning** — `memory({mode:"search", scope:"project"})` for current project context; `memory({mode:"search", scope:"all-projects"})` for cross-project knowledge.
+1. **Before planning** — `mem_search({query: "...", scope:"project"})` for current project context; `mem_search({query: "...", scope:"all-projects"})` for cross-project knowledge.
 2. **Before storing** — compress content to caveman format using `cavemanCompress()`.
 3. **Compression rules** — drops articles, filler words, leading conjunctions, filler phrases. Preserves code blocks and URLs.
 4. **Threshold** — `shouldStoreMemory()` filters out content < 20 chars or purely code blocks.
@@ -336,7 +336,7 @@ Verificación manual de los flujos primarios post-refactor. No requiere DB real 
 - [ ] **Aclaración:** foreman identifica intención en 1-2 frases (`agents/foreman.md:123-128`)
 - [ ] **Aclaración:** si ≤5 archivos y bien definida → sugiere craftsman en lugar de planificar (`agents/foreman.md:126`)
 - [ ] **Aclaración:** si >5 archivos o diseño arquitectura → continúa planificación
-- [ ] **Exploración:** invoca `memory({mode:"search"})` antes de delegar (`agents/foreman.md:130-131`)
+- [ ] **Exploración:** invoca `mem_search({query: "..."})` antes de delegar (`agents/foreman.md:143-144`)
 - [ ] **Exploración:** delega solo a scout/scribe/sage/guild (`agents/foreman.md:133-136`)
 - [ ] **Exploración:** NO delega a smiths/painter/chronicler/inspector (`agents/foreman.md:138`)
 - [ ] **Plan Atómico:** desglosa en ≤5 steps con archivos y dependencias (`agents/foreman.md:140-144`)

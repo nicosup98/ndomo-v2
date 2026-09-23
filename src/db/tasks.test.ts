@@ -16,6 +16,7 @@ import {
   listTasksByPlan,
   nextTaskForAgent,
   splitFilesByStack,
+  updateTaskFields,
   updateTaskStatus,
 } from "./tasks.ts";
 import type { Plan } from "./types.ts";
@@ -918,5 +919,73 @@ describe("listTasksByPlan — includeArchived flag", () => {
     const pendingLive = listTasksByPlan(db, plan.id, { status: "pending" });
     expect(pendingLive).toHaveLength(1);
     expect(pendingLive[0]?.description).toBe("live pending");
+  });
+});
+
+// ─── updateTaskFields — dependencies persistence (jev-classifier-toolkit T4b) ─
+
+describe("updateTaskFields — dependencies persistence", () => {
+  test("writes dependencies raw and replaces them on a second update", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ description: "dep target A", orderIndex: 0 }),
+      makeTask({ description: "dep target B", orderIndex: 1 }),
+      makeTask({ description: "dependent task", orderIndex: 2 }),
+    ]);
+    const id1 = tasks[0]?.id as string;
+    const id2 = tasks[1]?.id as string;
+    const dependentId = tasks[2]?.id as string;
+
+    // First write — single dependency
+    const first = updateTaskFields(
+      db,
+      dependentId,
+      { dependencies: [id1] },
+      { updatedBy: "validate_task_dependencies" },
+    );
+    expect(first?.dependencies).toEqual([id1]);
+    expect(getTask(db, dependentId)?.dependencies).toEqual([id1]);
+
+    // Second write — raw replace (no union with the previous array)
+    const second = updateTaskFields(
+      db,
+      dependentId,
+      { dependencies: [id1, id2] },
+      { updatedBy: "validate_task_dependencies" },
+    );
+    expect(second?.dependencies).toEqual([id1, id2]);
+
+    // Persisted row reflects the replacement
+    const row = db.query("SELECT dependencies FROM plan_tasks WHERE id = ?").get(dependentId) as {
+      dependencies: string;
+    };
+    expect(JSON.parse(row.dependencies)).toEqual([id1, id2]);
+  });
+
+  test("description/files/complexity still write alongside dependencies", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ description: "dep target", orderIndex: 0 }),
+      makeTask({ description: "editable task", orderIndex: 1 }),
+    ]);
+    const depId = tasks[0]?.id as string;
+    const taskId = tasks[1]?.id as string;
+
+    const updated = updateTaskFields(
+      db,
+      taskId,
+      {
+        description: "renamed task",
+        files: ["src/a.ts", "src/b.ts"],
+        complexity: 5,
+        dependencies: [depId],
+      },
+      { updatedBy: "foreman" },
+    );
+
+    expect(updated?.description).toBe("renamed task");
+    expect(updated?.files).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(updated?.complexity).toBe(5);
+    expect(updated?.dependencies).toEqual([depId]);
   });
 });

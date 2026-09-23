@@ -1,7 +1,7 @@
 ---
 description: Release Smith / Especialista en Gestión de Releases
 mode: subagent
-model: opencode-go/deepseek-v4-flash
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.3
 permission:
   edit: allow

@@ -19,7 +19,6 @@ out/
 .worktrees/
 .ndomo/
 .opencode/
-.opencode-mem/
 
 # DCP data
 .dcp/

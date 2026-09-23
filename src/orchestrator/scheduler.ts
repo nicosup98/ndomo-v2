@@ -7,9 +7,9 @@
  * apply unchanged. See ./jev.ts.
  */
 
-import { classifyTaskWithJev } from "./jev.ts";
-import type { JevClassifierDeps, JevDecision } from "./jev.ts";
 import type { JevConfig } from "../config/schema.ts";
+import type { JevClassifierDeps, JevDecision } from "./jev.ts";
+import { classifyTaskWithJev } from "./jev.ts";
 
 /** Decision returned by the scheduler after routing a task. */
 export interface RoutingDecision {

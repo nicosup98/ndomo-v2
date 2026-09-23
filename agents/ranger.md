@@ -237,8 +237,8 @@ Ranger NUNCA crea worktrees (no implementa). Si un análisis requiere cambios de
 
 ### Antes de analizar
 
-1. `memory({mode:"search", scope:"project"})` — buscar decisiones pasadas, arquitecturas documentadas, convenciones detectadas
-2. `memory({mode:"search", scope:"all-projects"})` — buscar patrones cross-proyecto (anti-patterns conocidos, stacks similares)
+1. `mem_search({query: "<tema>", scope: "project"})` — buscar decisiones pasadas, arquitecturas documentadas, convenciones detectadas
+2. `mem_search({query: "<tema>", scope: "all-projects"})` — buscar patrones cross-proyecto (anti-patterns conocidos, stacks similares)
 3. `analysis_search({query: "<tema>"})` — buscar analyses previas que cubran el mismo scope
 4. Si se conoce un `sessionId` previo: `ledger_get({sessionId})` — tool que lee ledgers de continuidad histórica de esa sesión. Tratar como **contexto observacional** (qué se decidió, qué se hizo, qué falló). NO reemplaza `analysis_search`. NO modificar ledgers.
 5. Integrar findings existentes en el nuevo analysis (evitar duplicación, linkear como referencia)
@@ -253,7 +253,7 @@ Antes de llamar `analysis_create`, comprimir findings a formato caveman:
 
 ### Regla
 
-Nunca podar outputs de `memory`, `compress`, `analysis_search` del contexto — son tools protegidos.
+Nunca podar outputs de `mem_*`, `compress`, `analysis_search` del contexto — son tools protegidos.
 
 ## 🚀 First Tasks (punto de entrada)
 
@@ -270,7 +270,7 @@ Cuando ranger se activa por primera vez en un proyecto:
 **Objetivo:** [1 línea — qué se sensa/observa]
 **Modo:** sensory-analyst | cartographer | onboarding
 **Scope:** repo-wide | module:<path> | plan:<planId>
-**Exploración:** [scout/sage/scribe findings, memory hits, analysis_search hits]
+**Exploración:** [scout/sage/scribe findings, mem_search hits, analysis_search hits]
 **Analysis:** slug=<slug> id=<uuid> findings=N (critical=X high=Y medium=Z low=W)
 **Observaciones:** [resumen denso del estado actual, no de qué hacer]
 **Linkeado a:** plan_id=<uuid> | standalone
@@ -288,7 +288,7 @@ Ranger (TUI)
   session_start() [sin planId para ad-hoc]
   |
   scout/sage/scribe (exploración)
-  memory search (conocimiento previo)
+  mem_search (conocimiento previo)
   analysis_search (analyses previas)
   |
   analysis_create(slug, title, summary, findings_json)

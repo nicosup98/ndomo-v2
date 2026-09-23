@@ -1,7 +1,7 @@
 {
   "name": "ndomo",
   "version": "0.5.1",
-  "description": "OpenCode multi-agent plugin. Taller de artesanos: foreman + 3 peer primaries (craftsman, warden, ranger) + specialists (scout, scribe, painter, smith, sage, guild, inspector, chronicler) + stack-smiths + ops (ci-smith, deploy-smith, release-smith, ops-scout). Caveman-native. opencode-mem integrated. DCP peer optional.",
+  "description": "OpenCode multi-agent plugin. Taller de artesanos: foreman + 3 peer primaries (craftsman, warden, ranger) + specialists (scout, scribe, painter, smith, sage, guild, inspector, chronicler) + stack-smiths + ops (ci-smith, deploy-smith, release-smith, ops-scout). Caveman-native. Embedded memory. DCP peer optional.",
   "type": "module",
   "license": "MIT",
   "main": "./src/index.ts",
@@ -62,7 +62,7 @@
     "@typesafe-ai/sdk": "0.6.0",
     "bulma": "^1.0",
     "elysia": "^1.4.29",
-    "opencode-mem": "^2.17.1",
+    "flexsearch": "^0.8.212",
     "zod": "4.1.8"
   },
   "peerDependenciesMeta": {

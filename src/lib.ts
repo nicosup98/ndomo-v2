@@ -10,13 +10,7 @@
  */
 
 // Memory: scoped tag helpers
-export {
-  getAllTags,
-  getProjectTag,
-  getUserTag,
-  memoryAddOptions,
-  memorySearchOptions,
-} from "./mem/scoped.ts";
+export { getAllTags, getProjectTag, getUserTag } from "./mem/scoped.ts";
 
 // Orchestrator: background dispatcher
 export {
