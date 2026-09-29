@@ -34,11 +34,11 @@ trap cleanup EXIT
 
 echo -e "${BLUE}[smoke-install]${NC} tmp dir: $TMPDIR"
 echo -e "${BLUE}[smoke-install]${NC} XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
-echo -e "${YELLOW}[smoke-install]${NC} running: bun run src/cli/install.ts --dry-run --preset=default --enable-http"
+echo -e "${YELLOW}[smoke-install]${NC} running: bun run src/cli/install.ts --dry-run --preset=default"
 
 # ── Run installer (dry-run, safe — does not write to filesystem) ──────────────
 cd "$PROJECT_ROOT"
-if bun run src/cli/install.ts --dry-run --preset=default --enable-http; then
+if bun run src/cli/install.ts --dry-run --preset=default; then
   echo -e "${GREEN}[smoke-install] PASS:${NC} bunx ndomo install dry-run completed"
   exit 0
 else

@@ -16,9 +16,7 @@
 # New features vs. this bash version:
 #   • Full parity with install.sh (same flags, same phases, same package install
 #     strategies, same preset application, same opencode.json plugin registration)
-#   • NEW: HTTP auto-prompt — interactively enables HTTP server (writes http
-#     block to ndomo.config.json) — closes the gap left by phase-1
-#   • NEW: --dry-run, --skip-deps, --port, --cors-origins, --auth-required flags
+#   • NEW: --dry-run, --skip-deps flags
 #   • Honors XDG_CONFIG_HOME per XDG Base Directory spec
 #   • Cross-platform (no BSD/GNU sed differences)
 #   • Tested via bun:test (src/cli/__tests__/install.test.ts)
