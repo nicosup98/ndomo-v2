@@ -17,6 +17,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-29
+
+### Added
+
+- **Obsidian Brain Layer** — `obsidian_export` / `obsidian_read_note`
+  tools (61 tools total): deterministic projection of ndomo state
+  (plans, tasks, designs, memories) to an external Obsidian vault
+  (`Projects/<projectTag>/...`), SHA-256 sync-state idempotency,
+  inside-repo guard, human-edit preservation via
+  `%% ndomo:auto:start %%` / `%% ndomo:auto:end %%` markers.
+
+### Removed
+
+- **BREAKING: HTTP server** — Elysia REST/SSE server, SPA fallback,
+  `src/http/**`, `ndomo serve` CLI command, `src/sdk/client.ts`, HTTP
+  config (`loadHttpConfig`, `NDOMO_HTTP_*` env vars), installer HTTP
+  prompt, `scripts/smoke-http.sh`.
+- **BREAKING: Web UI** — Vue 3 SPA (`web/**`), `web:*` npm scripts,
+  `scripts/smoke-web.sh`, `docs/web-ui.md`, `docs/http-server.md`.
+- **Dependencies** — `elysia`, `bulma`, `@opencode/client` + 9 web-only
+  devDeps (vite/vitest/vue family).
+
 ## [0.6.0] - 2026-09-23
 
 ### Added
@@ -204,8 +226,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven medium-priority `craftsman` fixes shipped alongside the Bun skill
   bootstrap for the `js-smith` specialist
 
+[0.7.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.0...v0.5.1
-[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.7.0...HEAD
 [0.3.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/nicosup98/ndomo-v2/releases/tag/v0.1.0
