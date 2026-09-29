@@ -33,6 +33,7 @@ export {
 } from "./critic.ts";
 // Design types live in designs.ts (filesystem-backed module, not the SQL types file).
 export type {
+  DesignDiagram,
   DesignInput,
   DesignOption,
   DesignResult,
@@ -48,6 +49,7 @@ export {
   serializeDesignToMarkdown,
   validateDesignDate,
   validateDesignSlug,
+  validateDiagrams,
 } from "./designs.ts";
 export type { LedgerData, LedgerWriteResult } from "./ledgers.ts";
 // ─── Session ledgers (filesystem continuity, no DB) ─────────────────────────

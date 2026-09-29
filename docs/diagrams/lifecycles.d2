@@ -1,0 +1,86 @@
+# ndomo — state machines: plan, task, session, analysis
+# Basado en: docs/workflows.md (w:linea) + docs/database.md (d:linea).
+# Fuente canónica: docs/diagrams/lifecycles.d2
+direction: down
+
+# ── Plan ──
+# Status enum: d:39,164. Readiness checks (blockers) gatean transiciones:
+# tasks_pending / tasks_running / sessions_open / status_invalid (w:158-166).
+# force=true + forceReason salta blockers salvo status_invalid (w:148-156).
+plan_sm: "Plan (state machine)" {
+  draft: draft
+  approved: approved
+  executing: executing
+  completed: completed
+  failed: failed
+  abandoned: abandoned
+  archived: "archivado\n(archived_at + .md en archives/plans/)"
+
+  draft -> approved: "plan_approve — sella approved_at (d:249)"
+  approved -> executing: "plan_update_status('executing')\n— currentPhase en checkpoints (w:218)"
+  executing -> completed: "plan_update_status('completed') (w:113)"
+  executing -> failed: "plan_update_status('failed')"
+  executing -> abandoned: "plan_update_status('abandoned', force=true) (w:151)"
+  approved -> abandoned: "force — sin ejecutar (w:151)"
+  completed -> archived: "auto-archive (d:264-281)"
+  failed -> archived: "auto-archive (d:264-281)"
+  abandoned -> archived: "auto-archive (d:264-281)"
+}
+
+# ── Task ──
+# Status enum: d:71. canStart iff TODAS las deps done (d:209); deps fallidas quedan
+# en blockedDeps/failedDeps del resolver (d:191). Claim: task_next_for_agent (d:200-201).
+task_sm: "Task (state machine)" {
+  pending: pending
+  running: running
+  done: done
+  failed: failed
+  blocked: blocked
+  reviewed: "done + reviewed_by\n(verdict en metadata)"
+
+  pending -> running: "task_next_for_agent claim /\ntask_update_status('running') (w:108, d:72)"
+  running -> done: "task_update_status('done') — completed_at (w:110)"
+  running -> failed: "task_update_status('failed') — completed_at"
+  done -> reviewed: "task_review — solo sobre done (d:206-207)"
+  pending -> blocked: "[PENDIENTE DE VALIDACIÓN]\nsetter de 'blocked' no documentado\nen docs (CHECK enum d:71; resolver clasifica deps)" {
+    style: {
+      stroke-dash: 3
+    }
+  }
+}
+
+# ── Session ──
+# outcome CHECK success/partial/failed/abandoned (d:108) — setter no documentado
+# en docs [PENDIENTE DE VALIDACIÓN]. Auto-checkpoint: phase_transition |
+# task_batch_complete (w:173-179); debounce minIntervalMs 30000 (w:199).
+session_sm: "Session (state machine)" {
+  created: created
+  active: "active\n(checkpoints)"
+  ended: "ended\n(ended_at set)"
+  archived: "archivado\n(cascade archived_at)"
+
+  created -> active: "session_start — started_at + last_checkpoint (d:220)"
+  active -> active: "session_checkpoint loop — min 1 por fase (d:254);\nauto-checkpoint en phase_transition / task_batch_complete (w:173-179)" {
+    style: {
+      stroke-dash: 3
+    }
+  }
+  active -> ended: "session_end — ended_at (d:223-224)"
+  ended -> archived: "auto-archive cascade al archivar plan (d:277-278)"
+}
+
+# ── Analysis (ranger; docs/agents.md:87,97-98; v14) ──
+# Consultable por TODOS los primaries vía analysis_get/search (a:98,361).
+analysis_sm: "Analysis (state machine — ranger)" {
+  created: created
+  active: "active"
+  archived: "archivado\n(archived_at)"
+
+  created -> active: "analysis_create (a:87)"
+  active -> active: "analysis_update / analysis_link_plan\n(source_plan_id) (a:87, configuration.md:136)" {
+    style: {
+      stroke-dash: 3
+    }
+  }
+  active -> archived: "analysis_archive — soft delete,\nfuera de list queries default"
+}

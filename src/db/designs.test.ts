@@ -7,6 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,9 +21,19 @@ import {
   serializeDesignToMarkdown,
   validateDesignDate,
   validateDesignSlug,
+  validateDiagrams,
 } from "./designs.ts";
 
 let projectDir: string;
+
+/** Real `d2` binary may be absent (CI) — those tests are skipped there. */
+const D2_AVAILABLE = spawnSync("d2", ["--version"], { encoding: "utf8" }).status === 0;
+
+/** Declare a test that only runs when a real `d2` CLI is on `$PATH`. */
+function d2Test(name: string, fn: () => void | Promise<void>): void {
+  if (D2_AVAILABLE) test(name, fn);
+  else test.skip(name, fn);
+}
 
 beforeEach(() => {
   projectDir = mkdtempSync(join(tmpdir(), "ndomo-designs-"));
@@ -510,5 +521,122 @@ describe("createDesign", () => {
     expect(content).toContain("**Plan:** plan_1");
     expect(content).toContain("**Session:** ses_1");
     expect(result.status).toBe("decided");
+  });
+});
+
+// ─── Diagrams (D2) — serialization ──────────────────────────────────────────
+
+describe("serializeDesignToMarkdown — Diagrams", () => {
+  const date = "2026-08-06";
+  const createdAt = 1_700_000_000_000;
+  const render = (input: Partial<DesignInput>) =>
+    serializeDesignToMarkdown(baseInput(input), date, createdAt);
+
+  test("renders a titled diagram as ### heading + d2 fence", () => {
+    const md = render({ diagrams: [{ title: "Request flow", code: "client -> api" }] });
+    expect(md).toContain("## Diagrams");
+    expect(md).toContain("### Request flow");
+    expect(md).toContain("```d2\nclient -> api\n```");
+  });
+
+  test("renders an untitled diagram with the fence only", () => {
+    const md = render({ diagrams: [{ code: "client -> api" }] });
+    expect(md).toContain("## Diagrams");
+    expect(md).toContain("```d2\nclient -> api\n```");
+    expect(md).not.toContain("### ");
+  });
+
+  test("widens the fence when the code itself contains backticks", () => {
+    const code = "pre\n```d2\nnested\n```\npost";
+    const md = render({ diagrams: [{ title: "Nested", code }] });
+    // 3 backticks inside → 4-backtick fence, so the block cannot close early.
+    expect(md).toContain("### Nested\n\n````d2");
+    expect(md).toContain("````d2\npre\n```d2\nnested\n```\npost\n````");
+    expect(md).toMatch(/^````d2$/m);
+    expect(md).toMatch(/^````$/m);
+  });
+
+  test("section order: Consequences < Diagrams < Open Questions", () => {
+    const md = render({
+      consequences: ["con1"],
+      diagrams: [{ code: "a -> b" }],
+      openQuestions: ["q1"],
+    });
+    const idxConsequences = md.indexOf("## Consequences");
+    const idxDiagrams = md.indexOf("## Diagrams");
+    const idxOpenQuestions = md.indexOf("## Open Questions");
+    expect(idxConsequences).toBeGreaterThan(-1);
+    expect(idxDiagrams).toBeGreaterThan(idxConsequences);
+    expect(idxOpenQuestions).toBeGreaterThan(idxDiagrams);
+  });
+
+  test("omits the section when the list is absent, empty or all-blank", () => {
+    expect(render({})).not.toContain("## Diagrams");
+    expect(render({ diagrams: [] })).not.toContain("## Diagrams");
+    expect(render({ diagrams: [{ code: "   " }] })).not.toContain("## Diagrams");
+    expect(render({ diagrams: [{ title: "Titled", code: "" }] })).not.toContain("## Diagrams");
+    expect(render({ diagrams: [{ title: "Titled", code: "" }] })).not.toContain("### Titled");
+  });
+
+  test("drops blank-code items but keeps the renderable ones", () => {
+    const md = render({ diagrams: [{ title: "Skipped", code: "  " }, { code: "a -> b" }] });
+    expect(md).not.toContain("### Skipped");
+    expect(md).toContain("```d2\na -> b\n```");
+  });
+
+  test("separates consecutive diagrams with a single blank line", () => {
+    const md = render({
+      diagrams: [
+        { title: "One", code: "a -> b" },
+        { title: "Two", code: "c -> d" },
+      ],
+      openQuestions: ["q1"],
+    });
+    expect(md).toContain("```d2\na -> b\n```\n\n### Two");
+    expect(md).toMatch(/```\n\n## Open Questions/);
+  });
+});
+
+// ─── Diagrams (D2) — validation ─────────────────────────────────────────────
+
+describe("validateDiagrams", () => {
+  test("no-op without renderable diagrams", () => {
+    expect(() => validateDiagrams(undefined)).not.toThrow();
+    expect(() => validateDiagrams([])).not.toThrow();
+    expect(() => validateDiagrams([{ code: "" }, { title: "T", code: "  \n" }])).not.toThrow();
+  });
+
+  test("silently skips when the d2 binary does not exist (ENOENT)", () => {
+    expect(() =>
+      validateDiagrams([{ code: "a -> b" }], { bin: "ndomo-d2-not-installed" }),
+    ).not.toThrow();
+  });
+
+  d2Test("accepts a valid d2 diagram", () => {
+    expect(() => validateDiagrams([{ title: "Flow", code: "a -> b" }])).not.toThrow();
+  });
+
+  d2Test("throws with the diagram label and d2 stderr on invalid code", () => {
+    const broken = [{ title: "Broken", code: "a -> \n" }];
+    expect(() => validateDiagrams(broken)).toThrow(/#1 \('Broken'\)/);
+    expect(() => validateDiagrams(broken)).toThrow(/connection missing destination/);
+  });
+
+  d2Test("createDesign writes nothing when a diagram fails validation", () => {
+    expect(() => createDesign(projectDir, baseInput({ diagrams: [{ code: "a -> \n" }] }))).toThrow(
+      /failed validation/,
+    );
+    expect(existsSync(join(projectDir, ".ndomo", "designs"))).toBe(false);
+  });
+
+  test("createDesign serializes the diagrams section end-to-end", () => {
+    const result = createDesign(
+      projectDir,
+      baseInput({ diagrams: [{ title: "Flow", code: "a -> b" }] }),
+    );
+    const content = readFileSync(result.filePath, "utf-8");
+    expect(content).toContain("## Diagrams");
+    expect(content).toContain("### Flow");
+    expect(content).toContain("```d2\na -> b\n```");
   });
 });

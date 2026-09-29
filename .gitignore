@@ -10,6 +10,9 @@ build/
 out/
 *.tsbuildinfo
 
+# Rendered diagrams (regenerate with `bun run diagrams:render`)
+docs/diagrams/**.svg
+
 # Bun
 bun.lockb
 

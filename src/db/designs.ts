@@ -20,7 +20,9 @@
  */
 
 import { Buffer } from "node:buffer";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -31,6 +33,14 @@ export interface DesignOption {
   description?: string;
   pros?: string[];
   cons?: string[];
+}
+
+/** A single D2 diagram attached to a design document. */
+export interface DesignDiagram {
+  /** Optional heading rendered as `### {title}` above the code fence. */
+  title?: string;
+  /** D2 source. Blank code is ignored by serialization and validation. */
+  code: string;
 }
 
 /** Input for {@link createDesign}. Required: slug, title, problem. */
@@ -50,6 +60,8 @@ export interface DesignInput {
   /** Trade-offs accepted by the decision (what we gave up to decide). */
   tradeoffs?: string[];
   consequences?: string[];
+  /** D2 diagrams rendered as `## Diagrams` (after Consequences, before Open Questions). */
+  diagrams?: DesignDiagram[];
   openQuestions?: string[];
   /** Soft reference — recorded in markdown only, no FK check. */
   planId?: string;
@@ -175,6 +187,55 @@ function trimNonEmpty(s: string | undefined): string | undefined {
 }
 
 /**
+ * Longest contiguous run of backticks in `s`.
+ * Sizes the markdown fence so diagram code that contains fences of its own
+ * can never close the block early (` ``` ` in code → a 4-backtick fence).
+ */
+function longestBacktickRun(s: string): number {
+  let max = 0;
+  let run = 0;
+  for (const ch of s) {
+    if (ch === "`") {
+      run += 1;
+      if (run > max) max = run;
+    } else {
+      run = 0;
+    }
+  }
+  return max;
+}
+
+/** Diagrams that carry renderable content: non-null with non-blank `code`. */
+function renderableDiagrams(diagrams: DesignDiagram[] | undefined): DesignDiagram[] {
+  if (diagrams === undefined || diagrams.length === 0) return [];
+  return diagrams.filter(
+    (d) => d != null && typeof d.code === "string" && d.code.trim().length > 0,
+  );
+}
+
+/**
+ * Render the body lines of the `## Diagrams` section (heading excluded).
+ * Pure. Returns `[]` when nothing is renderable so the caller omits the
+ * section entirely (empty list / all-blank codes stay diff-stable).
+ */
+function renderDiagramLines(diagrams: DesignDiagram[] | undefined): string[] {
+  const usable = renderableDiagrams(diagrams);
+  if (usable.length === 0) return [];
+
+  const blocks = usable.map((d) => {
+    const lines: string[] = [];
+    const title = trimNonEmpty(d.title);
+    if (title !== undefined) lines.push(`### ${title}`, "");
+    const fence = "`".repeat(Math.max(3, longestBacktickRun(d.code) + 1));
+    lines.push(`${fence}d2`, d.code, fence);
+    return lines;
+  });
+
+  // Single blank line between blocks, none after the last one.
+  return blocks.flatMap((block, i) => (i === 0 ? block : ["", ...block]));
+}
+
+/**
  * Serialize a design document to a stable markdown string.
  * Pure: no I/O. Empty optional sections are omitted entirely so the
  * doc stays readable and diff-stable.
@@ -248,6 +309,10 @@ export function serializeDesignToMarkdown(
   const consequences = bulletList(input.consequences);
   if (consequences.length > 0) sections.push("", "## Consequences", "", ...consequences);
 
+  // Diagrams (D2) — between Consequences and Open Questions
+  const diagramLines = renderDiagramLines(input.diagrams);
+  if (diagramLines.length > 0) sections.push("", "## Diagrams", "", ...diagramLines);
+
   // Open Questions
   const openQ = bulletList(input.openQuestions);
   if (openQ.length > 0) sections.push("", "## Open Questions", "", ...openQ);
@@ -283,6 +348,92 @@ function resolveCollision(dir: string, filename: string): string {
 }
 
 /**
+ * Best-effort validation of D2 diagrams via the `d2` CLI.
+ *
+ * Semantics (chosen so authoring never breaks silently but never blocks
+ * on a missing tool either):
+ *  - nothing to check (absent / empty / all-blank codes) → no-op;
+ *  - `d2` missing (ENOENT) → silent skip, no throw (CI images may lack d2);
+ *  - `d2 validate` exit ≠ 0 → throw with the diagram index/title + d2 output,
+ *    so `createDesign` refuses to write the document (invalid diagram wins
+ *    over "write something");
+ *  - temp files always cleaned in `finally` (best-effort).
+ *
+ * The binary/timeout are injectable for tests (d2 may not exist there).
+ */
+export interface DiagramValidationOptions {
+  /** d2 binary. Defaults to `d2` (resolved through `$PATH`). */
+  bin?: string;
+  /** Per-diagram timeout in milliseconds. Defaults to 10 000. */
+  timeoutMs?: number;
+}
+
+const D2_BIN = "d2";
+const D2_VALIDATE_TIMEOUT_MS = 10_000;
+
+/** Human label for error messages: `#2 ('Flow')` or `#2`. */
+function diagramLabel(d: DesignDiagram, index: number): string {
+  const title = trimNonEmpty(d.title);
+  const label = `#${index + 1}`;
+  return title === undefined ? label : `${label} ('${title}')`;
+}
+
+export function validateDiagrams(
+  diagrams: DesignDiagram[] | undefined,
+  options: DiagramValidationOptions = {},
+): void {
+  const usable = renderableDiagrams(diagrams);
+  if (usable.length === 0) return;
+
+  const bin = options.bin ?? D2_BIN;
+  const timeoutMs = options.timeoutMs ?? D2_VALIDATE_TIMEOUT_MS;
+  let dir: string | undefined;
+
+  try {
+    dir = mkdtempSync(join(tmpdir(), "ndomo-d2-"));
+    for (const [i, d] of usable.entries()) {
+      const label = diagramLabel(d, i);
+      const tmpFile = join(dir, `diagram-${i + 1}.d2`);
+      writeFileSync(tmpFile, d.code, "utf-8");
+
+      const res = spawnSync(bin, ["validate", tmpFile], {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: "pipe",
+      });
+
+      if (res.error !== null && res.error !== undefined) {
+        const errno = res.error as { code?: string };
+        // d2 not installed → best-effort skip (silent, no throw).
+        if (errno.code === "ENOENT") return;
+        throw new Error(
+          `ndomo: could not run '${bin} validate' for diagram ${label}: ${res.error.message}`,
+        );
+      }
+
+      if (res.status !== 0) {
+        const detail = (res.stderr ?? res.stdout ?? "").trim();
+        const reason =
+          res.signal != null
+            ? `killed by ${res.signal} (timeout ${timeoutMs}ms)`
+            : `exit code ${String(res.status)}`;
+        throw new Error(
+          `ndomo: d2 diagram ${label} failed validation (${reason})${detail.length > 0 ? `: ${detail}` : ""}`,
+        );
+      }
+    }
+  } finally {
+    if (dir !== undefined) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+}
+
+/**
  * Create (write) a design document to the filesystem and return its metadata.
  *
  * Validation is defensive: slug is sanitized + validated, date is validated
@@ -303,6 +454,9 @@ export function createDesign(projectDir: string, input: DesignInput): DesignResu
   if (typeof input.problem !== "string" || input.problem.trim().length === 0) {
     throw new Error("ndomo: design problem cannot be empty");
   }
+
+  // Reject invalid D2 BEFORE any write: a failed validation must leave no md.
+  validateDiagrams(input.diagrams);
 
   const dir = resolveDesignDir(projectDir);
   const createdAt = Date.now();

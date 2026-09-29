@@ -46,6 +46,7 @@
     "dev:bust": "bash scripts/dev-bust-cache.sh --apply",
     "dev:reset": "bash scripts/dev-bust-cache.sh --apply --kill",
     "status:plans": "bun run src/cli/status.ts --plans",
+    "diagrams:render": "bash scripts/render-diagrams.sh",
     "clean": "rm -rf dist .slim/worktrees"
   },
   "dependencies": {

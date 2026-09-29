@@ -29,6 +29,264 @@ Survives OpenCode restarts. Indexed with FTS5 for full-text search.
 
 ### Tables
 
+```d2
+# ndomo — ERD del plugin
+# Core: src/db/schema.ts (v1-v15). Tablas core + ops (v13) documentadas en
+# docs/database.md (citas d:linea); analyses (v14) en src/db/schema.ts:751-806
+# (referenciado en docs/agents.md:87 y docs/configuration.md:136).
+# Memoria embebida (~/.ndomo/mem/projects/<tag>.db) es OTRO store — docs/database.md:367-373.
+# Fuente canónica: docs/diagrams/database-erd.d2
+direction: right
+
+# ── core: plans / plan_tasks / sessions (d:32-111) ──
+plans: {
+  shape: sql_table
+  id: "TEXT PK (UUID v4)"
+  slug: "TEXT UNIQUE (kebab-case, trigger d:37)"
+  title: "TEXT"
+  status: "CHECK draft/approved/executing/completed/failed/abandoned"
+  priority: "INTEGER 1-4 (trigger d:40)"
+  created_at: "INTEGER epoch ms"
+  updated_at: "INTEGER auto-trigger (d:42)"
+  approved_at: "INTEGER null hasta approve"
+  completed_at: "INTEGER null hasta terminal"
+  session_id: "TEXT FK sessions — app-level (d:45)"
+  overview: "TEXT"
+  approach: "TEXT"
+  complexity: "INTEGER 1-5"
+  metadata: "JSON PlanMetadata"
+  created_by: "TEXT"
+  updated_by: "TEXT"
+  source_session_id: "TEXT"
+  source_message_id: "TEXT"
+  category: "CHECK feature/refactor/bugfix/docs/infra"
+  archived_at: "INTEGER soft-delete (v5, d:55)"
+}
+
+plan_tasks: {
+  shape: sql_table
+  id: "TEXT PK (UUID v4)"
+  plan_id: "TEXT FK plans.id ON DELETE CASCADE"
+  order_index: "INTEGER UNIQUE(plan_id, order_index)"
+  description: "TEXT"
+  agent: "TEXT"
+  files: "JSON []"
+  complexity: "INTEGER 1-5"
+  status: "CHECK pending/running/done/failed/blocked"
+  started_at: "INTEGER — set en running"
+  completed_at: "INTEGER — set en done/failed"
+  result: "TEXT trunc 16KB (d:74)"
+  error: "TEXT trunc 16KB"
+  dependencies: "JSON [order_index]"
+  metadata: "JSON TaskMetadata"
+  created_by: "TEXT"
+  updated_by: "TEXT"
+  source_session_id: "TEXT"
+  source_message_id: "TEXT"
+  reviewed_by: "TEXT"
+  tokens_used: "INTEGER"
+  duration_ms: "INTEGER"
+  artifacts: "JSON []"
+  archived_at: "INTEGER soft-delete"
+}
+
+sessions: {
+  shape: sql_table
+  id: "TEXT PK (UUID v4)"
+  started_at: "INTEGER epoch ms"
+  ended_at: "INTEGER null hasta end"
+  last_checkpoint: "INTEGER trigger (d:98)"
+  plan_id: "TEXT FK plans.id ON DELETE SET NULL"
+  goal: "TEXT"
+  "state": "JSON {}"
+  agent_history: "JSON [{agent, taskId, startedAt, endedAt}]"
+  key_decisions: "TEXT log libre"
+  metadata: "JSON SessionMetadata"
+  created_by: "TEXT"
+  source_message_id: "TEXT"
+  parent_session_id: "TEXT self-FK"
+  outcome: "CHECK success/partial/failed/abandoned"
+  archived_at: "INTEGER soft-delete"
+}
+
+# ── tags M:N + FTS + view (d:113-136) ──
+plan_tags: {
+  shape: sql_table
+  plan_id: "TEXT PK(plan_id, tag)"
+  tag: "TEXT PK(plan_id, tag)"
+  added_by: "TEXT"
+  added_at: "INTEGER"
+}
+
+task_tags: {
+  shape: sql_table
+  task_id: "TEXT PK(task_id, tag)"
+  tag: "TEXT"
+  added_by: "TEXT"
+  added_at: "INTEGER"
+}
+
+plans_fts_v2: {
+  shape: sql_table
+  title: "FTS5 — external content=plans (d:115-117)"
+  overview: "unicode61 remove_diacritics 1"
+  approach: "sync via AFTER INSERT/UPDATE/DELETE triggers"
+  category: "id UNINDEXED"
+}
+
+tasks_fts: {
+  shape: sql_table
+  description: "FTS5 — external content=plan_tasks (d:118-119)"
+  result: "same tokenizer"
+  error: "id UNINDEXED"
+}
+
+plan_progress: "VIEW — plans LEFT JOIN plan_tasks (excl. archivados, d:133-136)" {
+  shape: sql_table
+  plan_id: "TEXT"
+  slug: "TEXT"
+  title: "TEXT"
+  status: "TEXT"
+  total_tasks: "INTEGER"
+  done: "INTEGER"
+  failed: "INTEGER"
+  running: "INTEGER"
+  pending: "INTEGER"
+  blocked: "INTEGER"
+  progress_pct: "INTEGER (redondeado)"
+}
+
+# ── analyses (v14 — ranger; src/db/schema.ts:755-771) ──
+analyses: {
+  shape: sql_table
+  id: "TEXT PK"
+  slug: "TEXT NOT NULL — UNIQUE(slug, project_path)"
+  title: "TEXT NOT NULL"
+  project_path: "TEXT NOT NULL"
+  summary: "TEXT DEFAULT ''"
+  findings_json: "TEXT DEFAULT '[]' (validado vía validateAnalysisFindings)"
+  source_plan_id: "TEXT FK plans.id ON DELETE SET NULL"
+  agent: "TEXT DEFAULT 'ranger'"
+  session_id: "TEXT"
+  created_by: "TEXT"
+  created_at: "TEXT datetime('now')"
+  updated_at: "TEXT datetime('now')"
+  archived_at: "TEXT soft-delete"
+}
+
+analyses_fts: {
+  shape: sql_table
+  title: "FTS5 — external content=analyses (schema.ts:780-787)"
+  summary: "unicode61 remove_diacritics 1"
+  findings_json: "sync triggers analyses_ai/ad/au"
+}
+
+# ── ops (migración v13 — warden; d:328-365) ──
+environments: {
+  shape: sql_table
+  id: "TEXT PK"
+  name: "TEXT UNIQUE"
+  slug: "TEXT UNIQUE"
+  description: "TEXT"
+  metadata: "JSON"
+  archived_at: "INTEGER"
+}
+
+releases: {
+  shape: sql_table
+  id: "TEXT PK"
+  version: "TEXT"
+  title: "TEXT"
+  notes: "TEXT"
+  metadata: "JSON"
+  archived_at: "INTEGER"
+}
+
+deployments: {
+  shape: sql_table
+  id: "TEXT PK"
+  release_id: "TEXT FK releases.id"
+  environment_id: "TEXT FK environments.id"
+  status: "CHECK planned/in_progress/succeeded/failed/rolled_back"
+  deployed_at: "INTEGER"
+}
+
+incidents: {
+  shape: sql_table
+  id: "TEXT PK"
+  title: "TEXT"
+  severity: "CHECK sev1-4"
+  status: "CHECK open/triaging/mitigated/resolved/postmortem"
+  summary: "TEXT"
+  triggered_by_deployment_id: "TEXT FK deployments.id nullable"
+}
+
+rollback_executions: {
+  shape: sql_table
+  id: "TEXT PK"
+  deployment_id: "TEXT FK deployments.id required"
+  incident_id: "TEXT FK incidents.id nullable"
+  new_deployment_id: "TEXT FK deployments.id nullable"
+  status: "CHECK planned/approved/dry_run/executing/success/failed/cancelled"
+  plan: "TEXT estrategia"
+}
+
+# ── memoria embebida (OTRO store: ~/.ndomo/mem/projects/<tag>.db; d:367-415) ──
+memories: {
+  shape: sql_table
+  id: "TEXT PK (UUID v4)"
+  content: "TEXT NOT NULL"
+  type: "TEXT DEFAULT 'note'"
+  project_tag: "TEXT NOT NULL ndomo_project_<hash16>"
+  project_path: "TEXT"
+  project_name: "TEXT"
+  git_repo_url: "TEXT"
+  user_name: "TEXT"
+  user_email: "TEXT"
+  content_hash: "TEXT UNIQUE (sha256 — exact-dedup)"
+  is_pinned: "INTEGER DEFAULT 0"
+  source: "TEXT DEFAULT 'manual'"
+  created_at: "INTEGER epoch ms"
+  updated_at: "INTEGER epoch ms"
+  metadata: "TEXT JSON nullable"
+}
+
+memory_tags: {
+  shape: sql_table
+  memory_id: "TEXT FK memories.id ON DELETE CASCADE"
+  tag: "TEXT PK(memory_id, tag)"
+}
+
+schema_version: {
+  shape: sql_table
+  version: "INTEGER PK — 1 (INSERT OR IGNORE)"
+}
+
+# ── FK core ──
+plans.id -> plan_tasks.plan_id: "ON DELETE CASCADE (d:65)"
+plans.id -> sessions.plan_id: "ON DELETE SET NULL (d:99)"
+sessions.id -> plans.session_id: "FK app-level — sin constraint DB (d:45)"
+sessions.id -> sessions.parent_session_id: "self-ref (d:107)"
+plans.id -> analyses.source_plan_id: "ON DELETE SET NULL (schema.ts:769)"
+
+# ── FK tags ──
+plans.id -> plan_tags.plan_id: "M:N (d:126)"
+plan_tasks.id -> task_tags.task_id: "M:N (d:128)"
+
+# ── FK ops (FK graph d:345-356) ──
+deployments.release_id -> releases.id: "FK (d:339)"
+deployments.environment_id -> environments.id: "FK (d:339)"
+incidents.triggered_by_deployment_id -> deployments.id: "nullable (d:340, 346)"
+rollback_executions.deployment_id -> deployments.id: "required (d:341, 354)"
+rollback_executions.incident_id -> incidents.id: "nullable (d:341, 351)"
+rollback_executions.new_deployment_id -> deployments.id: "nullable (d:341, 355)"
+
+# ── FK memoria embebida ──
+memories.id -> memory_tags.memory_id: "ON DELETE CASCADE (d:405)"
+```
+
+Fuente: docs/diagrams/database-erd.d2
+
 #### `plans`
 
 | Column | Type | Notes |

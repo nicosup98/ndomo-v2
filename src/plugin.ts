@@ -37,7 +37,12 @@ import {
 } from "./db/circuit-breaker.ts";
 import { closeDb, openDb } from "./db/client.ts";
 import { buildCriticReview, toTaskVerification } from "./db/critic.ts";
-import { createDesign, type DesignInput, type DesignOption } from "./db/designs.ts";
+import {
+  createDesign,
+  type DesignDiagram,
+  type DesignInput,
+  type DesignOption,
+} from "./db/designs.ts";
 import { createIncident } from "./db/incidents.ts";
 import { type LedgerData, readLedger, readLedgerRaw, writeLedger } from "./db/ledgers.ts";
 import { runMigrations } from "./db/migrations.ts";
@@ -2399,7 +2404,7 @@ export const NdomoPlugin = Plugin.define({
 
       design_create: tool({
         description:
-          "Create a brainstorm / ADR-style design document on the filesystem at <projectDir>/.ndomo/designs/YYYY-MM-DD-{slug}-design.md. DB-free. slug+title+problem required; planId/sessionId are soft references (no FK check). Filename collisions resolved with a numeric suffix.",
+          "Create a brainstorm / ADR-style design document on the filesystem at <projectDir>/.ndomo/designs/YYYY-MM-DD-{slug}-design.md. DB-free. slug+title+problem required; planId/sessionId are soft references (no FK check). Filename collisions resolved with a numeric suffix. Optional `diagrams` are D2 code blocks rendered under `## Diagrams`; each code is validated with `d2 validate` when the CLI is installed (invalid diagram → error and nothing is written, missing d2 → skipped).",
         args: {
           slug: z.string(),
           title: z.string(),
@@ -2421,6 +2426,14 @@ export const NdomoPlugin = Plugin.define({
           decision: z.string().optional(),
           tradeoffs: z.array(z.string()).optional(),
           consequences: z.array(z.string()).optional(),
+          diagrams: z
+            .array(
+              z.object({
+                title: z.string().optional(),
+                code: z.string(),
+              }),
+            )
+            .optional(),
           openQuestions: z.array(z.string()).optional(),
           planId: z.string().optional(),
           sessionId: z.string().optional(),
@@ -2440,6 +2453,7 @@ export const NdomoPlugin = Plugin.define({
             ...(args.decision !== undefined && { decision: args.decision }),
             ...(args.tradeoffs !== undefined && { tradeoffs: args.tradeoffs }),
             ...(args.consequences !== undefined && { consequences: args.consequences }),
+            ...(args.diagrams !== undefined && { diagrams: args.diagrams as DesignDiagram[] }),
             ...(args.openQuestions !== undefined && { openQuestions: args.openQuestions }),
             ...(args.planId !== undefined && { planId: args.planId }),
             ...(args.sessionId !== undefined && { sessionId: args.sessionId }),

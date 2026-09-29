@@ -244,6 +244,43 @@ Si un re-export resuelve un kind distinto y la carpeta destino difiere:
 
 Resultado: una sola nota por entidad, sin duplicados ni notas huérfanas por cambio de clasificación.
 
+## Diagramas D2
+
+Los designs pueden llevar diagramas D2 que viajan verbatim hasta la nota en `50-Designs` y renderizan en Obsidian vía el plugin d2-obsidian. Flujo verificado e2e el 2026-09-29 con el design `2026-09-29-d2-diagrams-adoption-design.md`.
+
+### Flujo
+
+1. `design_create` acepta `diagrams: { title?, code }[]` (`src/plugin.ts:2429`; tipo en `src/db/designs.ts:63-64`) y serializa una sección `## Diagrams` en el md fuente (`.ndomo/designs/<filename>`), insertada entre `## Consequences` y `## Open Questions` (`src/db/designs.ts:312-318`).
+2. Cada diagrama con `code` no vacío se emite como fence ```d2 (con `### <title>` si lo trae); el fence nunca baja de 3 backticks y sube a 4+ si el código contiene ``` (`src/db/designs.ts:221-231`).
+3. `obsidian_export` lee el archivo fuente completo (`src/obsidian/design-source.ts:79,110-113`) y lo incrusta en el managed block de la nota (`src/obsidian/export.ts:377-388`, `render.ts:463-478`): los fences viajan **verbatim** al auto block.
+4. El plugin d2-obsidian renderiza el fence desde el código del bloque — **sin** archivos `.d2` referenciados ni imports dentro (`skills/d2-diagrams/SKILL.md:53-56`).
+
+### Validación best-effort (pre-write)
+
+`createDesign` valida con la CLI `d2` **antes** de escribir el md (`src/db/designs.ts:459`); un diagrama inválido nunca deja un archivo a medias:
+
+| Escenario | Comportamiento |
+|---|---|
+| `d2` en PATH + diagrama inválido | Error (`d2 validate` exit ≠ 0 → throw, `src/db/designs.ts:414-423`); **no** se escribe el md |
+| `d2` ausente (ENOENT) | Skip silencioso, sin error (`src/db/designs.ts:405-408`) |
+| Sin diagramas / codes en blanco | No-op (`src/db/designs.ts:209-214`) |
+
+### E2E verificado (2026-09-29)
+
+- Design `2026-09-29-d2-diagrams-adoption-design.md` exportado → nota `50-Designs/2026-09-29-d2-diagrams-adoption-design.md` con **3 fences** ```d2 dentro del auto block.
+- Re-export → `status: "skipped"`: los fences son estables y la idempotencia SHA-256 del auto block sigue intacta (ver [Idempotencia (SHA-256)](#idempotencia-sha-256)).
+
+### Fuentes canónicas y CI
+
+- Fuentes versionadas: `docs/diagrams/*.d2` (kebab-case); convención de autoría en `skills/d2-diagrams/SKILL.md`.
+- Render local on-demand: `bun run diagrams:render` (`package.json:49` → `scripts/render-diagrams.sh`) — SVGs hermanos **gitignored** (no se commitean; `scripts/render-diagrams.sh:4-6`).
+- CI: `.github/workflows/d2.yml` corre `d2 validate` + `d2 fmt --check` sobre todos los `*.d2` del repo, con d2 pinneado a v0.9.0 (`d2.yml:27,59-77`).
+
+### Limitaciones
+
+- **GitHub no renderiza ```d2** (solo mermaid): el render visual vive en Obsidian; en el repo se lee la fuente `.d2` o se corre `bun run diagrams:render`.
+- El plugin d2-obsidian solo renderiza **fenced code blocks** ```d2 — no archivos `.d2` ni imports dentro del bloque (`skills/d2-diagrams/SKILL.md:68-71`).
+
 ## Códigos de error
 
 | Code | Causa | Hint típico |

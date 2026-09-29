@@ -3211,6 +3211,25 @@ describe("NdomoPlugin v2 registration", () => {
       ) as { filePath: string };
       expect(existsSync(design.filePath)).toBe(true);
 
+      // Optional `diagrams` (D2) are serialized as a `## Diagrams` section.
+      const diagramDesign = JSON.parse(
+        (
+          await find("design_create").execute(
+            {
+              slug: "v2-smoke-diagram",
+              title: "V2 smoke diagram",
+              problem: "design_create diagrams param",
+              diagrams: [{ title: "Flow", code: "client -> api" }],
+            },
+            harness.toolCtx("x", "foreman"),
+          )
+        ).content,
+      ) as { filePath: string };
+      const diagramMd = readFileSync(diagramDesign.filePath, "utf-8");
+      expect(diagramMd).toContain("## Diagrams");
+      expect(diagramMd).toContain("### Flow");
+      expect(diagramMd).toContain("```d2\nclient -> api\n```");
+
       // critic_review returns the binary report + the task_verify payload.
       const critic = JSON.parse(
         (

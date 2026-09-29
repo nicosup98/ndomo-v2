@@ -1,0 +1,104 @@
+# ndomo plugin — arquitectura de agentes
+# 22 agents: 4 primaries (foreman/craftsman/warden/ranger) + 18 subagents.
+# Flujo de delegación: foreman persiste plan en DB → user cambia primario en TUI →
+# craftsman/warden leen tasks y ejecutan.
+# Basado en: docs/agents.md (citas a:linea) y docs/workflows.md (w:linea).
+# Fuente canónica: docs/diagrams/architecture.d2
+# Convención de autoría: skills/d2-diagrams/SKILL.md
+direction: right
+
+user: {
+  shape: person
+  label: "User"
+}
+
+tui: "TUI\n(switch manual entre primaries)" {
+  style: {
+    stroke-dash: 3
+  }
+}
+
+user -> tui: "switch"
+
+primaries: "Primaries (4)" {
+  foreman: "foreman\nplanner puro — no implementa (a:11-13)"
+  craftsman: "craftsman\nimplementador artesano (a:27-29)"
+  warden: "warden\ncustodio de ops (a:68-70)"
+  ranger: "ranger\nanalista / cartógrafo / onboarding (a:85-87)"
+}
+
+tui -> primaries.foreman: "planifica (a:9)"
+tui -> primaries.craftsman: "implementa (a:9)"
+tui -> primaries.warden: "opera (a:9)"
+tui -> primaries.ranger: "analiza (a:9)"
+
+db: "ndomo DB (.ndomo/state.db)" {
+  plans: "plans + plan_tasks"
+  analyses: "analyses (source_plan_id)"
+  ops: "deployments / incidents /\nrollback_executions"
+}
+
+# ── delegación vía plan + TUI ──
+primaries.foreman -> db.plans: "plan_create + task_create_batch (a:25)"
+primaries.craftsman -> db.plans: "plan_get / task_next_for_agent (a:39, w:41)"
+primaries.warden -> db.ops: "incident_create / rollback_record (w:385-386)"
+primaries.ranger -> db.analyses: "analysis_create / update (a:87)"
+
+# ── flotas de especialistas por primary ──
+explorers: "Exploración — foreman y ranger" {
+  scout: scout
+  scribe: scribe
+}
+
+advisors: "Advisors — foreman / ranger / warden" {
+  sage: sage
+  guild: guild
+}
+
+builders: "Builders — craftsman\n(routing por extensión)" {
+  smith: "smith (sin match, genérico)"
+  go_smith: "go-smith (.go)"
+  vue_smith: "vue-smith (.vue / .svelte)"
+  js_smith: "js-smith (.ts / .tsx / .js / .jsx)"
+  python_smith: "python-smith (.py)"
+  rust_smith: "rust-smith (.rs)"
+  zig_smith: "zig-smith (.zig)"
+}
+
+quality: "Quality — craftsman" {
+  painter: "painter (UI + design)"
+  chronicler: "chronicler (markdown / docs)"
+  inspector: "inspector (auditoría / diff)"
+}
+
+ops_fleet: "Ops sub-agents — warden (own fleet)" {
+  ci_smith: "ci-smith"
+  deploy_smith: "deploy-smith"
+  release_smith: "release-smith"
+  ops_scout: "ops-scout"
+}
+
+# foreman: delegación SOLO exploración/análisis (a:325-334); nunca smiths/painter/chronicler/inspector (a:334)
+primaries.foreman -> explorers: "planning — scout / scribe (a:325)"
+primaries.foreman -> advisors.sage: "arquitectura / trade-offs (a:331)"
+primaries.foreman -> advisors.guild: "debate — solo manual (a:332, 246)"
+
+# ranger: delega solo a exploración/análisis (a:107-112); NO a smiths/painter/chronicler/inspector/guild (a:114)
+primaries.ranger -> explorers: "scout / scribe (a:110-111)"
+primaries.ranger -> advisors.sage: "arquitectura (a:111)"
+
+# craftsman: routing por extensión + override task.metadata.stack (a:50-64)
+primaries.craftsman -> builders: "routing por extensión +\nmetadata.stack override (a:64)"
+primaries.craftsman -> quality.painter: "stack=vue + type=design —\nsolo vía craftsman (a:59,66)"
+primaries.craftsman -> quality.chronicler: "markdown / docs (a:60)"
+primaries.craftsman -> quality.inspector: "diff review pre-close (a:61)"
+
+# warden: own fleet + reuse sage/inspector (a:75); NUNCA dispatcha craftsman/smith/foreman (a:83)
+primaries.warden -> ops_fleet: "ci / deploy / release / ops-scout (a:75)"
+primaries.warden -> advisors.sage: "reused (a:75)"
+primaries.warden -> quality.inspector: "reused (a:75)"
+
+# cross-primary: ranger es peer — invocable vía plan/task o analysis_* (a:355-363)
+primaries.foreman -> primaries.ranger: "task agent='ranger' (a:362)"
+primaries.craftsman -> primaries.ranger: "task agent='ranger' /\nanalysis_* read (a:361-362)"
+primaries.warden -> primaries.ranger: "task agent='ranger' (a:362)"

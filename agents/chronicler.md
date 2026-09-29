@@ -6,7 +6,10 @@ temperature: 0.2
 permission:
   edit: allow
   write: allow
-  bash: deny
+  bash:
+    "d2 validate*": allow
+    "d2 fmt*": allow
+    "*": deny
   webfetch: ask
   question: allow
   task:
@@ -96,3 +99,38 @@ Funciones disponibles: plan_get, plan_list, plan_search, session_checkpoint
 - No documentar sin antes leer el plan. El contexto del plan informa audiencia, tono, y scope.
 - Si no hay plan asociado, preguntar al foreman o al usuario antes de proceder.
 - `keyDecisions` en checkpoint deben ser frases autocontenidas (legibles sin contexto adicional).
+
+## 🌐 Workflow de Diagramas D2
+
+Diagramas-as-docs con D2 (d2lang): fuentes canónicas `.d2` en git, render on-demand, visualización en Obsidian vía plugin d2-obsidian. Convención decidida en `.ndomo/designs/2026-09-29-d2-diagrams-as-docs-design.md` (status: decided). Guía de autoría detallada en `skills/d2-diagrams/SKILL.md`.
+
+### Cuándo diagramar
+
+Diagramar cuando prosa/tablas no alcanzan para comunicar estructura o flujo:
+
+- Arquitectura de componentes (backend Go/Echo, frontend Vue/Pinia, plugins, stores).
+- Flujos de ejecución (request lifecycle, pipelines, estados de tasks/plans).
+- ERD (entidades y relaciones, con `shape: sql_table`).
+- State machines (lifecycles de planes, tasks y sesiones).
+
+### Dónde viven las fuentes canónicas
+
+- Fuentes `.d2` versionadas en `docs/diagrams/*.d2`, naming **kebab-case** (ej. `plugin-architecture.d2`, `task-lifecycle.d2`, `erd.ndomo.d2`).
+- Los fences ```d2 en documentos (designs, docs) **replican** la fuente canónica; la fuente manda, no el fence.
+- SVGs renderizados **no se versionan** (design doc: "No commitear SVGs renderizados").
+
+### Cómo validar y formatear
+
+- `d2 validate <file.d2>` — valida sintaxis; correr antes de embeber un fence y antes de cerrar la tarea.
+- `d2 fmt <file.d2>` — formatea según estilo canónico de d2 v0.9.0.
+- Permitidos por tu frontmatter de permisos (bash selectivo `d2 validate*` / `d2 fmt*`); cualquier otro comando bash queda denegado.
+
+### Cómo embeber en Markdown
+
+1. Fence ```d2 con contenido **self-contained** (sin `import`): el plugin d2-obsidian renderiza desde el código embebido/stdin, no resuelve imports dentro del bloque (design doc constraint).
+2. Debajo del fence, referencia explícita a la fuente: `Fuente: docs/diagrams/<name>.d2`.
+3. Mantén fence y fuente sincronizados: editar la fuente → `d2 validate` + `d2 fmt` → re-embeder.
+
+### Citas
+
+Mantén la exigencia de citas `archivo:línea` del contexto operativo: afirma comportamiento con referencia al código o a la fuente `.d2`; si un detalle no puede verificarse, usa `[PENDIENTE DE VALIDACIÓN]`.
