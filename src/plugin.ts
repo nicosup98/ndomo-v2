@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import { z } from "zod";
-import { loadHttpConfig, loadJevConfig } from "./config/schema.ts";
+import { loadHttpConfig, loadJevConfig, loadObsidianConfig } from "./config/schema.ts";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -104,6 +104,9 @@ import {
   statsMemories,
 } from "./mem/store.ts";
 import { getProjectTagInfo, getUserTagInfo } from "./mem/tags.ts";
+import { obsidianExport } from "./obsidian/export.ts";
+import { obsidianReadNote } from "./obsidian/read.ts";
+import { obsidianError } from "./obsidian/types.ts";
 import { analyzeTaskDependencies, type TaskDepInput } from "./orchestrator/jev-deps.ts";
 import { classifyIntentWithJev } from "./orchestrator/jev-intent.ts";
 import { classifyCodeRiskWithJev } from "./orchestrator/jev-risk.ts";
@@ -729,6 +732,16 @@ export const NdomoPlugin = Plugin.define({
     if (jevConfig.enabled) {
       console.log(
         `[ndomo] JEV routing enabled: model=${jevConfig.model} timeoutMs=${jevConfig.timeoutMs}`,
+      );
+    }
+
+    // Obsidian brain-layer config — vaultPath/allowInsideRepo from ndomo.json
+    // with NDOMO_OBSIDIAN_VAULT_PATH as env fallback (per-field precedence).
+    // An empty vaultPath keeps the obsidian_* tools answering NOT_CONFIGURED.
+    const obsidianConfig = loadObsidianConfig();
+    if (obsidianConfig.enabled && obsidianConfig.vaultPath !== "") {
+      console.log(
+        `[ndomo] Obsidian export enabled: vault=${obsidianConfig.vaultPath} allowInsideRepo=${obsidianConfig.allowInsideRepo}`,
       );
     }
 
@@ -1390,6 +1403,74 @@ export const NdomoPlugin = Plugin.define({
                 )
               : aggregateMemStats(memStoragePath);
           return JSON.stringify({ stats, scope });
+        },
+      }),
+
+      // ── Obsidian (brain layer) ─────────────────────────────────────────
+
+      obsidian_export: tool({
+        description:
+          "Project a plan|task|design|memory into the external Obsidian vault as a normalized markdown note (deterministic + idempotent: unchanged payload → skipped). scope=plan exports the plan plus its non-archived tasks (fail-fast). Returns the envelope as JSON: {ok:true,data:{items,warning}} | {ok:false,error:{code,message,hint}} — never throws.",
+        args: {
+          entityType: z.enum(["plan", "task", "design", "memory"]),
+          entityId: z.string().min(1),
+          scope: z.enum(["single", "plan"]).optional(),
+          kind: z.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          try {
+            const envelope = await obsidianExport(
+              { db, projectDir: ctx.directory, memStoragePath, config: obsidianConfig },
+              {
+                entityType: args.entityType,
+                entityId: args.entityId,
+                ...(args.scope !== undefined ? { scope: args.scope } : {}),
+                ...(args.kind !== undefined ? { kind: args.kind } : {}),
+              },
+            );
+            return JSON.stringify(envelope);
+          } catch (err) {
+            // Defensive: obsidianExport never throws, but a tool handler must
+            // still answer with an envelope instead of breaking the session.
+            return JSON.stringify(
+              obsidianError(
+                "IO_ERROR",
+                `obsidian_export failed: ${err instanceof Error ? err.message : String(err)}`,
+                "check obsidian.vaultPath config and vault permissions, then retry",
+              ),
+            );
+          }
+        },
+      }),
+
+      obsidian_read_note: tool({
+        description:
+          "Read a projected note back from the Obsidian vault by vault-relative `path`, or by `entityType`+`entityId` (the ids used with obsidian_export). Returns {ok:true,data:{markdown,path}} (markdown is null when the file was deleted) | {ok:false,error:{code,message,hint}} — never throws.",
+        args: {
+          path: z.string().optional(),
+          entityType: z.enum(["plan", "task", "design", "memory"]).optional(),
+          entityId: z.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          try {
+            const envelope = await obsidianReadNote(
+              { config: obsidianConfig, projectDir: ctx.directory },
+              {
+                ...(args.path !== undefined ? { path: args.path } : {}),
+                ...(args.entityType !== undefined ? { entityType: args.entityType } : {}),
+                ...(args.entityId !== undefined ? { entityId: args.entityId } : {}),
+              },
+            );
+            return JSON.stringify(envelope);
+          } catch (err) {
+            return JSON.stringify(
+              obsidianError(
+                "IO_ERROR",
+                `obsidian_read_note failed: ${err instanceof Error ? err.message : String(err)}`,
+                "pass a vault-relative path, or entityType+entityId of an exported note",
+              ),
+            );
+          }
         },
       }),
 

@@ -329,6 +329,11 @@
     "autoCaptureEnabled": true,
     "cavemanCompress": true
   },
+  "obsidian": {
+    "enabled": true,
+    "vaultPath": "~/Vaults/ndomo-brain",
+    "allowInsideRepo": false
+  },
   "circuitBreaker": {
     "threshold": 4000
   }

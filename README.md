@@ -249,6 +249,7 @@ ndomo bundles 6 skills under `skills/`:
 
 - **Embedded memory** (built-in) — persistent memory with bun:sqlite + FlexSearch. One SQLite DB per project at `~/.ndomo/mem/projects/<projectTag>.db` (WAL). Tools: `mem_add`, `mem_search`, `mem_list`, `mem_forget`, `mem_stats`, and `memory_compress` (regex caveman compression, 0 LLM tokens). Legacy memory shards can be migrated with `bun scripts/migrate-memory.ts`.
 - **DCP** (optional) — `@tarquinen/opencode-dcp` for dynamic context pruning. AGPL-3.0. Installed with `--with-dcp` flag.
+- **Obsidian Brain Layer** (built-in) — proyección determinista y unidireccional (repo → vault) de plans, tasks, designs y memories hacia un vault Obsidian externo. Tools nuevas: `obsidian_export` (idempotente, SHA-256) y `obsidian_read_note`. Requiere el bloque `obsidian` en `ndomo.json`; sin reverse sync, watchers ni CLI. Ver [docs/obsidian.md](docs/obsidian.md).
 
 See [docs/integrations.md](docs/integrations.md) for details.
 

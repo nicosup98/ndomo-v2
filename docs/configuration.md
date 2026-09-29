@@ -270,6 +270,48 @@ Agents without explicit overrides use DCP defaults. The foreman monitors context
 > This path is **not configurable** via `ndomo.json` — it always lives under
 > `<project>/.ndomo/archives/plans/`. See [docs/database.md#auto-archive](docs/database.md#auto-archive).
 
+## Obsidian Brain Layer
+
+Proyección determinista del estado ndomo hacia un vault Obsidian **externo**. SQLite (`<project>/.ndomo/state.db`) y la memoria embebida (`~/.ndomo/mem/`) siguen siendo las **únicas fuentes de verdad**; el vault es sólo interfaz humana de lectura, enlace y análisis de grafo. La integración es 100% vía tools (`obsidian_export`, `obsidian_read_note`), sin CLI, watchers ni procesos de fondo.
+
+Guía completa (tools, taxonomía de carpetas, anatomía de la nota, códigos de error): [docs/obsidian.md](obsidian.md).
+
+```json
+{
+  "obsidian": {
+    "enabled": true,
+    "vaultPath": "~/Vaults/ndomo-brain",
+    "allowInsideRepo": false
+  }
+}
+```
+
+| Campo | Tipo | Default | Descripción |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Master switch de las tools `obsidian_*`. `false` → envelope `DISABLED` sin tocar el vault. |
+| `vaultPath` | string | `""` | Raíz del vault (`~` expandido), p. ej. `~/Vaults/ndomo-brain`. **Obligatorio en la práctica**: vacío → envelope `NOT_CONFIGURED` (ndomo no adivina un vault). Debe resolver fuera del repo salvo que `allowInsideRepo` sea `true`. |
+| `allowInsideRepo` | boolean | `false` | Permite que `vaultPath` apunte **dentro** del repo del proyecto. `false` (default) → envelope `INSIDE_REPO`. Es un guard **config-only**: no hay bypass por argumento en cada llamada. |
+
+### Precedencia de `vaultPath`
+
+Resuelto por campo en `loadObsidianConfig()` (`src/config/schema.ts`):
+
+1. `obsidian.vaultPath` del `ndomo.json` (valor no vacío).
+2. Env `NDOMO_OBSIDIAN_VAULT_PATH` — fallback pensado para tests/CI (apunta a un tmp dir sin escribir config).
+3. Default `""` → estado "no configurado" → `NOT_CONFIGURED`.
+
+`enabled` y `allowInsideRepo` sólo se leen del archivo (no tienen env de override). Un bloque `obsidian` parcial o ausente es siempre válido: cada campo cae a su default.
+
+### Guards
+
+- **`vaultPath` vacío** → `NOT_CONFIGURED`.
+- **`enabled: false`** → `DISABLED`.
+- **`vaultPath` dentro del repo** (y `allowInsideRepo: false`) → `INSIDE_REPO`. El chequeo une un test léxico (`path.relative`) con un `realpath` best-effort, así que un symlink que apunte hacia el repo también se detecta.
+- El directorio del vault **se crea si no existe** (mkdir recursivo) antes de escribir la primera nota.
+- `vaultPath` no absoluta → `UNSAFE_PATH` (chequeo previo al de inside-repo: una ruta relativa haría insignificante la respuesta del guard).
+
+> **Nota:** el block `obsidian` es opcional en el schema (no está en `required`). Sin él, las tools responden `NOT_CONFIGURED` en lugar de fallar — el plugin no rompe la sesión.
+
 ## Protected Tools
 
 Tools listed in `protectedTools` cannot be disabled, overridden, or pruned from context by any subagent:

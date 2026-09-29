@@ -7,10 +7,19 @@
 
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { loadObsidianConfig } from "./config/schema.ts";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -38,6 +47,8 @@ import {
   updateTaskStatus,
 } from "./db/tasks.ts";
 import type { Plan } from "./db/types.ts";
+import { getProjectTagInfo } from "./mem/tags.ts";
+import { sanitizeSegment } from "./obsidian/paths.ts";
 import {
   escalateToForeman,
   FileLock,
@@ -2856,11 +2867,11 @@ describe("NdomoPlugin v2 registration", () => {
     return { projectDir, harness, cleanup };
   };
 
-  test("setup registers 59 tools, all 4 hooks, and returns a cleanup fn", async () => {
+  test("setup registers 61 tools, all 4 hooks, and returns a cleanup fn", async () => {
     const { projectDir, harness, cleanup } = await setupPlugin();
     try {
       expect(typeof cleanup).toBe("function");
-      expect(harness.tools).toHaveLength(59);
+      expect(harness.tools).toHaveLength(61);
       const names = harness.tools.map((t) => t.name);
       expect(names).toContain("plan_create");
       expect(names).toContain("task_update_status");
@@ -2879,7 +2890,10 @@ describe("NdomoPlugin v2 registration", () => {
       expect(names).toContain("mem_list");
       expect(names).toContain("mem_forget");
       expect(names).toContain("mem_stats");
-      expect(new Set(names).size).toBe(59);
+      // Obsidian brain layer (OBL-3).
+      expect(names).toContain("obsidian_export");
+      expect(names).toContain("obsidian_read_note");
+      expect(new Set(names).size).toBe(61);
       expect(harness.sessionHooks.map((h) => h.name)).toEqual(["compaction"]);
       expect(harness.toolHooks.map((h) => h.name).sort()).toEqual([
         "execute.after",
@@ -3130,7 +3144,7 @@ describe("NdomoPlugin v2 registration", () => {
       const first = makePluginHarness(projectDir);
       const firstCleanup = await NdomoPlugin.setup(first.ctx);
       if (typeof firstCleanup !== "function") throw new Error("setup did not return a cleanup fn");
-      expect(first.tools).toHaveLength(59);
+      expect(first.tools).toHaveLength(61);
       await firstCleanup();
       await firstCleanup(); // idempotent — a second dispose must not throw
 
@@ -3141,8 +3155,8 @@ describe("NdomoPlugin v2 registration", () => {
       if (typeof secondCleanup !== "function") {
         throw new Error("setup did not return a cleanup fn");
       }
-      expect(second.tools).toHaveLength(59);
-      expect(first.tools).toHaveLength(59);
+      expect(second.tools).toHaveLength(61);
+      expect(first.tools).toHaveLength(61);
       await secondCleanup();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
@@ -3680,5 +3694,568 @@ describe("memory tools (mem_*)", () => {
       await cleanup();
       rmSync(projectDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── Obsidian brain layer (OBL-3): obsidian_export / obsidian_read_note ──────
+
+type ObsidianEnvelopeJson<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string; hint?: string } };
+
+type ExportDataJson = {
+  items: Array<{
+    entityType: string;
+    entityId: string;
+    status: "exported" | "skipped";
+    path: string;
+    kind: string;
+  }>;
+  warning: string | null;
+};
+
+/**
+ * Obsidian tools through the real v2 registration path.
+ *
+ * Hermetic by construction: HOME and XDG_CONFIG_HOME point at a sandbox tmp
+ * dir, so neither the real user ndomo.json nor the real sync-state under
+ * .ndomo/obsidian are ever read or written. NDOMO_MEM_STORAGE_PATH is
+ * sandboxed too, and NDOMO_OBSIDIAN_VAULT_PATH is deleted in beforeEach and
+ * restored in afterEach.
+ */
+describe("obsidian tools (obsidian_export / obsidian_read_note)", () => {
+  const priorEnv = {
+    home: process.env.HOME,
+    xdg: process.env.XDG_CONFIG_HOME,
+    vault: process.env.NDOMO_OBSIDIAN_VAULT_PATH,
+    mem: process.env.NDOMO_MEM_STORAGE_PATH,
+    skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
+    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
+  };
+  const restoreEnv = (key: string, value: string | undefined): void => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  };
+
+  let sandbox: string;
+  let home: string;
+  let xdg: string;
+  let vault: string;
+
+  beforeEach(() => {
+    sandbox = mkdtempSync(join(tmpdir(), "ndomo-obsidian-tools-"));
+    home = join(sandbox, "home");
+    xdg = join(sandbox, "xdg");
+    vault = join(sandbox, "vault");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(xdg, { recursive: true });
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.NDOMO_MEM_STORAGE_PATH = join(sandbox, "mem");
+    process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
+    process.env.NDOMO_HTTP_ENABLED = "false";
+    delete process.env.NDOMO_OBSIDIAN_VAULT_PATH;
+  });
+
+  afterEach(() => {
+    restoreEnv("HOME", priorEnv.home);
+    restoreEnv("XDG_CONFIG_HOME", priorEnv.xdg);
+    restoreEnv("NDOMO_OBSIDIAN_VAULT_PATH", priorEnv.vault);
+    restoreEnv("NDOMO_MEM_STORAGE_PATH", priorEnv.mem);
+    restoreEnv("NDOMO_SKIP_FRONTMATTER_SYNC", priorEnv.skipFrontmatter);
+    restoreEnv("NDOMO_HTTP_ENABLED", priorEnv.httpEnabled);
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  /** Standalone plugin (own tmp project dir + own state.db) inside the sandbox. */
+  const setupObsidianPlugin = async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-obsidian-"));
+    const harness = makePluginHarness(projectDir);
+    const cleanup = await NdomoPlugin.setup(harness.ctx);
+    if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
+    const find = (name: string) => {
+      const tool = harness.tools.find((t) => t.name === name);
+      if (!tool) throw new Error(`tool not registered: ${name}`);
+      return tool;
+    };
+    return {
+      projectDir,
+      harness,
+      cleanup,
+      find,
+      run: async <T>(
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<ObsidianEnvelopeJson<T>> => {
+        const res = await find(name).execute(args, harness.toolCtx("ses_obsidian"));
+        return JSON.parse(res.content) as ObsidianEnvelopeJson<T>;
+      },
+      /** Non-envelope tools (plan_create, task_create_batch, …) return plain JSON. */
+      raw: async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+        const res = await find(name).execute(args, harness.toolCtx("ses_obsidian"));
+        return JSON.parse(res.content) as unknown;
+      },
+    };
+  };
+
+  /** Indexed access to an export item / batch row — throws instead of `!`. */
+  const at = <T>(items: readonly T[], index: number): T => {
+    const item = items[index];
+    if (item === undefined) throw new Error(`item[${index}] missing in ${items.length}-item list`);
+    return item;
+  };
+
+  test("obsidian_export answers NOT_CONFIGURED when no vaultPath is set", async () => {
+    const { cleanup, run } = await setupObsidianPlugin();
+    try {
+      const res = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: "any",
+      });
+      expect(res).toMatchObject({ ok: false, error: { code: "NOT_CONFIGURED" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("export plan is idempotent: exported → note on disk → skipped", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw, projectDir } = await setupObsidianPlugin();
+    try {
+      const created = (await raw("plan_create", {
+        slug: "obsidian-happy",
+        title: "Obsidian happy path",
+        overview: "Projection smoke",
+        priority: 3,
+      })) as { id: string };
+      expect(typeof created.id).toBe("string");
+      const planId = created.id;
+
+      const first = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: planId,
+      });
+      expect(first.ok).toBe(true);
+      const firstData = (first as { ok: true; data: ExportDataJson }).data;
+      expect(firstData.items).toHaveLength(1);
+      expect(firstData.items[0]?.status).toBe("exported");
+      const notePath = firstData.items[0]?.path ?? "";
+      expect(notePath.startsWith("Projects/")).toBe(true);
+      expect(notePath.endsWith("/10-Plans/obsidian-happy.md")).toBe(true);
+
+      const absNote = join(vault, notePath);
+      expect(existsSync(absNote)).toBe(true);
+
+      // sync-state lives under the sandboxed HOME, never in the real ~/.ndomo.
+      const tag = getProjectTagInfo(projectDir).tag;
+      expect(
+        existsSync(
+          join(home, ".ndomo", "obsidian", "projects", sanitizeSegment(tag), "sync-state.json"),
+        ),
+      ).toBe(true);
+
+      const second = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: planId,
+      });
+      expect(second.ok).toBe(true);
+      const secondData = (second as { ok: true; data: ExportDataJson }).data;
+      expect(secondData.items[0]?.status).toBe("skipped");
+      expect(secondData.warning).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("obsidian_read_note reads by entityType+entityId and rejects traversal", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw } = await setupObsidianPlugin();
+    try {
+      const created = (await raw("plan_create", {
+        slug: "obsidian-read",
+        title: "Obsidian read",
+        overview: "Read smoke",
+        priority: 3,
+      })) as { id: string };
+      const planId = created.id;
+      const exported = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: planId,
+      });
+      expect(exported.ok).toBe(true);
+
+      const byEntity = await run<{ markdown: string | null; path: string }>("obsidian_read_note", {
+        entityType: "plan",
+        entityId: planId,
+      });
+      expect(byEntity.ok).toBe(true);
+      const readData = (byEntity as { ok: true; data: { markdown: string | null } }).data;
+      expect(readData.markdown).toContain("ndomoEntity: 'plan'");
+      expect(readData.markdown).toContain("---");
+
+      const traversal = await run("obsidian_read_note", { path: "../../etc/passwd" });
+      expect(traversal).toMatchObject({ ok: false, error: { code: "UNSAFE_PATH" } });
+
+      const absolute = await run("obsidian_read_note", { path: "/etc/passwd" });
+      expect(absolute).toMatchObject({ ok: false, error: { code: "UNSAFE_PATH" } });
+
+      const missing = await run("obsidian_read_note", {
+        entityType: "plan",
+        entityId: "plan_does_not_exist",
+      });
+      expect(missing).toMatchObject({ ok: false, error: { code: "ENTITY_NOT_FOUND" } });
+
+      const empty = await run("obsidian_read_note", {});
+      expect(empty).toMatchObject({ ok: false, error: { code: "IO_ERROR" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("obsidian_export scope=plan projects the plan plus its non-archived tasks", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw } = await setupObsidianPlugin();
+    try {
+      const created = (await raw("plan_create", {
+        slug: "obsidian-scope",
+        title: "Obsidian scope plan",
+        overview: "scope=plan smoke",
+        priority: 3,
+      })) as { id: string };
+      const planId = created.id;
+
+      const batch = (await raw("task_create_batch", {
+        planId,
+        tasks: [{ description: "first scoped task", agent: "craftsman" }],
+      })) as Array<{ id: string }>;
+      expect(batch.length).toBe(1);
+      const taskId = batch[0]?.id ?? "";
+
+      const res = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: planId,
+        scope: "plan",
+      });
+      expect(res.ok).toBe(true);
+      const data = (res as { ok: true; data: ExportDataJson }).data;
+      expect(data.items).toHaveLength(2);
+      expect(data.items[0]?.entityType).toBe("plan");
+      expect(data.items[1]?.entityType).toBe("task");
+      expect(data.items[1]?.entityId).toBe(taskId);
+      for (const item of data.items) {
+        expect(existsSync(join(vault, item.path))).toBe(true);
+      }
+
+      // scope=plan on a non-plan entityType is a caller error (documented).
+      const wrongScope = await run("obsidian_export", {
+        entityType: "task",
+        entityId: taskId,
+        scope: "plan",
+      });
+      expect(wrongScope).toMatchObject({ ok: false, error: { code: "IO_ERROR" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("obsidian_export maps missing entities and bad kind overrides", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run } = await setupObsidianPlugin();
+    try {
+      const missing = await run("obsidian_export", {
+        entityType: "plan",
+        entityId: "plan_nope",
+      });
+      expect(missing).toMatchObject({ ok: false, error: { code: "ENTITY_NOT_FOUND" } });
+
+      const missingDesign = await run("obsidian_export", {
+        entityType: "design",
+        entityId: "2020-01-01-not-a-design",
+      });
+      expect(missingDesign).toMatchObject({ ok: false, error: { code: "SOURCE_NOT_FOUND" } });
+
+      const badKind = await run("obsidian_export", {
+        entityType: "plan",
+        entityId: "whatever",
+        kind: "banana",
+      });
+      expect(badKind).toMatchObject({ ok: false, error: { code: "INVALID_KIND" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("obsidian tools answer DISABLED when obsidian.enabled=false in ndomo.json", async () => {
+    mkdirSync(join(xdg, "opencode"), { recursive: true });
+    writeFileSync(
+      join(xdg, "opencode", "ndomo.json"),
+      JSON.stringify({ obsidian: { enabled: false, vaultPath: vault, allowInsideRepo: false } }),
+      "utf-8",
+    );
+    const { cleanup, run } = await setupObsidianPlugin();
+    try {
+      const exported = await run("obsidian_export", { entityType: "plan", entityId: "x" });
+      expect(exported).toMatchObject({ ok: false, error: { code: "DISABLED" } });
+
+      const read = await run("obsidian_read_note", { path: "Projects/x.md" });
+      expect(read).toMatchObject({ ok: false, error: { code: "DISABLED" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("obsidian_export projects design sources and memories into their folders", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw, projectDir } = await setupObsidianPlugin();
+    try {
+      mkdirSync(join(projectDir, ".ndomo", "designs"), { recursive: true });
+      writeFileSync(
+        join(projectDir, ".ndomo", "designs", "2026-09-25-demo-design.md"),
+        "# Demo design\n\nBody text.\n",
+        "utf-8",
+      );
+
+      const design = await run<ExportDataJson>("obsidian_export", {
+        entityType: "design",
+        entityId: "2026-09-25-demo-design",
+      });
+      expect(design.ok).toBe(true);
+      const designData = (design as { ok: true; data: ExportDataJson }).data;
+      expect(designData.items[0]?.kind).toBe("design");
+      const designPath = designData.items[0]?.path ?? "";
+      expect(designPath).toContain("/50-Designs/");
+      expect(existsSync(join(vault, designPath))).toBe(true);
+
+      const added = (await raw("mem_add", {
+        content: `obsidian memory sample ${Math.random()}`,
+      })) as { id: string };
+      const memory = await run<ExportDataJson>("obsidian_export", {
+        entityType: "memory",
+        entityId: added.id,
+      });
+      expect(memory.ok).toBe(true);
+      const memoryData = (memory as { ok: true; data: ExportDataJson }).data;
+      expect(memoryData.items[0]?.kind).toBe("other");
+      const memoryPath = memoryData.items[0]?.path ?? "";
+      expect(memoryPath).toContain("/95-Memories/");
+      expect(existsSync(join(vault, memoryPath))).toBe(true);
+
+      // A memory id that was never added is simply not found.
+      const unknown = await run("obsidian_export", {
+        entityType: "memory",
+        entityId: "mem_missing",
+      });
+      expect(unknown).toMatchObject({ ok: false, error: { code: "ENTITY_NOT_FOUND" } });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // ── Adversarial (A5): symlink escape + human-edit preservation ────────────
+
+  test("a note replaced by a symlink outside the vault reads UNSAFE_PATH", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw } = await setupObsidianPlugin();
+    try {
+      const created = (await raw("plan_create", {
+        slug: "obsidian-symlink",
+        title: "Symlink escape",
+        overview: "Adversarial symlink case",
+        priority: 3,
+      })) as { id: string };
+      const exported = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: created.id,
+      });
+      expect(exported.ok).toBe(true);
+      const items = (exported as { ok: true; data: ExportDataJson }).data.items;
+      const notePath = at(items, 0).path;
+      expect(notePath).not.toBe("");
+
+      // Someone swaps the note for a link to a host file.
+      const absNote = join(vault, notePath);
+      rmSync(absNote, { force: true });
+      symlinkSync("/etc/passwd", absNote);
+
+      const byPath = await run("obsidian_read_note", { path: notePath });
+      expect(byPath).toMatchObject({ ok: false, error: { code: "UNSAFE_PATH" } });
+
+      // Same escape through the sync-state branch (entity lookup).
+      const byEntity = await run("obsidian_read_note", {
+        entityType: "plan",
+        entityId: created.id,
+      });
+      expect(byEntity).toMatchObject({ ok: false, error: { code: "UNSAFE_PATH" } });
+
+      // The host file is never echoed back in any field.
+      expect(JSON.stringify(byPath)).not.toContain("root:");
+      expect(JSON.stringify(byEntity)).not.toContain("root:");
+      // The link target itself was not touched either.
+      expect(readFileSync("/etc/passwd", "utf-8").length).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("human edit below the auto block survives a same-state re-export (skipped)", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw } = await setupObsidianPlugin();
+    try {
+      const created = (await raw("plan_create", {
+        slug: "obsidian-human",
+        title: "Human edit",
+        overview: "Human section preservation",
+        priority: 3,
+      })) as { id: string };
+      const first = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: created.id,
+      });
+      expect(first.ok).toBe(true);
+      const notePath = at((first as { ok: true; data: ExportDataJson }).data.items, 0).path;
+      const absNote = join(vault, notePath);
+
+      const before = readFileSync(absNote, "utf-8");
+      expect(before).toContain("%% ndomo:auto:end %%");
+      const humanLine = "Decisión del humano: mantener el orden alfabético.";
+      // Append strictly AFTER the auto block (everything there is human-owned).
+      const withHuman = `${before}${humanLine}\n`;
+      writeFileSync(absNote, withHuman, "utf-8");
+
+      const second = await run<ExportDataJson>("obsidian_export", {
+        entityType: "plan",
+        entityId: created.id,
+      });
+      expect(second.ok).toBe(true);
+      const items = (second as { ok: true; data: ExportDataJson }).data.items;
+      expect(at(items, 0).status).toBe("skipped");
+      // Bytes untouched: no rewrite happened, the human line is still there.
+      expect(readFileSync(absNote, "utf-8")).toBe(withHuman);
+      expect(readFileSync(absNote, "utf-8")).toContain(humanLine);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("kind override at tool level migrates the note and drags the human section", async () => {
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = vault;
+    const { cleanup, run, raw } = await setupObsidianPlugin();
+    try {
+      const plan = (await raw("plan_create", {
+        slug: "obsidian-kind-move",
+        title: "Kind move",
+        overview: "Kind override migration",
+        priority: 3,
+        // Señal de clasificación: la task hereda `feature` del plan padre.
+        metadata: { jevIntent: "feature" },
+      })) as { id: string };
+      const batch = (await raw("task_create_batch", {
+        planId: plan.id,
+        tasks: [{ description: "task que cambia de carpeta", agent: "craftsman" }],
+      })) as Array<{ id: string }>;
+      const taskId = at(batch, 0).id;
+
+      const first = await run<ExportDataJson>("obsidian_export", {
+        entityType: "task",
+        entityId: taskId,
+      });
+      expect(first.ok).toBe(true);
+      const firstItem = at((first as { ok: true; data: ExportDataJson }).data.items, 0);
+      expect(firstItem.kind).toBe("feature");
+      expect(firstItem.path).toContain("/20-Features/");
+
+      const absNote = join(vault, firstItem.path);
+      const humanLine = "Apunte humano escrito en la carpeta vieja.";
+      writeFileSync(absNote, `${readFileSync(absNote, "utf-8")}${humanLine}\n`, "utf-8");
+
+      const second = await run<ExportDataJson>("obsidian_export", {
+        entityType: "task",
+        entityId: taskId,
+        kind: "docs",
+      });
+      expect(second.ok).toBe(true);
+      const secondItem = at((second as { ok: true; data: ExportDataJson }).data.items, 0);
+      expect(secondItem.kind).toBe("docs");
+      expect(secondItem.path).toContain("/70-Docs/");
+      expect(secondItem.path).not.toBe(firstItem.path);
+
+      expect(existsSync(join(vault, firstItem.path))).toBe(false);
+      const migrated = readFileSync(join(vault, secondItem.path), "utf-8");
+      expect(migrated).toContain(humanLine);
+      expect(migrated).toContain("ndomoKind: 'docs'");
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("loadObsidianConfig (per-field precedence)", () => {
+  const priorVaultEnv = process.env.NDOMO_OBSIDIAN_VAULT_PATH;
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ndomo-obsidian-config-"));
+    delete process.env.NDOMO_OBSIDIAN_VAULT_PATH;
+  });
+
+  afterEach(() => {
+    if (priorVaultEnv === undefined) delete process.env.NDOMO_OBSIDIAN_VAULT_PATH;
+    else process.env.NDOMO_OBSIDIAN_VAULT_PATH = priorVaultEnv;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("missing file → defaults, env fills vaultPath", () => {
+    const missing = join(dir, "missing.json");
+    expect(loadObsidianConfig(missing)).toEqual({
+      enabled: true,
+      vaultPath: "",
+      allowInsideRepo: false,
+    });
+
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = join(dir, "vault");
+    expect(loadObsidianConfig(missing)).toEqual({
+      enabled: true,
+      vaultPath: join(dir, "vault"),
+      allowInsideRepo: false,
+    });
+  });
+
+  test("file block wins per field and beats the env vaultPath", () => {
+    const file = join(dir, "ndomo.json");
+    const fromFile = join(dir, "from-file");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        obsidian: { enabled: false, vaultPath: ` ${fromFile} `, allowInsideRepo: true },
+      }),
+      "utf-8",
+    );
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = join(dir, "from-env");
+    expect(loadObsidianConfig(file)).toEqual({
+      enabled: false,
+      vaultPath: fromFile,
+      allowInsideRepo: true,
+    });
+  });
+
+  test("partial file block falls back field by field", () => {
+    const file = join(dir, "ndomo.json");
+    writeFileSync(file, JSON.stringify({ obsidian: { enabled: false } }), "utf-8");
+    process.env.NDOMO_OBSIDIAN_VAULT_PATH = join(dir, "from-env");
+    expect(loadObsidianConfig(file)).toEqual({
+      enabled: false,
+      vaultPath: join(dir, "from-env"),
+      allowInsideRepo: false,
+    });
+  });
+
+  test("a non-object obsidian block degrades to defaults", () => {
+    const file = join(dir, "ndomo.json");
+    writeFileSync(file, JSON.stringify({ obsidian: "nope" }), "utf-8");
+    expect(loadObsidianConfig(file)).toEqual({
+      enabled: true,
+      vaultPath: "",
+      allowInsideRepo: false,
+    });
   });
 });

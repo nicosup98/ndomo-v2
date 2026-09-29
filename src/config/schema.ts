@@ -13,6 +13,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+// Type-only import: src/obsidian/types.ts has zero runtime imports, so the
+// loader and the projection layer never form a module cycle.
+import type { ObsidianConfig } from "../obsidian/types.ts";
+
+export type { ObsidianConfig };
 
 export type HttpConfig = {
   enabled: boolean; // default false, env: NDOMO_HTTP_ENABLED
@@ -69,6 +74,8 @@ export type NdomoConfig = {
   >;
   http?: HttpConfig;
   jev?: JevConfig;
+  /** Obsidian brain-layer projection (see {@link loadObsidianConfig}). */
+  obsidian?: ObsidianConfig;
   [key: string]: unknown;
 };
 
@@ -214,6 +221,50 @@ export function loadJevConfig(configPath?: string): JevConfig {
       typeof obj.timeoutMs === "number" && Number.isFinite(obj.timeoutMs) && obj.timeoutMs > 0
         ? Math.floor(obj.timeoutMs)
         : JEV_DEFAULTS.timeoutMs,
+  };
+}
+
+// ─── Obsidian (brain layer) Configuration ────────────────────────────────────
+/**
+ * Env fallback for the vault location. Lets tests / CI point the projection at
+ * a tmp dir without writing a config file (design goal: `NDOMO_OBSIDIAN_VAULT_PATH`).
+ */
+const OBSIDIAN_VAULT_ENV = "NDOMO_OBSIDIAN_VAULT_PATH";
+
+/**
+ * Load the Obsidian projection config with PER-FIELD precedence (same style as
+ * {@link loadJevConfig}), so a partial `obsidian` block is always safe:
+ *
+ * - `enabled`         → `file.obsidian.enabled` (boolean) else `true`
+ * - `vaultPath`       → non-empty `file.obsidian.vaultPath` → `$NDOMO_OBSIDIAN_VAULT_PATH` → `""`
+ * - `allowInsideRepo` → `file.obsidian.allowInsideRepo` (boolean) else `false`
+ *
+ * `vaultPath: ""` is the "not configured" state: the `obsidian_*` tools answer
+ * with the `NOT_CONFIGURED` envelope instead of guessing a vault.
+ *
+ * @param configPath - Optional explicit path to ndomo.json
+ * @returns ObsidianConfig with resolved values
+ *
+ * @example
+ * // env: NDOMO_OBSIDIAN_VAULT_PATH=/tmp/vault
+ * loadObsidianConfig();
+ * // → { enabled: true, vaultPath: "/tmp/vault", allowInsideRepo: false }
+ */
+export function loadObsidianConfig(configPath?: string): ObsidianConfig {
+  const fileConfig = loadNdomoConfig(configPath);
+  const raw: unknown = fileConfig.obsidian;
+  const obj: Record<string, unknown> =
+    typeof raw === "object" && raw !== null && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+
+  const fileVault = typeof obj.vaultPath === "string" ? obj.vaultPath.trim() : "";
+  const envVault = (process.env[OBSIDIAN_VAULT_ENV] ?? "").trim();
+
+  return {
+    enabled: typeof obj.enabled === "boolean" ? obj.enabled : true,
+    vaultPath: fileVault !== "" ? fileVault : envVault,
+    allowInsideRepo: typeof obj.allowInsideRepo === "boolean" ? obj.allowInsideRepo : false,
   };
 }
 
