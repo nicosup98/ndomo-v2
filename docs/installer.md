@@ -4,7 +4,7 @@ TypeScript installer for ndomo. Replaces the legacy `scripts/install.sh` (now de
 
 ## Overview
 
-`bunx ndomo install` installs agents, skills, config, and optional HTTP server support into `~/.config/opencode/`. It performs the same phases as the bash installer:
+`bunx ndomo install` installs agents, skills, and config into `~/.config/opencode/`. It performs the same phases as the bash installer:
 
 1. Dependency installation (`bun install`)
 2. TypeScript build
@@ -18,7 +18,6 @@ TypeScript installer for ndomo. Replaces the legacy `scripts/install.sh` (now de
 10. Tool files copy
 11. Preset injection into `ndomo.json`
 12. Optional DCP plugin install
-13. HTTP auto-prompt (interactive in TTY, skipped in CI)
 
 **Invocation:**
 
@@ -40,11 +39,6 @@ bun run src/cli/install.ts [OPTIONS]
 | `--with-dcp` | Install `@tarquinen/opencode-dcp` (AGPL-3.0 peer) | `false` |
 | `--dry-run` | Print planned changes, do not write | `false` |
 | `--skip-deps` | Skip `bun install` step | `false` |
-| `--enable-http` | Auto-enable HTTP server (writes http block to `ndomo.config.json`) | (interactive prompt) |
-| `--disable-http` | Skip HTTP auto-prompt entirely | `false` |
-| `--port=N` | HTTP server port | `4097` |
-| `--cors-origins=CSV` | HTTP CORS origins (comma-separated) | `*` |
-| `--auth-required=BOOL` | HTTP auth requirement | `true` |
 | `--uninstall` | Run uninstaller (compat shim to `scripts/uninstall.sh`) | `false` |
 | `--help, -h` | Show help | `false` |
 
@@ -54,44 +48,6 @@ bun run src/cli/install.ts [OPTIONS]
 |----------|-------------|
 | `NDOMO_SKIP_PACKAGE_INSTALL=1` | Skip ndomo package installation entirely |
 | `XDG_CONFIG_HOME` | Override config directory (default: `~/.config`) |
-
-## HTTP Auto-Prompt
-
-When invoked in a TTY without `--enable-http` or `--disable-http`, the installer prompts:
-
-```
-[?] Enable ndomo HTTP server? Allows programmatic plan/task control via API.
-    Recommended for users integrating ndomo with other tools (port 4097, auth required).
-    Enable now? [Y/n]:
-```
-
-**Behavior:**
-
-- `Y` / Enter -> writes http block to `config/ndomo.config.json`
-- `n` -> skips, no http block written
-- Non-TTY (CI, scripts) -> silently skips with info log
-- 30-second timeout -> auto-skips
-
-**Block written to `config/ndomo.config.json`:**
-
-```json
-{
-  "http": {
-    "enabled": true,
-    "port": 4097,
-    "cors": { "origins": ["*"] },
-    "auth": { "required": true }
-  }
-}
-```
-
-**Precedence:** `ndomo.config.json::http` block > env vars > defaults.
-
-Override via flags:
-
-```bash
-bunx ndomo install --enable-http --port=8080 --cors-origins=localhost:3000 --auth-required=false
-```
 
 ## Package Install Strategies
 
@@ -133,12 +89,6 @@ curl -fsSL https://bun.sh/install | bash
 ### "No agents/ directory found"
 
 Run from a ndomo clone. The installer expects `agents/`, `skills/`, and `config/` directories at the project root.
-
-### HTTP not responding after --enable-http
-
-1. Check that `bun run src/cli/serve.ts` starts without errors.
-2. Ensure `OPENCODE_SERVER_PASSWORD` env var is set (HTTP auth requires it).
-3. Verify port 4097 is not in use: `lsof -i :4097`.
 
 ### Symlink stale cache warning
 

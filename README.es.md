@@ -36,17 +36,17 @@ ndomo es un plugin de orquestación multi-agente para [OpenCode](https://github.
 ## Inicio Rápido
 
 ```bash
-# Instalación rápida (interactivo, preguntará por HTTP)
+# Instalación rápida (interactivo)
 bunx ndomo install
 
-# No interactivo con preset + HTTP habilitado
-bunx ndomo install --preset=budget --enable-http
+# No interactivo con preset
+bunx ndomo install --preset=budget
 
 # Con DCP
 bunx ndomo install --with-dcp
 ```
 
-Por defecto la instalación aplica `presets.default` de `config/ndomo.config.json`. Usa `--preset=budget` para modelos más económicos, `--provider=ID` para sobrescribir el prefijo de provider, `--enable-http` para activar el servidor HTTP.
+Por defecto la instalación aplica `presets.default` de `config/ndomo.config.json`. Usa `--preset=budget` para modelos más económicos, `--provider=ID` para sobrescribir el prefijo de provider.
 
 O desde el código fuente:
 
@@ -70,7 +70,7 @@ ping all agents
 Instalación vía bunx (recomendada):
 
 ```bash
-# Instalación interactiva (preguntará por HTTP)
+# Instalación interactiva
 bunx ndomo install
 
 # Con provider preestablecido (no interactivo)
@@ -103,11 +103,6 @@ Ver [docs/installer.md](docs/installer.md) para pasos detallados.
 | `--with-dcp` | Instala y configura el plugin DCP. |
 | `--dry-run` | Imprime los cambios planeados sin escribir archivos. |
 | `--skip-deps` | Omite el paso de dependencias (`bun install`). |
-| `--enable-http` | Activa automáticamente el servidor HTTP (escribe bloque http en `ndomo.config.json`). |
-| `--disable-http` | Omite por completo el prompt automático de HTTP (default en no-TTY / CI). |
-| `--port=N` | Puerto del servidor HTTP (default: `4097`). |
-| `--cors-origins=CSV` | Orígenes CORS del HTTP, separados por comas (default: `*`). |
-| `--auth-required=BOOL` | Requisito de auth HTTP (default: `true`). |
 
 **Desinstalación:** `bunx ndomo install --uninstall` or `./scripts/uninstall.sh [--keep-data]`
 

@@ -39,11 +39,11 @@ ndomo is a multi-agent orchestration plugin for [OpenCode](https://github.com/op
 ## Quick Start
 
 ```bash
-# Quick install (interactive, will prompt for HTTP)
+# Quick install (interactive)
 bunx ndomo install
 
-# Non-interactive with preset + HTTP enabled
-bunx ndomo install --preset=budget --enable-http
+# Non-interactive with preset
+bunx ndomo install --preset=budget
 
 # With DCP
 bunx ndomo install --with-dcp
@@ -73,7 +73,7 @@ ping all agents
 Install via bunx (recommended):
 
 ```bash
-# Interactive install (will prompt for HTTP)
+# Interactive install
 bunx ndomo install
 
 # With provider preset (non-interactive)
@@ -108,11 +108,6 @@ See [docs/installer.md](docs/installer.md) for detailed steps and full flag refe
 | `--with-dcp` | Install and configure the DCP plugin. |
 | `--dry-run` | Print planned changes without writing files. |
 | `--skip-deps` | Skip the `bun install` dependency step. |
-| `--enable-http` | Auto-enable HTTP server (writes http block to `ndomo.config.json`). |
-| `--disable-http` | Skip the HTTP auto-prompt entirely (default in non-TTY / CI). |
-| `--port=N` | HTTP server port (default: `4097`). |
-| `--cors-origins=CSV` | HTTP CORS origins, comma-separated (default: `*`). |
-| `--auth-required=BOOL` | HTTP auth requirement (default: `true`). |
 
 **Uninstall:** `bunx ndomo install --uninstall` or `./scripts/uninstall.sh [--keep-data]`
 
@@ -134,8 +129,6 @@ to markdown on completion. 17 tools exposed via OpenCode: `plan_create`,
 CLI write surface (since 0.3.0):
 - `ndomo plan create|list|show|update|approve|complete|delete`
 - `ndomo task create|list|show|update|reassign|complete|fail`
-
-HTTP write surface (since 0.3.0): 10 endpoints covering plan create/update/approve/status/delete and task create/update/status/reassign/delete (`src/http/routes/`).
 
 The foreman uses these to track work across agent dispatches. See
 [docs/database.md](docs/database.md) for schema, tools, lifecycle, and
@@ -252,54 +245,6 @@ ndomo bundles 6 skills under `skills/`:
 - **Obsidian Brain Layer** (built-in) — proyección determinista y unidireccional (repo → vault) de plans, tasks, designs y memories hacia un vault Obsidian externo. Tools nuevas: `obsidian_export` (idempotente, SHA-256) y `obsidian_read_note`. Requiere el bloque `obsidian` en `ndomo.json`; sin reverse sync, watchers ni CLI. Ver [docs/obsidian.md](docs/obsidian.md).
 
 See [docs/integrations.md](docs/integrations.md) for details.
-
-## Web UI
-
-The HTTP server ships with a Vue 3 SPA for browsing **and editing** plans and tasks in the browser. Single-port topology — the same Elysia process serves both the API (`/api/*`) and the SPA (everything else, with hash-mode fallback). Web UI uses **Bulma 1.0** (no jQuery, CSS-only, ~250KB minified) plus custom daisyUI components for write forms. Status palette exposed as CSS custom properties in `web/src/styles/main.css`.
-
-Write UI features (since 0.3.0): create / edit / approve / complete / fail / archive plans; create / update / reassign / delete tasks. All writes go through `/api/*` write endpoints and surface `isLoading`/`error` refs to the components.
-
-See [docs/web-ui.md](docs/web-ui.md) for architecture, build pipeline, and extension guide.
-
-Quick start:
-
-```bash
-bun run web:build                                # build SPA -> src/http/web/
-NDOMO_HTTP_ENABLED=true OPENCODE_SERVER_PASSWORD=secret bun run src/cli/serve.ts
-# Open http://localhost:4097/
-```
-
-Vite dev mode (HMR):
-
-```bash
-# Terminal 1: server
-NDOMO_HTTP_ENABLED=true OPENCODE_SERVER_PASSWORD=secret bun run src/cli/serve.ts
-# Terminal 2: SPA dev
-bun run web:dev
-# Open http://localhost:5173/
-```
-
-## Optional HTTP server
-
-Expose ndomo's SQLite state and OpenCode SDK event stream over HTTP+SSE via an embedded Elysia server. Phase 1 ships read-only REST endpoints (`/api/plans`, `/api/tasks`, `/api/sessions`) and a live SSE relay (`/api/events`).
-
-**Recommended: use the installer flag to enable HTTP:**
-
-```bash
-bunx ndomo install --enable-http
-```
-
-Or set env vars manually and start the server:
-
-```bash
-export NDOMO_HTTP_ENABLED=true
-export OPENCODE_SERVER_PASSWORD='pick-a-strong-passphrase'
-bun run src/cli/serve.ts                       # binds 4097 by default
-```
-
-- **Default:** disabled (`NDOMO_HTTP_ENABLED=false`).
-- **Auth:** HTTP Basic via `OPENCODE_SERVER_PASSWORD` (timing-safe compare). `503 auth_not_configured` if password unset when required.
-- **Endpoints:** `GET /health` (public) + `/api/{plans,tasks,sessions,events}` (auth). See [docs/http-server.md](docs/http-server.md) for full API reference, CLI flags, CORS, security headers, and troubleshooting.
 
 ## Token Savings
 

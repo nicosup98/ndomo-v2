@@ -16,14 +16,14 @@ opencode config list providers  # should show at least one authenticated provide
 
 ## Install via bunx
 
-The TS installer is distributed as a `bunx ndomo` one-shot. It applies the active preset from `config/ndomo.config.json`, copies agents/skills/config to OpenCode's user config dir, and prompts interactively for HTTP server enablement.
+The TS installer is distributed as a `bunx ndomo` one-shot. It applies the active preset from `config/ndomo.config.json` and copies agents/skills/config to OpenCode's user config dir.
 
 ```bash
-# Quick install (interactive, will prompt for HTTP)
+# Quick install (interactive)
 bunx ndomo install
 
-# Non-interactive with provider preset + HTTP enabled
-bunx ndomo install --provider=opencode --no-provider-prompt --enable-http
+# Non-interactive with provider preset
+bunx ndomo install --provider=opencode --no-provider-prompt
 
 # With budget preset + DCP
 bunx ndomo install --preset=budget --with-dcp
@@ -112,11 +112,6 @@ It is **idempotent** — safe to run multiple times. No-op if the cache is alrea
 | `--preset=NAME` | Select preset from `config/ndomo.config.json::presets[NAME]`. The preset is the source of truth for agent models at install time. (default: `default`, options: `default`, `budget`) |
 | `--dry-run` | Print planned changes without writing files. |
 | `--skip-deps` | Skip the dependency installation step (`bun install`). |
-| `--enable-http` | Automatically enable the HTTP server (writes http block to `ndomo.config.json`). |
-| `--disable-http` | Skip the automatic HTTP prompt entirely (default in non-TTY / CI). |
-| `--port=N` | HTTP server port (default: `4097`). |
-| `--cors-origins=CSV` | HTTP CORS origins, comma-separated (default: `*`). |
-| `--auth-required=BOOL` | HTTP auth requirement (default: `true`). |
 | `--uninstall` | Uninstall ndomo (remove config, plugin registration, skill symlinks). |
 
 **Environment variable:** `NDOMO_SKIP_PACKAGE_INSTALL=1` — skip the package installation step (`bun install` in `~/.config/opencode/`). Useful if you manage the OpenCode plugin directory manually or if the install step is causing conflicts.
@@ -124,8 +119,8 @@ It is **idempotent** — safe to run multiple times. No-op if the cache is alrea
 Example with all flags:
 
 ```bash
-# Local clone with HTTP + DCP + budget preset
-bunx ndomo install --with-dcp --preset=budget --enable-http --port=4097
+# Local clone with DCP + budget preset
+bunx ndomo install --with-dcp --preset=budget
 ```
 
 ## Provider Override
@@ -172,7 +167,7 @@ curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/
 bunx ndomo install
 ```
 
-The TS installer covers all flows that the bash script did — local clone, piped install, provider override, preset selection, DCP plugin, plus new HTTP auto-prompt. See [docs/installer.md](installer.md).
+The TS installer covers all flows that the bash script did — local clone, piped install, provider override, preset selection, DCP plugin. See [docs/installer.md](installer.md).
 
 ## Legacy bash installer (deprecated)
 
