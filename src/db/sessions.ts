@@ -6,9 +6,9 @@
  * and key decisions.
  *
  * Post-commit hooks: each lifecycle mutation emits a typed event on the
- * in-process bus (`src/events/bus.ts`) so SSE subscribers can react
- * without polling. Bus emits happen AFTER the DB write so subscribers
- * never observe unpublished state.
+ * in-process bus (`src/events/bus.ts`) so subscribers can react without
+ * polling. Bus emits happen AFTER the DB write so subscribers never observe
+ * unpublished state.
  */
 
 import type { Database } from "bun:sqlite";

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { Plugin } from "@opencode/plugin";
 import type { ToolEditor } from "@opencode/plugin/promise/tool";
 import { z } from "zod";
-import { loadHttpConfig, loadJevConfig, loadObsidianConfig } from "./config/schema.ts";
+import { loadJevConfig, loadObsidianConfig } from "./config/schema.ts";
 import {
   archiveAnalysis,
   createAnalysis,
@@ -78,7 +78,6 @@ import type {
   TaskMetadata,
   TaskStatus,
 } from "./db/types.ts";
-import { type HttpServerHandle, startHttpServer } from "./http/server.ts";
 import type { RoutingDecision } from "./lib.ts";
 import {
   BackgroundDispatcher,
@@ -111,7 +110,6 @@ import { analyzeTaskDependencies, type TaskDepInput } from "./orchestrator/jev-d
 import { classifyIntentWithJev } from "./orchestrator/jev-intent.ts";
 import { classifyCodeRiskWithJev } from "./orchestrator/jev-risk.ts";
 import { classifyTestsWithJev } from "./orchestrator/jev-tests.ts";
-import { getSdkClient } from "./sdk/client.ts";
 
 // ─── v1 → v2 tool adapter ────────────────────────────────────────────────────
 
@@ -489,8 +487,6 @@ export type NdomoConfig = {
     /** Total tool calls per session before the breaker trips. Default 4000. */
     threshold?: number;
   };
-  /** HTTP server configuration. Loaded from environment variables if not set. */
-  http?: import("./config/schema.ts").HttpConfig;
 };
 
 /**
@@ -718,14 +714,6 @@ export const NdomoPlugin = Plugin.define({
       process.env.NDOMO_MEM_STORAGE_PATH ?? ndomoConfig?.mem?.storagePath ?? "~/.ndomo/mem";
     const memDefaultScope = ndomoConfig?.mem?.defaultScope ?? "project";
 
-    // HTTP config — merge from ndomoConfig.http or load from environment variables
-    const httpConfig = ndomoConfig?.http ?? loadHttpConfig();
-    if (httpConfig.enabled) {
-      console.log(
-        `[ndomo] HTTP server enabled: port=${httpConfig.port} auth=${httpConfig.auth.required} cors_origins=${httpConfig.cors.origins.length}`,
-      );
-    }
-
     // JEV config — per-field resolution from ndomo.json with defaults.
     // The API key lives in TYPESAFE_API_KEY; without it JEV is silently skipped.
     const jevConfig = loadJevConfig();
@@ -754,52 +742,6 @@ export const NdomoPlugin = Plugin.define({
     runMigrations(db);
     registerShutdownHandlers(db);
     const dispatcher = new BackgroundDispatcher(db);
-
-    // ─── SDK Client (for SSE events) ─────────────────────────────────────────────
-    let sdkClient: import("./sdk/client.ts").OpenCodeClient | null = null;
-    if (httpConfig.enabled) {
-      try {
-        const handle = await getSdkClient();
-        sdkClient = handle.client;
-        console.log(`[ndomo] OpenCode SDK client connected: ${handle.baseUrl}`);
-      } catch (err) {
-        console.warn(
-          `[ndomo] OpenCode SDK client unavailable: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        console.warn(`[ndomo] /api/events will return 503 until SDK becomes reachable`);
-      }
-    }
-
-    // ─── HTTP Server ──────────────────────────────────────────────────────────
-    let httpServerHandle: HttpServerHandle | null = null;
-    if (httpConfig.enabled) {
-      try {
-        httpServerHandle = await startHttpServer({
-          db,
-          httpConfig,
-          ...(sdkClient ? { sdkClient } : {}),
-        });
-        console.log(`[ndomo] HTTP server listening on port ${httpServerHandle.port}`);
-      } catch (err) {
-        console.error(
-          `[ndomo] HTTP server failed to start: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    // HTTP shutdown — separate from DB shutdown (registerShutdownHandlers uses process.once
-    // which self-removes; adding our own listener avoids modifying shared shutdown module).
-    let httpStopped = false;
-    const stopHttpServer = (): Promise<void> => {
-      if (httpStopped || !httpServerHandle) return Promise.resolve();
-      httpStopped = true;
-      return httpServerHandle.stop().catch(() => {});
-    };
-    const onProcessSignal = (): void => {
-      void stopHttpServer();
-    };
-    process.on("SIGINT", onProcessSignal);
-    process.on("SIGTERM", onProcessSignal);
 
     // Background task retention — auto-finalize terminal tasks when row count
     // exceeds soft cap. Defaults: soft cap 1000 rows, max age 24h. Prevents
@@ -836,11 +778,6 @@ export const NdomoPlugin = Plugin.define({
         ? { totalThreshold: ndomoConfig.circuitBreaker.threshold }
         : {},
     );
-    if (httpConfig.enabled) {
-      console.log(
-        `[ndomo] circuit breaker: totalThreshold=${circuitBreaker.config.totalThreshold} identicalThreshold=${circuitBreaker.config.identicalThreshold}`,
-      );
-    }
 
     // Auto-checkpoint dispatcher (T3.3). projectDir threads through so each
     // auto-checkpoint also persists a filesystem ledger (continuity across
@@ -2546,9 +2483,6 @@ export const NdomoPlugin = Plugin.define({
     });
 
     return async () => {
-      await stopHttpServer();
-      process.off("SIGINT", onProcessSignal);
-      process.off("SIGTERM", onProcessSignal);
       try {
         closeDb(db);
       } catch {

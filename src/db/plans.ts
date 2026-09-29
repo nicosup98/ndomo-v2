@@ -5,9 +5,9 @@
  * Mutations that touch multiple rows use db.transaction().
  *
  * Post-commit hooks: mutations emit typed events on the in-process bus
- * (`src/events/bus.ts`) so SSE subscribers (`src/http/routes/events.ts`)
- * receive live updates without polling. Bus emits happen AFTER the DB
- * write so subscribers never see unpublished state.
+ * (`src/events/bus.ts`) so subscribers receive live updates without polling.
+ * Bus emits happen AFTER the DB write so subscribers never see unpublished
+ * state.
  */
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";

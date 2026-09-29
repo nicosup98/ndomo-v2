@@ -4,15 +4,13 @@
  * Uses bun:test with temp directories. Tests exported helpers directly.
  *
  * Coverage:
- * 1. Flag parsing (--dry-run, --preset, --skip-deps, --enable-http, --help, etc.)
- * 2. HTTP config building (--enable-http, --port, --cors-origins, --auth-required)
- * 3. HTTP prompt skip in non-TTY
- * 4. Preset application to agent .md files (frontmatter update)
- * 5. Provider prefix override
- * 6. Plugin registration in opencode.json (dedup merge)
- * 7. Agent/skill copy with backup
- * 8. Idempotency: re-run doesn't corrupt state
- * 9. Path traversal protection (unsafe agent names rejected)
+ * 1. Flag parsing (--dry-run, --preset, --skip-deps, --help, etc.)
+ * 2. Preset application to agent .md files (frontmatter update)
+ * 3. Provider prefix override
+ * 4. Plugin registration in opencode.json (dedup merge)
+ * 5. Agent/skill copy with backup
+ * 6. Idempotency: re-run doesn't corrupt state
+ * 7. Path traversal protection (unsafe agent names rejected)
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -23,16 +21,12 @@ import type { NdomoConfig } from "../../config/schema.ts";
 import {
   applyPresetToFile,
   applyProviderPrefix,
-  buildHttpConfig,
-  type InstallFlags,
   type PresetEntry,
   parseFlags,
-  promptHttpCombined,
   stepCopyAgents,
   stepCopySkills,
   stepInjectPreset,
   stepRegisterPlugins,
-  writeHttpBlock,
 } from "../install.ts";
 
 let tmpDir: string;
@@ -41,25 +35,6 @@ let configDir: string;
 let backupDir: string;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function defaultFlags(overrides?: Partial<InstallFlags>): InstallFlags {
-  return {
-    preset: "default",
-    provider: "",
-    noProviderPrompt: false,
-    withDcp: false,
-    dryRun: false,
-    skipDeps: false,
-    enableHttp: false,
-    disableHttp: false,
-    corsOrigins: "*",
-    port: 4097,
-    authRequired: true,
-    uninstall: false,
-    help: false,
-    ...overrides,
-  };
-}
 
 function makeAgentMd(
   name: string,
@@ -108,13 +83,8 @@ describe("parseFlags", () => {
     expect(flags.preset).toBe("default");
     expect(flags.dryRun).toBe(false);
     expect(flags.skipDeps).toBe(false);
-    expect(flags.enableHttp).toBe(false);
-    expect(flags.disableHttp).toBe(false);
     expect(flags.withDcp).toBe(false);
     expect(flags.help).toBe(false);
-    expect(flags.port).toBe(4097);
-    expect(flags.corsOrigins).toBe("*");
-    expect(flags.authRequired).toBe(true);
   });
 
   test("--dry-run sets dryRun flag", () => {
@@ -132,16 +102,6 @@ describe("parseFlags", () => {
     expect(flags.skipDeps).toBe(true);
   });
 
-  test("--enable-http sets enableHttp flag", () => {
-    const flags = parseFlags(["--enable-http"]);
-    expect(flags.enableHttp).toBe(true);
-  });
-
-  test("--disable-http sets disableHttp flag", () => {
-    const flags = parseFlags(["--disable-http"]);
-    expect(flags.disableHttp).toBe(true);
-  });
-
   test("--with-dcp sets withDcp flag", () => {
     const flags = parseFlags(["--with-dcp"]);
     expect(flags.withDcp).toBe(true);
@@ -157,21 +117,6 @@ describe("parseFlags", () => {
     expect(flags.help).toBe(true);
   });
 
-  test("--port=8080 sets port", () => {
-    const flags = parseFlags(["--port=8080"]);
-    expect(flags.port).toBe(8080);
-  });
-
-  test("--cors-origins=a.com,b.com sets corsOrigins", () => {
-    const flags = parseFlags(["--cors-origins=a.com,b.com"]);
-    expect(flags.corsOrigins).toBe("a.com,b.com");
-  });
-
-  test("--auth-required=false sets authRequired to false", () => {
-    const flags = parseFlags(["--auth-required=false"]);
-    expect(flags.authRequired).toBe(false);
-  });
-
   test("--provider=opencode sets provider", () => {
     const flags = parseFlags(["--provider=opencode"]);
     expect(flags.provider).toBe("opencode");
@@ -183,113 +128,14 @@ describe("parseFlags", () => {
   });
 
   test("combined flags parse correctly", () => {
-    const flags = parseFlags([
-      "--preset=budget",
-      "--enable-http",
-      "--port=9090",
-      "--skip-deps",
-      "--dry-run",
-    ]);
+    const flags = parseFlags(["--preset=budget", "--skip-deps", "--dry-run"]);
     expect(flags.preset).toBe("budget");
-    expect(flags.enableHttp).toBe(true);
-    expect(flags.port).toBe(9090);
     expect(flags.skipDeps).toBe(true);
     expect(flags.dryRun).toBe(true);
   });
 
   test("unknown flag throws", () => {
     expect(() => parseFlags(["--unknown-flag"])).toThrow("Unknown option");
-  });
-});
-
-// ─── HTTP config building ─────────────────────────────────────────────────────
-
-describe("buildHttpConfig", () => {
-  test("builds config from flags with defaults", () => {
-    const flags = defaultFlags({ enableHttp: true });
-    const config = buildHttpConfig(flags);
-
-    expect(config.enabled).toBe(true);
-    expect(config.port).toBe(4097);
-    expect(config.cors.origins).toEqual(["*"]);
-    expect(config.auth.required).toBe(true);
-  });
-
-  test("respects --port override", () => {
-    const flags = defaultFlags({ port: 8080 });
-    const config = buildHttpConfig(flags);
-    expect(config.port).toBe(8080);
-  });
-
-  test("respects --cors-origins override", () => {
-    const flags = defaultFlags({ corsOrigins: "a.com,b.com" });
-    const config = buildHttpConfig(flags);
-    expect(config.cors.origins).toEqual(["a.com", "b.com"]);
-  });
-
-  test("respects --auth-required=false override", () => {
-    const flags = defaultFlags({ authRequired: false });
-    const config = buildHttpConfig(flags);
-    expect(config.auth.required).toBe(false);
-  });
-});
-
-// ─── writeHttpBlock ──────────────────────────────────────────────────────────
-
-describe("writeHttpBlock", () => {
-  test("writes http block to ndomo.config.json", () => {
-    const configPath = join(projectRoot, "config", "ndomo.config.json");
-    writeFileSync(configPath, JSON.stringify({ plugins: ["ndomo"] }));
-
-    const httpConfig = {
-      enabled: true,
-      port: 4097,
-      cors: { origins: ["*"] },
-      auth: { required: true },
-    };
-
-    writeHttpBlock(projectRoot, httpConfig, false);
-
-    const written = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(written.http).toBeDefined();
-    expect(written.http.enabled).toBe(true);
-    expect(written.http.port).toBe(4097);
-    expect(written.http.cors.origins).toEqual(["*"]);
-    expect(written.http.auth.required).toBe(true);
-    // Existing fields preserved
-    expect(written.plugins).toEqual(["ndomo"]);
-  });
-
-  test("dry-run does not modify file", () => {
-    const configPath = join(projectRoot, "config", "ndomo.config.json");
-    const original = JSON.stringify({ plugins: ["ndomo"] });
-    writeFileSync(configPath, original);
-
-    const httpConfig = {
-      enabled: true,
-      port: 4097,
-      cors: { origins: ["*"] },
-      auth: { required: true },
-    };
-
-    writeHttpBlock(projectRoot, httpConfig, true);
-
-    const content = readFileSync(configPath, "utf-8");
-    expect(content).toBe(original);
-  });
-
-  test("warns if config file missing", () => {
-    // Should not throw
-    writeHttpBlock(
-      projectRoot,
-      {
-        enabled: true,
-        port: 4097,
-        cors: { origins: ["*"] },
-        auth: { required: true },
-      },
-      false,
-    );
   });
 });
 
@@ -714,21 +560,5 @@ body content here
     expect(updated).toContain("  bash:");
     expect(updated).toContain('    "*": ask');
     expect(updated).toContain('    "ls *": allow');
-  });
-});
-
-// ─── Non-TTY promptHttpCombined ──────────────────────────────────────────────
-
-describe("promptHttpCombined — non-TTY fallback", () => {
-  test("returns {enabled:false, password:null} immediately when stdin not TTY", async () => {
-    const originalIsTTY = process.stdin.isTTY;
-    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
-    try {
-      const result = await promptHttpCombined();
-      expect(result.enabled).toBe(false);
-      expect(result.password).toBeNull();
-    } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
-    }
   });
 });

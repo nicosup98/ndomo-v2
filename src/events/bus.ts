@@ -1,9 +1,8 @@
 /**
  * ndomo — In-process typed pub/sub event bus.
  *
- * Backend counterpart of `web/src/composables/useEvents.ts`. The bus bridges
- * database writers (plan/task/session hooks in src/db/*.ts) to the SSE route
- * (src/http/routes/events.ts) so the SPA receives live updates.
+ * The bus bridges database writers (plan/task/session hooks in src/db/*.ts)
+ * to in-process subscribers, so consumers get live updates without polling.
  *
  * Design:
  * - Thin wrapper around Node's `EventEmitter` for zero-dep reliability.
@@ -173,8 +172,8 @@ class TypedEventBus implements EventBus {
   private readonly anyHandlers = new Set<EventHandler>();
 
   constructor() {
-    // Bump default cap (10) since the SSE route + diagnostics can attach many
-    // handlers without exhausting the limit on a single event type.
+    // Bump default cap (10) since diagnostics + multiple subscribers can
+    // attach many handlers without exhausting the limit on a single event type.
     this.emitter.setMaxListeners(100);
   }
 
@@ -256,7 +255,7 @@ class TypedEventBus implements EventBus {
 // ─── Singleton + factory ─────────────────────────────────────────────────────
 
 /**
- * Default singleton — used by the SSE route and DB writer hooks.
+ * Default singleton — used by in-process subscribers and DB writer hooks.
  *
  * Tests should call `createBus()` for an isolated instance to avoid
  * cross-test bleed through module-level state.

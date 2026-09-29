@@ -5,17 +5,15 @@
  *
  * Installs agents, skills, and config into ~/.config/opencode/.
  * Supports preset application, plugin registration, 3-strategy package install,
- * HTTP auto-prompt, and DCP opt-in.
+ * and DCP opt-in.
  *
  * @example
  * bun run src/cli/install.ts
- * bun run src/cli/install.ts --preset=budget --enable-http
+ * bun run src/cli/install.ts --preset=budget
  * bun run src/cli/install.ts --dry-run --skip-deps
  */
 
-import { randomBytes } from "node:crypto";
 import {
-  appendFileSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -27,7 +25,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { type HttpConfig, type NdomoConfig, resolveConfigDir } from "../config/schema.ts";
+import { type NdomoConfig, resolveConfigDir } from "../config/schema.ts";
 
 // ─── ANSI colors (no external deps) ──────────────────────────────────────────
 const RED = "\x1b[0;31m";
@@ -87,11 +85,6 @@ export type InstallFlags = {
   withDcp: boolean;
   dryRun: boolean;
   skipDeps: boolean;
-  enableHttp: boolean;
-  disableHttp: boolean;
-  corsOrigins: string;
-  port: number;
-  authRequired: boolean;
   uninstall: boolean;
   help: boolean;
 };
@@ -111,11 +104,6 @@ export function parseFlags(args: string[]): InstallFlags {
     withDcp: false,
     dryRun: false,
     skipDeps: false,
-    enableHttp: false,
-    disableHttp: false,
-    corsOrigins: "*",
-    port: 4097,
-    authRequired: true,
     uninstall: false,
     help: false,
   };
@@ -129,25 +117,12 @@ export function parseFlags(args: string[]): InstallFlags {
       flags.dryRun = true;
     } else if (arg === "--skip-deps") {
       flags.skipDeps = true;
-    } else if (arg === "--enable-http") {
-      flags.enableHttp = true;
-    } else if (arg === "--disable-http") {
-      flags.disableHttp = true;
     } else if (arg === "--no-provider-prompt") {
       flags.noProviderPrompt = true;
     } else if (arg.startsWith("--preset=")) {
       flags.preset = arg.slice("--preset=".length);
     } else if (arg.startsWith("--provider=")) {
       flags.provider = arg.slice("--provider=".length);
-    } else if (arg.startsWith("--cors-origins=")) {
-      flags.corsOrigins = arg.slice("--cors-origins=".length);
-    } else if (arg.startsWith("--port=")) {
-      const val = Number(arg.slice("--port=".length));
-      if (!Number.isNaN(val) && val > 0 && val < 65536) {
-        flags.port = val;
-      }
-    } else if (arg.startsWith("--auth-required=")) {
-      flags.authRequired = arg.slice("--auth-required=".length) !== "false";
     } else if (arg === "--uninstall") {
       flags.uninstall = true;
     } else if (arg.startsWith("-")) {
@@ -173,11 +148,6 @@ ${BOLD}Options:${NC}
   --with-dcp            Also install @tarquinen/opencode-dcp
   --dry-run             Print planned changes, do not write
   --skip-deps           Skip 'bun install' step
-  --enable-http         Auto-enable HTTP server (writes http block to ndomo.config.json)
-  --disable-http        Skip HTTP auto-prompt (default in non-TTY)
-  --cors-origins=CSV    Override CORS origins (default: *)
-  --port=N              Override HTTP port (default: 4097)
-  --auth-required=BOOL  Override auth requirement (default: true)
   --uninstall           Run uninstaller (compat, execs scripts/uninstall.sh)
   --help, -h            Show this help
 
@@ -189,7 +159,6 @@ ${BOLD}Examples:${NC}
   bun run src/cli/install.ts                        # apply default preset
   bun run src/cli/install.ts --preset=budget        # apply budget preset
   bun run src/cli/install.ts --provider=opencode    # swap provider prefix
-  bun run src/cli/install.ts --enable-http          # enable HTTP server
   bun run src/cli/install.ts --dry-run              # preview changes`);
 }
 
@@ -857,238 +826,6 @@ export async function stepInstallDcp(dryRun: boolean): Promise<void> {
   }
 }
 
-// ─── HTTP auto-prompt ─────────────────────────────────────────────────────────
-/**
- * Build HttpConfig from flags + defaults.
- */
-export function buildHttpConfig(flags: InstallFlags): HttpConfig {
-  return {
-    enabled: true,
-    port: flags.port,
-    cors: {
-      origins: flags.corsOrigins?.split(",").map((s: string) => s.trim()) ?? ["*"],
-    },
-    auth: {
-      required: flags.authRequired,
-    },
-  };
-}
-
-/**
- * Write http block to ndomo.config.json (source-of-truth in project, not config dir).
- */
-export function writeHttpBlock(projectRoot: string, httpConfig: HttpConfig, dryRun: boolean): void {
-  const configPath = join(projectRoot, "config", "ndomo.config.json");
-  if (!existsSync(configPath)) {
-    warn("config/ndomo.config.json not found, cannot write http block");
-    return;
-  }
-
-  try {
-    const config: Record<string, unknown> = JSON.parse(readFileSync(configPath, "utf-8"));
-    config.http = httpConfig;
-
-    if (dryRun) {
-      info(`[dry-run] would write http block to ${configPath}:`);
-      console.log(JSON.stringify(httpConfig, null, 2));
-    } else {
-      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-      ok("HTTP server config written to config/ndomo.config.json");
-      info(
-        `  port: ${httpConfig.port}, cors: ${httpConfig.cors.origins.join(",")}, auth: ${httpConfig.auth.required}`,
-      );
-    }
-  } catch (e) {
-    warn(`Failed to write http block: ${e}`);
-  }
-}
-
-/**
- * Generate a random password (16 chars, alphanumeric).
- */
-function generatePassword(): string {
-  return randomBytes(12).toString("base64url").slice(0, 16);
-}
-
-/**
- * Combined interactive prompt: enable HTTP? → set password?
- * Single stdin session avoids Bun deadlock from sequential resume/pause.
- * Returns { enabled: boolean, password: string | null }
- */
-export async function promptHttpCombined(): Promise<{ enabled: boolean; password: string | null }> {
-  if (!process.stdin.isTTY) {
-    info("Non-TTY stdin — skipping HTTP prompt (use --enable-http to enable)");
-    return { enabled: false, password: null };
-  }
-
-  console.log("");
-  console.log("[?] Enable ndomo HTTP server? Allows programmatic plan/task control via API.");
-  console.log(
-    "    Recommended for users integrating ndomo with other tools (port 4097, auth required).",
-  );
-  process.stdout.write("    Enable now? [Y/n]: ");
-
-  const defaultPassword = generatePassword();
-
-  return new Promise((resolve) => {
-    process.stdin.setEncoding("utf-8");
-    process.stdin.resume();
-
-    let phase: "enable" | "password" = "enable";
-    let input = "";
-
-    const cleanup = () => {
-      process.stdin.removeListener("data", onData);
-      process.stdin.pause();
-    };
-
-    const onData = (chunk: string) => {
-      input += chunk;
-      if (!input.includes("\n")) return;
-
-      if (phase === "enable") {
-        const answer = input.trim().toLowerCase();
-        input = "";
-
-        if (answer !== "" && answer !== "y" && answer !== "yes") {
-          cleanup();
-          resolve({ enabled: false, password: null });
-          return;
-        }
-
-        // User accepted — ask password in same session
-        phase = "password";
-        console.log("");
-        console.log("[?] Set HTTP basic auth password.");
-        console.log("    Clients send this as Basic auth (any username, this password).");
-        process.stdout.write(`    Password [Enter for random: ${defaultPassword}]: `);
-        return;
-      }
-
-      // phase === "password"
-      const password = input.trim() || defaultPassword;
-      cleanup();
-      resolve({ enabled: true, password });
-    };
-
-    process.stdin.on("data", onData);
-
-    // Timeout after 30s
-    setTimeout(() => {
-      cleanup();
-      console.log("\n(timeout — skipping HTTP setup)");
-      resolve({ enabled: false, password: null });
-    }, 30_000);
-  });
-}
-
-/**
- * Write OPENCODE_SERVER_PASSWORD to .env file in project root.
- * Preserves existing .env content, updates or appends the key.
- */
-export function writeEnvPassword(projectRoot: string, password: string, dryRun: boolean): void {
-  const envPath = join(projectRoot, ".env");
-  const envLine = `OPENCODE_SERVER_PASSWORD=${password}`;
-
-  if (dryRun) {
-    info(`[dry-run] would write ${envLine} to ${envPath}`);
-    return;
-  }
-
-  if (existsSync(envPath)) {
-    const content = readFileSync(envPath, "utf-8");
-    if (content.includes("OPENCODE_SERVER_PASSWORD=")) {
-      // Update existing key
-      const updated = content.replace(/^OPENCODE_SERVER_PASSWORD=.*$/m, envLine);
-      writeFileSync(envPath, updated);
-      ok("Updated OPENCODE_SERVER_PASSWORD in .env");
-      return;
-    }
-    // Append
-    const separator = content.endsWith("\n") ? "" : "\n";
-    appendFileSync(envPath, `${separator}${envLine}\n`);
-    ok("Appended OPENCODE_SERVER_PASSWORD to .env");
-  } else {
-    writeFileSync(envPath, `${envLine}\n`);
-    ok("Created .env with OPENCODE_SERVER_PASSWORD");
-  }
-
-  console.log(`    ${BOLD}Password:${NC} ${password}`);
-  console.log(`    ${BOLD}File:${NC}     ${envPath}`);
-}
-
-/**
- * Handle HTTP auto-prompt logic:
- * - --enable-http → write block + password immediately
- * - --disable-http → skip entirely
- * - Otherwise → single combined prompt in TTY, skip in non-TTY
- */
-export async function stepHttpPrompt(
-  flags: InstallFlags,
-  projectRoot: string,
-  dryRun: boolean,
-): Promise<void> {
-  if (flags.enableHttp) {
-    const httpConfig = buildHttpConfig(flags);
-    writeHttpBlock(projectRoot, httpConfig, dryRun);
-    // --enable-http in non-TTY: auto-generate password
-    if (!process.stdin.isTTY) {
-      const password = generatePassword();
-      info(`Non-TTY mode — auto-generated password: ${password}`);
-      writeEnvPassword(projectRoot, password, dryRun);
-    } else {
-      // TTY with --enable-http: still ask for password
-      console.log("");
-      console.log("[?] Set HTTP basic auth password.");
-      console.log("    Clients send this as Basic auth (any username, this password).");
-      const defaultPassword = generatePassword();
-      process.stdout.write(`    Password [Enter for random: ${defaultPassword}]: `);
-      const password = await new Promise<string>((resolve) => {
-        process.stdin.setEncoding("utf-8");
-        process.stdin.resume();
-        let input = "";
-        const onData = (chunk: string) => {
-          input += chunk;
-          if (input.includes("\n")) {
-            process.stdin.removeListener("data", onData);
-            process.stdin.pause();
-            resolve(input.trim() || defaultPassword);
-          }
-        };
-        process.stdin.on("data", onData);
-        setTimeout(() => {
-          process.stdin.removeListener("data", onData);
-          process.stdin.pause();
-          console.log(`\n(timeout — using random: ${defaultPassword})`);
-          resolve(defaultPassword);
-        }, 30_000);
-      });
-      writeEnvPassword(projectRoot, password, dryRun);
-    }
-    return;
-  }
-
-  if (flags.disableHttp) {
-    info("HTTP auto-prompt disabled (--disable-http)");
-    return;
-  }
-
-  // Interactive prompt only in TTY
-  if (!process.stdin.isTTY) {
-    info("Non-TTY mode — skipping HTTP prompt (use --enable-http to enable)");
-    return;
-  }
-
-  const { enabled, password } = await promptHttpCombined();
-  if (enabled) {
-    const httpConfig = buildHttpConfig(flags);
-    writeHttpBlock(projectRoot, httpConfig, dryRun);
-    if (password) writeEnvPassword(projectRoot, password, dryRun);
-  } else {
-    info("HTTP server not enabled (can be enabled later with --enable-http)");
-  }
-}
-
 // ─── Summary ─────────────────────────────────────────────────────────────────
 function printSummary(configDir: string, preset: string, provider: string, withDcp: boolean): void {
   const agentDir = join(configDir, "agent");
@@ -1270,9 +1007,6 @@ export async function runInstall(args: string[]): Promise<void> {
   if (flags.withDcp) {
     await stepInstallDcp(flags.dryRun);
   }
-
-  // HTTP auto-prompt (closes Phase-1 gap)
-  await stepHttpPrompt(flags, projectRoot, flags.dryRun);
 
   // Summary
   if (!flags.dryRun) {

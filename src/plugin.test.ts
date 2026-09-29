@@ -2847,20 +2847,16 @@ function makePluginHarness(projectDir: string) {
 describe("NdomoPlugin v2 registration", () => {
   const priorEnv = {
     skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
-    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
   };
 
   afterAll(() => {
     if (priorEnv.skipFrontmatter === undefined) delete process.env.NDOMO_SKIP_FRONTMATTER_SYNC;
     else process.env.NDOMO_SKIP_FRONTMATTER_SYNC = priorEnv.skipFrontmatter;
-    if (priorEnv.httpEnabled === undefined) delete process.env.NDOMO_HTTP_ENABLED;
-    else process.env.NDOMO_HTTP_ENABLED = priorEnv.httpEnabled;
   });
 
   const setupPlugin = async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-plugin-"));
     process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
-    process.env.NDOMO_HTTP_ENABLED = "false";
     const harness = makePluginHarness(projectDir);
     const cleanup = await NdomoPlugin.setup(harness.ctx);
     if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
@@ -3139,7 +3135,6 @@ describe("NdomoPlugin v2 registration", () => {
   test("cleanup is idempotent and a fresh instance can register after reload", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-plugin-"));
     process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
-    process.env.NDOMO_HTTP_ENABLED = "false";
     try {
       const first = makePluginHarness(projectDir);
       const firstCleanup = await NdomoPlugin.setup(first.ctx);
@@ -3242,7 +3237,6 @@ describe("NdomoPlugin v2 registration", () => {
 describe("JEV toolkit tools — deterministic smoke (no network)", () => {
   const priorEnv = {
     skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
-    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
     typesafeKey: process.env.TYPESAFE_API_KEY,
   };
 
@@ -3255,8 +3249,6 @@ describe("JEV toolkit tools — deterministic smoke (no network)", () => {
   afterAll(() => {
     if (priorEnv.skipFrontmatter === undefined) delete process.env.NDOMO_SKIP_FRONTMATTER_SYNC;
     else process.env.NDOMO_SKIP_FRONTMATTER_SYNC = priorEnv.skipFrontmatter;
-    if (priorEnv.httpEnabled === undefined) delete process.env.NDOMO_HTTP_ENABLED;
-    else process.env.NDOMO_HTTP_ENABLED = priorEnv.httpEnabled;
     // Restore the exact prior value (undefined → delete, not "undefined").
     if (priorEnv.typesafeKey === undefined) delete process.env.TYPESAFE_API_KEY;
     else process.env.TYPESAFE_API_KEY = priorEnv.typesafeKey;
@@ -3265,7 +3257,6 @@ describe("JEV toolkit tools — deterministic smoke (no network)", () => {
   const setupPlugin = async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-jev-smoke-"));
     process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
-    process.env.NDOMO_HTTP_ENABLED = "false";
     const harness = makePluginHarness(projectDir);
     const cleanup = await NdomoPlugin.setup(harness.ctx);
     if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
@@ -3612,11 +3603,10 @@ index 1111111..2222222 100644
  */
 describe("memory tools (mem_*)", () => {
   // Captured at module load (pre-test values) so each test restores the env it
-  // touched — an unreleased NDOMO_HTTP_ENABLED would leak into later files.
+  // touched — an unreleased value would leak into later files.
   const priorEnv = {
     storage: process.env.NDOMO_MEM_STORAGE_PATH,
     skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
-    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
   };
   const restoreEnv = (key: string, value: string | undefined): void => {
     if (value === undefined) delete process.env[key];
@@ -3632,14 +3622,12 @@ describe("memory tools (mem_*)", () => {
   afterEach(() => {
     restoreEnv("NDOMO_MEM_STORAGE_PATH", priorEnv.storage);
     restoreEnv("NDOMO_SKIP_FRONTMATTER_SYNC", priorEnv.skipFrontmatter);
-    restoreEnv("NDOMO_HTTP_ENABLED", priorEnv.httpEnabled);
     rmSync(memDir, { recursive: true, force: true });
   });
 
   test("mem_add → mem_search → dedup → mem_list → mem_stats → mem_forget round-trip", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "ndomo-v2-mem-"));
     process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
-    process.env.NDOMO_HTTP_ENABLED = "false";
     const harness = makePluginHarness(projectDir);
     const cleanup = await NdomoPlugin.setup(harness.ctx);
     if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
@@ -3730,7 +3718,6 @@ describe("obsidian tools (obsidian_export / obsidian_read_note)", () => {
     vault: process.env.NDOMO_OBSIDIAN_VAULT_PATH,
     mem: process.env.NDOMO_MEM_STORAGE_PATH,
     skipFrontmatter: process.env.NDOMO_SKIP_FRONTMATTER_SYNC,
-    httpEnabled: process.env.NDOMO_HTTP_ENABLED,
   };
   const restoreEnv = (key: string, value: string | undefined): void => {
     if (value === undefined) delete process.env[key];
@@ -3753,7 +3740,6 @@ describe("obsidian tools (obsidian_export / obsidian_read_note)", () => {
     process.env.XDG_CONFIG_HOME = xdg;
     process.env.NDOMO_MEM_STORAGE_PATH = join(sandbox, "mem");
     process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
-    process.env.NDOMO_HTTP_ENABLED = "false";
     delete process.env.NDOMO_OBSIDIAN_VAULT_PATH;
   });
 
@@ -3763,7 +3749,6 @@ describe("obsidian tools (obsidian_export / obsidian_read_note)", () => {
     restoreEnv("NDOMO_OBSIDIAN_VAULT_PATH", priorEnv.vault);
     restoreEnv("NDOMO_MEM_STORAGE_PATH", priorEnv.mem);
     restoreEnv("NDOMO_SKIP_FRONTMATTER_SYNC", priorEnv.skipFrontmatter);
-    restoreEnv("NDOMO_HTTP_ENABLED", priorEnv.httpEnabled);
     rmSync(sandbox, { recursive: true, force: true });
   });
 

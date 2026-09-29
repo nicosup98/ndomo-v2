@@ -6,9 +6,9 @@
  *
  * Behavior preserved verbatim from the original execute function.
  *
- * Post-commit hook: emits `plan.created` on the in-process event bus so the
- * SSE route (`src/http/routes/events.ts`) can fan out to live subscribers.
- * Emits OUTSIDE the transaction to avoid leaking unpublished state on errors.
+ * Post-commit hook: emits `plan.created` on the in-process event bus so live
+ * subscribers can react. Emits OUTSIDE the transaction to avoid leaking
+ * unpublished state on errors.
  */
 
 import type { Database } from "bun:sqlite";
@@ -80,7 +80,7 @@ export function planCreateExecutor(
     }
   }
 
-  // Live-reactivity hook: notify SSE subscribers that a new plan exists.
+  // Live-reactivity hook: notify subscribers that a new plan exists.
   bus.emit({
     type: "plan.created",
     planId: plan.id,

@@ -7,7 +7,6 @@
  *
  * Commands:
  *   status    Show plans grouped by status with task counts
- *   serve     Start the HTTP server
  *   vacuum    Reclaim disk space from .ndomo/state.db
  *   smoke     Run smoke tests
  *   install   Install agents, skills, and config into ~/.config/opencode/
@@ -17,7 +16,6 @@
  *
  * Each subcommand can also be run directly:
  *   bun run src/cli/status.ts --plans
- *   bun run src/cli/serve.ts --port 8080
  *   bun run src/cli/plan.ts create --slug foo --title Foo --overview "Foo plan"
  *   bun run src/cli/task.ts create --plan <planId> --agent craft --description "Do something"
  */
@@ -31,13 +29,6 @@ const COMMANDS: Record<
     run: async (args) => {
       const { runStatus } = await import("./status.ts");
       runStatus(args);
-    },
-  },
-  serve: {
-    description: "Start the HTTP server",
-    run: async (args) => {
-      const { runServe } = await import("./serve.ts");
-      await runServe(args);
     },
   },
   vacuum: {
@@ -100,7 +91,6 @@ Commands:`);
   console.log(`
 Each subcommand can also be run directly:
   bun run src/cli/status.ts --plans
-  bun run src/cli/serve.ts --port 8080
   bun run src/cli/vacuum.ts`);
 }
 
