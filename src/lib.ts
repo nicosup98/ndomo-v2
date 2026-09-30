@@ -11,7 +11,30 @@
 
 // Memory: scoped tag helpers
 export { getAllTags, getProjectTag, getUserTag } from "./mem/scoped.ts";
-
+// Orchestrator: agent outcome history (history-aware routing signals)
+export {
+  type AgentHistory,
+  type AgentHistoryOptions,
+  type AgentScore,
+  type AgentScoreOptions,
+  bucketForTask,
+  cellKey,
+  emptyAgentHistory,
+  emptyHistoryCell,
+  HISTORY_HALF_LIFE_DAYS,
+  HISTORY_MAX_ROWS_PER_CELL,
+  HISTORY_MIN_CELL_N,
+  HISTORY_PRIORS,
+  type HistoryCell,
+  type HistoryIntent,
+  type HistoryStack,
+  intentForAgent,
+  loadAgentHistory,
+  median,
+  scoreAgentForBucket,
+  stackBucketForTask,
+  stackFromFiles,
+} from "./orchestrator/agent-history.ts";
 // Orchestrator: background dispatcher
 export {
   BackgroundDispatcher,
@@ -34,6 +57,9 @@ export {
 // Orchestrator: scheduler
 export {
   canRunParallel,
+  DEFAULT_EXPLORE_EPSILON,
+  type RouteOptions,
+  type RoutingAlternative,
   type RoutingDecision,
   routeTask,
   type TaskRequest,

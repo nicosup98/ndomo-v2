@@ -90,6 +90,7 @@ import {
   cavemanCompress,
   createWorktree,
   listActive,
+  loadAgentHistory,
   removeWorktree,
   routeTask,
   verifyIntegrity,
@@ -951,7 +952,8 @@ export const NdomoPlugin = Plugin.define({
       // ── Routing ────────────────────────────────────────────────────────
 
       route: tool({
-        description: "Route a task to the appropriate specialist agent.",
+        description:
+          "Route a task to the appropriate specialist agent (history-aware when outcome history is available).",
         args: {
           description: z.string(),
           type: z.enum([
@@ -977,7 +979,7 @@ export const NdomoPlugin = Plugin.define({
               risk: args.risk ?? "low",
               files: args.files ?? [],
             },
-            { jev: jevConfig },
+            { jev: jevConfig, history: loadAgentHistory(db) },
           );
           return JSON.stringify(decision);
         },

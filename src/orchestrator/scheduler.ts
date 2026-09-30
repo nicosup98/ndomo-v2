@@ -8,8 +8,20 @@
  */
 
 import type { JevConfig } from "../config/schema.ts";
-import type { JevClassifierDeps, JevDecision } from "./jev.ts";
-import { classifyTaskWithJev } from "./jev.ts";
+import type { AgentHistory } from "./agent-history.ts";
+import { bucketForTask, scoreAgentForBucket } from "./agent-history.ts";
+import type { JevClassifierDeps, JevRouteDecision } from "./jev.ts";
+import { classifyRouteWithJev } from "./jev.ts";
+
+/** A ranked routing option surfaced for transparency (advisory, never blocking). */
+export interface RoutingAlternative {
+  /** Candidate agent that was not chosen. */
+  agent: string;
+  /** History score in [0,1]. */
+  score: number;
+  /** Short evidence summary (bucket + sample counts). */
+  reason: string;
+}
 
 /** Decision returned by the scheduler after routing a task. */
 export interface RoutingDecision {
@@ -24,7 +36,17 @@ export interface RoutingDecision {
   /** Agent that should review output before merge (advisory, not blocking). */
   requiresReview?: string;
   /** Which classifier produced the decision (hybrid routing audit trail). */
-  source?: "jev" | "rules";
+  source?: "jev" | "rules" | "history" | "hybrid";
+  /** Confidence in the chosen agent, in [0,1] (score margin between top candidates). */
+  confidence?: number;
+  /** Next-best agents by history score (advisory, max 3). */
+  alternatives?: RoutingAlternative[];
+  /** Human-readable factor breakdown of the history ranking. */
+  explain?: string[];
+  /** True when the chosen agent rests on the global prior only (cold start). */
+  fallback?: boolean;
+  /** True when epsilon-exploration forced the second-best candidate. */
+  explore?: boolean;
 }
 
 /** Incoming task request from the foreman. */
@@ -201,50 +223,93 @@ export interface RouteOptions {
   jev?: JevConfig;
   /** Injectable JEV dependencies (tests). */
   jevDeps?: JevClassifierDeps;
+  /**
+   * Outcome history used to rerank candidates (history-aware routing). Omit for
+   * pure rules/JEV behavior: the legacy output shape is returned untouched.
+   */
+  history?: AgentHistory | null;
+  /** Injectable RNG for the epsilon-exploration branch (tests). Defaults to Math.random. */
+  random?: (() => number) | undefined;
+  /** Exploration probability in [0,1] (default 0.15). Set 0 to disable. */
+  epsilon?: number | undefined;
+}
+
+/** Default epsilon-exploration probability (feedback-loop mitigation). */
+export const DEFAULT_EXPLORE_EPSILON = 0.15;
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 /**
- * Route a task to the appropriate specialist agent (hybrid).
- *
- * When `options.jev` is provided and JEV is enabled, one System One request
- * classifies agent/type/risk. Valid JEV fields override the request before the
- * heuristic rules run, so `parallel`/`dependencies`/`requiresReview` stay
- * consistent with the effective type/risk. A valid JEV agent wins over the
- * heuristic agent.
- *
- * Fallback: JEV disabled, missing key, timeout, API error, or an answer outside
- * the accepted enums → heuristic rules only (`source: "rules"`), identical to
- * the pre-JEV behavior.
- *
- * @param task - Task request from the foreman.
- * @param options - JEV config and injectable deps (optional).
- * @returns Routing decision with `source` indicating which classifier ran.
+ * Heuristic candidate pool for history ranking: the rules agent first, then the
+ * JEV agent (when present), then role-specific siblings for the task type.
  */
-export async function routeTask(
+function historyCandidates(
+  primary: string,
+  jevAgent: string | undefined,
   task: TaskRequest,
-  options: RouteOptions = {},
-): Promise<RoutingDecision> {
-  if (!options.jev) {
-    return { ...routeTaskWithRules(task), source: "rules" };
+): string[] {
+  const list: string[] = [];
+  const push = (agent: string | undefined): void => {
+    if (agent && !list.includes(agent)) list.push(agent);
+  };
+  push(jevAgent);
+  push(primary);
+  const stackAgent =
+    task.stack && task.stack in STACK_AGENTS ? STACK_AGENTS[task.stack] : undefined;
+  switch (task.type) {
+    case "implement":
+      push(stackAgent);
+      push("craftsman");
+      push("smith");
+      break;
+    case "explore":
+      push("ranger");
+      break;
+    case "research":
+      push("scout");
+      break;
+    case "design":
+      push(stackAgent);
+      push("painter");
+      break;
+    case "debug":
+      push("sage");
+      push("craftsman");
+      break;
+    case "audit":
+      push("critic");
+      break;
+    case "document":
+      push("scribe");
+      break;
+    case "debate":
+      push("sage");
+      break;
   }
+  return list.slice(0, 5);
+}
 
-  let jev: JevDecision | null = null;
-  try {
-    jev = await classifyTaskWithJev(
-      { description: task.description, files: task.files, stack: task.stack },
-      options.jev,
-      options.jevDeps ?? {},
-    );
-  } catch {
-    // classifyTaskWithJev never rejects; belt-and-suspenders for the router.
-    jev = null;
-  }
+interface ScoredCandidate {
+  agent: string;
+  score: number;
+  index: number;
+  cellN: number;
+  agentN: number;
+  pooled: number;
+  recency: number;
+  verify: number;
+  duration: number;
+  confidence: number;
+}
 
-  const effective: TaskRequest = { ...task };
-  if (jev?.type) effective.type = jev.type;
-  if (jev?.risk) effective.risk = jev.risk;
-  const base = routeTaskWithRules(effective);
-
+/** Legacy output shape (rules/JEV only, no history). */
+function legacyDecision(
+  base: RoutingDecision,
+  jev: JevRouteDecision | null,
+  effective: TaskRequest,
+): RoutingDecision {
   if (jev?.agent) {
     return {
       ...base,
@@ -254,6 +319,160 @@ export async function routeTask(
     };
   }
   return { ...base, source: jev ? "jev" : "rules" };
+}
+
+/**
+ * History-aware reranking: score the heuristic/JEV candidate pool against the
+ * outcome history, pick the winner (with optional epsilon-exploration) and
+ * return an enriched decision (confidence/alternatives/explain/fallback).
+ */
+function routeWithHistory(
+  task: TaskRequest,
+  base: RoutingDecision,
+  jev: JevRouteDecision | null,
+  options: RouteOptions,
+): RoutingDecision {
+  const history = options.history;
+  if (!history) return legacyDecision(base, jev, task);
+
+  const bucket = bucketForTask(task.type, task.files, task.stack);
+  const now = history.generatedAt;
+  const complexity = jev?.complexity;
+  const highComplexity = complexity !== undefined && complexity >= 0.66;
+
+  const candidates = historyCandidates(base.agent, jev?.agent, task);
+  const scored: ScoredCandidate[] = candidates
+    .map((agent, index) => {
+      const components = scoreAgentForBucket(history, agent, bucket, {
+        ...(complexity !== undefined ? { complexity } : {}),
+        ...(jev?.confidence !== undefined && jev?.agent === agent
+          ? { jevConfidence: jev.confidence }
+          : {}),
+        now,
+      });
+      return {
+        agent,
+        score: components.score,
+        cellN: components.cellN,
+        agentN: components.agentN,
+        pooled: components.pooled,
+        recency: components.recency,
+        verify: components.verify,
+        duration: components.duration,
+        confidence: components.confidence,
+        index,
+      };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+
+  const first = scored[0];
+  if (!first) return legacyDecision(base, jev, task);
+  const second = scored[1];
+
+  const epsilon = options.epsilon ?? DEFAULT_EXPLORE_EPSILON;
+  const random = options.random ?? Math.random;
+  const explore = epsilon > 0 && second !== undefined && random() < epsilon;
+  const chosen = explore && second ? second : first;
+  const runnerUp = scored.find((candidate) => candidate.agent !== chosen.agent);
+
+  const top = first.score;
+  const next = runnerUp?.score ?? 0;
+  const confidence = runnerUp ? (top + next > 0 ? top / (top + next) : 1) : 1;
+
+  const reason = explore
+    ? `History explore: ${chosen.agent} (second-best by history, score ${round3(chosen.score)}) for ${bucket}.`
+    : chosen.agent !== base.agent
+      ? `History reranked ${base.agent} → ${chosen.agent} for ${bucket} (score ${round3(chosen.score)} vs ${round3(first.score)}).`
+      : base.reason;
+
+  const review =
+    chosen.agent === "sage" ? undefined : highComplexity ? "sage" : base.requiresReview;
+
+  const decision: RoutingDecision = {
+    agent: chosen.agent,
+    reason,
+    parallel: base.parallel,
+    dependencies: base.dependencies,
+    source: jev ? "hybrid" : "history",
+    confidence: round3(confidence),
+    fallback: chosen.cellN === 0 && chosen.agentN === 0,
+    alternatives: scored
+      .filter((candidate) => candidate.agent !== chosen.agent)
+      .slice(0, 3)
+      .map((candidate) => ({
+        agent: candidate.agent,
+        score: round3(candidate.score),
+        reason: `score ${round3(candidate.score)} (cellN=${candidate.cellN}, agentN=${candidate.agentN})`,
+      })),
+    explain: [
+      `history: ${history.terminalRows} terminal tasks; bucket=${bucket}; candidates=${scored
+        .map((candidate) => candidate.agent)
+        .join(", ")}`,
+      ...scored.slice(0, 3).map((candidate) => {
+        const marker = candidate.agent === chosen.agent ? "*" : " ";
+        return `${marker} ${candidate.agent}: score=${round3(candidate.score)} pooled=${round3(
+          candidate.pooled,
+        )} recency=${round3(candidate.recency)} verify=${round3(candidate.verify)} duration=${round3(
+          candidate.duration,
+        )} confidence=${round3(candidate.confidence)} (cellN=${candidate.cellN}, agentN=${
+          candidate.agentN
+        })`;
+      }),
+    ],
+  };
+  if (review !== undefined) decision.requiresReview = review;
+  if (explore) decision.explore = true;
+  return decision;
+}
+
+/**
+ * Route a task to the appropriate specialist agent (hybrid).
+ *
+ * Without `options.history`, behavior matches the pre-history router exactly:
+ * when `options.jev` is provided and JEV is enabled, one System One request
+ * classifies agent/type/risk (valid fields override the request before the
+ * heuristic rules run); otherwise pure heuristic rules apply.
+ *
+ * With `options.history`, the heuristic/JEV candidate pool is reranked using
+ * outcome history (hierarchical pooled success + recency + verify + duration +
+ * JEV confidence). Epsilon-exploration (default 0.15, `options.epsilon` /
+ * `options.random` injectable) can force the second-best candidate and marks
+ * `explore: true`. Cold-start (no agent-level evidence) marks `fallback: true`.
+ *
+ * @param task - Task request from the foreman.
+ * @param options - JEV config, history snapshot and injectable deps (optional).
+ * @returns Routing decision; `source` indicates which signals produced it.
+ */
+export async function routeTask(
+  task: TaskRequest,
+  options: RouteOptions = {},
+): Promise<RoutingDecision> {
+  if (!options.jev) {
+    const base = routeTaskWithRules(task);
+    if (options.history) return routeWithHistory(task, base, null, options);
+    return { ...base, source: "rules" };
+  }
+
+  let jev: JevRouteDecision | null = null;
+  try {
+    jev = await classifyRouteWithJev(
+      { description: task.description, files: task.files, stack: task.stack },
+      options.jev,
+      options.jevDeps ?? {},
+    );
+  } catch {
+    // classifyRouteWithJev never rejects; belt-and-suspenders for the router.
+    jev = null;
+  }
+
+  const effective: TaskRequest = { ...task };
+  if (jev?.type) effective.type = jev.type;
+  if (jev?.risk) effective.risk = jev.risk;
+  const base = routeTaskWithRules(effective);
+
+  if (options.history) return routeWithHistory(effective, base, jev, options);
+
+  return legacyDecision(base, jev, effective);
 }
 
 /**

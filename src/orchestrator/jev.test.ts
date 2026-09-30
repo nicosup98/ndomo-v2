@@ -6,7 +6,7 @@ import type {
   JevRequestOptions,
   JevSystemOneRequest,
 } from "./jev.ts";
-import { classifyTaskWithJev, resetJevWarningState } from "./jev.ts";
+import { classifyRouteWithJev, classifyTaskWithJev, resetJevWarningState } from "./jev.ts";
 
 /** Helper: build a JevConfig with defaults. */
 const cfg = (overrides: Partial<JevConfig> = {}): JevConfig => ({
@@ -187,6 +187,81 @@ describe("classifyTaskWithJev", () => {
   test("returns null when answers are missing entirely", async () => {
     const { deps } = depsWith(async () => ({}));
     const decision = await classifyTaskWithJev(task, cfg(), deps);
+    expect(decision).toBeNull();
+  });
+});
+
+describe("classifyRouteWithJev", () => {
+  test("one request carries agent/type/risk plus the complexity score", async () => {
+    const { deps, calls, opts } = depsWith(async () => ({
+      answers: {
+        agent: answer("craftsman"),
+        type: answer("implement"),
+        risk: answer("low"),
+        complexity: { type: "score", score: 2, confidence: 0.7 },
+      },
+    }));
+    const decision = await classifyRouteWithJev(task, cfg({ model: "route-model" }), deps);
+    expect(calls).toHaveLength(1);
+    const req = calls[0];
+    if (!req) throw new Error("expected one captured request");
+    expect(Object.keys(req.questions).sort()).toEqual(["agent", "complexity", "risk", "type"]);
+    expect(req.model).toBe("route-model");
+    expect(decision?.agent).toBe("craftsman");
+    expect(decision?.type).toBe("implement");
+    expect(decision?.risk).toBe("low");
+    expect(decision?.complexity).toBeCloseTo(2 / 3, 6);
+    expect(decision?.confidence).toBeCloseTo(0.9, 6);
+    expect(opts[0]?.timeout).toBeDefined();
+  });
+
+  test("clamps out-of-range scores to [0,1]", async () => {
+    const { deps } = depsWith(async () => ({
+      answers: { complexity: { type: "score", score: 9, confidence: 0.5 } },
+    }));
+    const high = await classifyRouteWithJev(task, cfg(), deps);
+    expect(high?.complexity).toBe(1);
+
+    const { deps: depsLow } = depsWith(async () => ({
+      answers: { complexity: { type: "score", score: -3, confidence: 0.5 } },
+    }));
+    const low = await classifyRouteWithJev(task, cfg(), depsLow);
+    expect(low?.complexity).toBe(0);
+  });
+
+  test("drops invalid complexity while keeping valid fields", async () => {
+    const { deps } = depsWith(async () => ({
+      answers: {
+        agent: answer("ranger"),
+        complexity: { type: "score", score: "high" },
+      },
+    }));
+    const decision = await classifyRouteWithJev(task, cfg(), deps);
+    expect(decision).toEqual({ agent: "ranger", confidence: 0.9 });
+  });
+
+  test("complexity-only answers still return a decision", async () => {
+    const { deps } = depsWith(async () => ({
+      answers: { complexity: { type: "score", score: 3, confidence: 0.9 } },
+    }));
+    const decision = await classifyRouteWithJev(task, cfg(), deps);
+    expect(decision?.complexity).toBe(1);
+    expect(decision?.agent).toBeUndefined();
+  });
+
+  test("all answers invalid → null", async () => {
+    const { deps } = depsWith(async () => ({
+      answers: { agent: 42, complexity: null },
+    }));
+    const decision = await classifyRouteWithJev(task, cfg(), deps);
+    expect(decision).toBeNull();
+  });
+
+  test("API failure → null (never throws)", async () => {
+    const { deps } = depsWith(async () => {
+      throw new Error("API down");
+    });
+    const decision = await classifyRouteWithJev(task, cfg(), deps);
     expect(decision).toBeNull();
   });
 });

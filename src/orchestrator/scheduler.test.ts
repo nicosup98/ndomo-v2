@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { JevConfig } from "../config/schema.ts";
+import type { AgentHistory } from "./agent-history.ts";
+import { cellKey, emptyAgentHistory, emptyHistoryCell, type HistoryCell } from "./agent-history.ts";
 import type { JevClassifierDeps } from "./jev.ts";
 import type { RoutedTask, RoutingDecision, TaskRequest } from "./scheduler.ts";
 import { canRunParallel, routeTask } from "./scheduler.ts";
@@ -247,6 +249,134 @@ describe("routeTask", () => {
       });
       expect(d.source).toBe("rules");
       expect(called).toBe(0);
+    });
+  });
+
+  describe("history-aware routing", () => {
+    const NOW = 1_800_000_000_000;
+    const buildCell = (over: Partial<HistoryCell>): HistoryCell => ({
+      ...emptyHistoryCell(),
+      ...over,
+    });
+    const nowCell = (
+      successes: number,
+      failures: number,
+      durationsMs: number[] = [1000],
+    ): HistoryCell =>
+      buildCell({
+        n: successes + failures,
+        done: successes,
+        failed: failures,
+        weightedSuccess: successes,
+        weightSum: successes + failures,
+        durations: durationsMs,
+        lastCompletedAt: NOW,
+      });
+    const historyWith = (
+      cells: Array<[string, HistoryCell]>,
+      global?: HistoryCell,
+    ): AgentHistory => {
+      const history = emptyAgentHistory(NOW);
+      history.cells = new Map(cells);
+      if (global) history.global = global;
+      history.terminalRows = cells.reduce((sum, [, cell]) => sum + cell.n, 0);
+      return history;
+    };
+    const rankedHistory = (): AgentHistory =>
+      historyWith(
+        [
+          [cellKey("js-smith", "implement:js"), nowCell(0, 10, [9000])],
+          [cellKey("craftsman", "implement:js"), nowCell(10, 0, [1000])],
+        ],
+        buildCell({ durations: [1000] }),
+      );
+
+    test("reranks to the agent with better outcomes", async () => {
+      const d = await routeTask(mk({ type: "implement", stack: "js", files: ["src/a.ts"] }), {
+        history: rankedHistory(),
+        epsilon: 0,
+      });
+      expect(d.agent).toBe("craftsman");
+      expect(d.source).toBe("history");
+      expect(d.fallback).toBe(false);
+      expect(d.explore).toBeUndefined();
+      expect(d.alternatives?.map((alternative) => alternative.agent)).toContain("js-smith");
+      expect(d.confidence).toBeGreaterThan(0.5);
+      expect(d.explain?.join(" ")).toContain("bucket=implement:js");
+      expect(d.requiresReview).toBeUndefined();
+    });
+
+    test("epsilon-exploration forces the second-best candidate", async () => {
+      const d = await routeTask(mk({ type: "implement", stack: "js", files: ["src/a.ts"] }), {
+        history: rankedHistory(),
+        epsilon: 1,
+        random: () => 0,
+      });
+      expect(d.explore).toBe(true);
+      expect(d.agent).toBe("smith");
+      expect(d.source).toBe("history");
+    });
+
+    test("cold start → fallback=true and keeps the heuristic pick", async () => {
+      const d = await routeTask(mk({ type: "implement", stack: "js" }), {
+        history: emptyAgentHistory(NOW),
+        epsilon: 0,
+      });
+      expect(d.agent).toBe("js-smith");
+      expect(d.fallback).toBe(true);
+      expect(d.source).toBe("history");
+      expect(d.confidence).toBeGreaterThanOrEqual(0.5);
+    });
+
+    test("JEV + history → source hybrid; complexity ≥0.66 adds sage review", async () => {
+      const jevCfg: JevConfig = { enabled: true, model: "jev-latest", timeoutMs: 1000 };
+      const choice = (c: string) => ({ type: "choice", choice: c, confidence: 0.9 });
+      const deps: JevClassifierDeps = {
+        apiKey: "test-key",
+        log: () => {},
+        clientFactory: () => ({
+          systemOne: async () => ({
+            answers: {
+              agent: choice("craftsman"),
+              type: choice("implement"),
+              risk: choice("low"),
+              complexity: { type: "score", score: 3, confidence: 0.8 },
+            },
+          }),
+        }),
+      };
+      const d = await routeTask(mk({ type: "implement", stack: "js", files: ["src/a.ts"] }), {
+        jev: jevCfg,
+        jevDeps: deps,
+        history: rankedHistory(),
+        epsilon: 0,
+      });
+      expect(d.source).toBe("hybrid");
+      expect(d.agent).toBe("craftsman");
+      expect(d.requiresReview).toBe("sage"); // complexity 1.0 ≥ 0.66
+      expect(d.fallback).toBe(false);
+    });
+
+    test("JEV failure degrades to history-only ranking", async () => {
+      const jevCfg: JevConfig = { enabled: true, model: "jev-latest", timeoutMs: 1000 };
+      const deps: JevClassifierDeps = {
+        apiKey: "test-key",
+        log: () => {},
+        clientFactory: () => ({
+          systemOne: async () => {
+            throw new Error("JEV down");
+          },
+        }),
+      };
+      const d = await routeTask(mk({ type: "implement", stack: "js", files: ["src/a.ts"] }), {
+        jev: jevCfg,
+        jevDeps: deps,
+        history: rankedHistory(),
+        epsilon: 0,
+      });
+      expect(d.source).toBe("history");
+      expect(d.agent).toBe("craftsman");
+      expect(d.fallback).toBe(false);
     });
   });
 });

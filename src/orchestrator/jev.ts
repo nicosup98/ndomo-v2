@@ -14,8 +14,8 @@
  * The API key is read from the TYPESAFE_API_KEY environment variable only.
  */
 
-import type { ChoiceQuestion, EntryType, RequestOptions, SystemOneRequest } from "@typesafe-ai/sdk";
-import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
+import type { EntryType, Question, RequestOptions, SystemOneRequest } from "@typesafe-ai/sdk";
+import { choice, score, TypeSafeClient } from "@typesafe-ai/sdk";
 import type { JevConfig } from "../config/schema.ts";
 import type { TaskRequest } from "./scheduler.ts";
 
@@ -109,7 +109,7 @@ function createDefaultClient(apiKey: string, cfg: JevConfig): JevClientLike {
   return {
     async systemOne(request, options) {
       const response = await client.systemOne(
-        request as unknown as SystemOneRequest<Record<string, ChoiceQuestion>>,
+        request as unknown as SystemOneRequest<Record<string, Question>>,
         options as RequestOptions,
       );
       return { answers: response.answers as Record<string, unknown> };
@@ -259,4 +259,82 @@ export async function classifyTaskWithJev(
 ): Promise<JevDecision | null> {
   const answers = await callJev(buildState(task), buildQuestions(), cfg, deps);
   return answers ? mergeAnswers(answers) : null;
+}
+
+/** Complexity rubric used by the routing classifier (four ordered levels). */
+export const JEV_COMPLEXITY_CRITERIA = [
+  "Routine: single file, mechanical change, no unknowns.",
+  "Moderate: a few files, clear scope, minor decisions.",
+  "Complex: multiple files or stacks, design decisions, or unfamiliar code.",
+  "Very complex: cross-cutting change, high uncertainty, many moving parts.",
+] as const;
+
+/**
+ * Route classification: agent/type/risk plus a normalized complexity score
+ * obtained in the SAME `systemOne` request (no extra round-trip).
+ */
+export type JevRouteDecision = JevDecision & {
+  /** Normalized complexity in [0,1] from the score rubric (omitted when unanswered). */
+  complexity?: number;
+  /** Model confidence in the chosen agent, in [0,1] (omitted when unanswered). */
+  confidence?: number;
+};
+
+function buildRouteQuestions(): Record<string, unknown> {
+  return {
+    ...buildQuestions(),
+    complexity: score("How complex is this task overall?", JEV_COMPLEXITY_CRITERIA),
+  };
+}
+
+/** Extracts and normalizes a score answer to [0,1]. `levels` = rubric length. */
+export function pickScore(answer: unknown, levels: number): number | undefined {
+  if (typeof answer !== "object" || answer === null) return undefined;
+  const raw = (answer as { score?: unknown }).score;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  const max = Math.max(1, levels - 1);
+  return Math.min(1, Math.max(0, raw / max));
+}
+
+/** Extracts a confidence in [0,1] from a JEV answer, or `undefined` when absent. */
+export function pickConfidence(answer: unknown): number | undefined {
+  if (typeof answer !== "object" || answer === null) return undefined;
+  const raw = (answer as { confidence?: unknown }).confidence;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  return Math.min(1, Math.max(0, raw));
+}
+
+/** Validates route answers: agent/type/risk enums + complexity score + confidence. */
+function mergeRouteAnswers(answers: Record<string, unknown> | undefined): JevRouteDecision | null {
+  if (!answers) return null;
+  const decision: JevRouteDecision = { ...(mergeAnswers(answers) ?? {}) };
+  const complexity = pickScore(answers.complexity, JEV_COMPLEXITY_CRITERIA.length);
+  if (complexity !== undefined) decision.complexity = complexity;
+  const confidence = pickConfidence(answers.agent);
+  if (confidence !== undefined) decision.confidence = confidence;
+  const hasField =
+    decision.agent !== undefined ||
+    decision.type !== undefined ||
+    decision.risk !== undefined ||
+    decision.complexity !== undefined;
+  return hasField ? decision : null;
+}
+
+/**
+ * Classify a task for routing with JEV: agent/type/risk choices plus a
+ * complexity score, all in one `systemOne` request. Always resolves; never
+ * rejects (same guarantees as {@link callJev}).
+ *
+ * @param task - Task description plus optional files/stack sent as state.
+ * @param cfg - JEV config (`enabled`, `model`, `timeoutMs`).
+ * @param deps - Injectable apiKey/clientFactory/log (tests).
+ * @returns Validated route decision (possibly partial), or `null` when JEV cannot answer.
+ */
+export async function classifyRouteWithJev(
+  task: JevTaskInput,
+  cfg: JevConfig,
+  deps: JevClassifierDeps = {},
+): Promise<JevRouteDecision | null> {
+  const answers = await callJev(buildState(task), buildRouteQuestions(), cfg, deps);
+  return answers ? mergeRouteAnswers(answers) : null;
 }
