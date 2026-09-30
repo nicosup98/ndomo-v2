@@ -24,6 +24,20 @@ User envía prompt
       → scout (TUI)
 ```
 
+## Routing Intelligence (history-aware + JEV Score)
+
+The `route` tool is history-aware: it builds an on-the-fly snapshot from
+`plan_tasks` (no migrations) and re-ranks candidates by a pooled factor —
+hierarchical Bayesian success (cell → agent → global) × recency (EWMA, 30d
+half-life) × verify × duration × JEV confidence. Each decision carries additive
+fields: `source` (`rules|jev|history|hybrid`), `confidence`, `alternatives[]`,
+`explain[]`, `fallback` (cold start) and `explore` (epsilon-exploration, 0.15).
+JEV classifies agent/type/risk plus a normalized `complexity` in a single
+`systemOne` request; `complexity ≥ 0.66` forces `requiresReview: "sage"` unless
+`sage` was already chosen. Without history or JEV, routing degrades to the
+previous heuristic. See [docs/features/harness-intelligence.md](features/harness-intelligence.md)
+for the full scoring formulas, `ndomo stats`, and `ndomo audit`.
+
 ## Foreman Workflow (Planner, 4 pasos)
 
 Para tareas >5 archivos o diseño de arquitectura. El foreman planifica y persiste en DB; no ejecuta.

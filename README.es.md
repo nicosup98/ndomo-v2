@@ -144,6 +144,9 @@ CLI write surface (desde 0.3.0):
 
 CLI report surface:
 - `ndomo stats [--since 7d|30d|all] [--agent <name>] [--json]` — Scorecard por agente (tasa de éxito, duraciones, escalaciones)
+- `ndomo audit [--json] [--update-manifest]` — Self-audit report (drift, permisos, conteos, config, manifest sha256) con score 1-100; exit 1 si hay algún ERROR
+
+Ver [docs/features/harness-intelligence.md](docs/features/harness-intelligence.md) para el routing con historial, el scorecard por agente y el self-audit.
 
 ## Features de Calidad (desde 0.4.0)
 
