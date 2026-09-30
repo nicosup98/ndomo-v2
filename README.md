@@ -117,7 +117,7 @@ See [docs/installer.md](docs/installer.md) for detailed steps and full flag refe
 
 ndomo persists plans, tasks, sessions, analyses and ops records (incidents, deployments, releases, rollbacks) in a project-local SQLite database
 (`<project>/.ndomo/state.db`) with FTS5 search, audit trail, and auto-archive
-to markdown on completion. 61 tools are exposed via OpenCode, grouped by domain:
+to markdown on completion. 62 tools are exposed via OpenCode, grouped by domain:
 
 | Domain | Tools |
 |---|---|
@@ -132,7 +132,7 @@ to markdown on completion. 61 tools are exposed via OpenCode, grouped by domain:
 | Obsidian | `obsidian_export`, `obsidian_read_note` |
 | Ops | `incident_create`, `rollback_record` |
 | Design & review | `design_create`, `critic_review` |
-| Utility | `status`, `ndomo_write_unlock` |
+| Utility | `status`, `ndomo_write_unlock`, `stats` |
 
 The foreman uses these to track work across agent dispatches; ranger writes `analyses` rows (linkable to plans via `analysis_link_plan`). See
 [docs/database.md](docs/database.md) for schema, tools, lifecycle, and
@@ -141,6 +141,9 @@ auto-archive behavior.
 CLI write surface (since 0.3.0):
 - `ndomo plan create|list|show|update|approve|complete|delete`
 - `ndomo task create|list|show|update|reassign|complete|fail`
+
+CLI report surface:
+- `ndomo stats [--since 7d|30d|all] [--agent <name>] [--json]` — Agent scorecard (success rate, durations, escalations)
 
 ## Quality Features (since 0.4.0)
 

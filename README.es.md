@@ -117,7 +117,7 @@ Ver [docs/installer.md](docs/installer.md) para pasos detallados y referencia co
 
 ndomo persiste planes, tareas, sesiones, análisis y registros de ops (incidentes, deployments, releases, rollbacks) en una base de datos SQLite local al proyecto
 (`<project>/.ndomo/state.db`) con búsqueda FTS5, trazabilidad de auditoría y
-archivado automático a markdown al completarse. 61 herramientas expuestas vía OpenCode, agrupadas por dominio:
+archivado automático a markdown al completarse. 62 herramientas expuestas vía OpenCode, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---|---|
@@ -132,7 +132,7 @@ archivado automático a markdown al completarse. 61 herramientas expuestas vía 
 | Obsidian | `obsidian_export`, `obsidian_read_note` |
 | Ops | `incident_create`, `rollback_record` |
 | Diseño y review | `design_create`, `critic_review` |
-| Utilidades | `status`, `ndomo_write_unlock` |
+| Utilidades | `status`, `ndomo_write_unlock`, `stats` |
 
 El foreman las usa para rastrear trabajo a través de despachos de agentes; ranger escribe filas en `analyses` (enlazables a planes vía `analysis_link_plan`). Ver
 [docs/database.md](docs/database.md) para esquema, herramientas, ciclo de vida y
@@ -141,6 +141,9 @@ comportamiento de archivado automático.
 CLI write surface (desde 0.3.0):
 - `ndomo plan create|list|show|update|approve|complete|delete`
 - `ndomo task create|list|show|update|reassign|complete|fail`
+
+CLI report surface:
+- `ndomo stats [--since 7d|30d|all] [--agent <name>] [--json]` — Scorecard por agente (tasa de éxito, duraciones, escalaciones)
 
 ## Features de Calidad (desde 0.4.0)
 
