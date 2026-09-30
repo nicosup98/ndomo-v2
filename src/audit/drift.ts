@@ -67,8 +67,17 @@ function asPresets(raw: unknown): Presets | null {
 }
 
 /**
- * Format a value for comparison: temperatures compare numerically so `0.30`
- * equals `0.3`; everything else is a trimmed string.
+ * Format a value for comparison.
+ *
+ * Preset values may be JSON numbers (`"temperature": 0.3`) while frontmatter
+ * values are always strings (the YAML reader has no number type), so a number
+ * is stringified (`0.3` → `"0.3"`) and both sides are then trimmed and
+ * compared VERBATIM — the comparison is lexical, not numeric: `0.30` in
+ * frontmatter does not equal `0.3` in the preset.
+ *
+ * That is intentional, not a rounding artifact: `syncAgentFrontmatter()` writes
+ * the preset's own rendering into the file, so a differently rendered value is
+ * a file that WILL change on the next sync — real (transient) drift.
  */
 function normalize(value: unknown): string | null {
   if (typeof value === "number") return String(value);
