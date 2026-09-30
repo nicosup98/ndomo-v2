@@ -2863,16 +2863,17 @@ describe("NdomoPlugin v2 registration", () => {
     return { projectDir, harness, cleanup };
   };
 
-  test("setup registers 61 tools, all 4 hooks, and returns a cleanup fn", async () => {
+  test("setup registers 62 tools, all 4 hooks, and returns a cleanup fn", async () => {
     const { projectDir, harness, cleanup } = await setupPlugin();
     try {
       expect(typeof cleanup).toBe("function");
-      expect(harness.tools).toHaveLength(61);
+      expect(harness.tools).toHaveLength(62);
       const names = harness.tools.map((t) => t.name);
       expect(names).toContain("plan_create");
       expect(names).toContain("task_update_status");
       expect(names).toContain("status");
       expect(names).toContain("route");
+      expect(names).toContain("stats");
       // Consolidated from the former v1 standalone tools/ (removed in v2).
       expect(names).toContain("ledger_create");
       expect(names).toContain("ledger_get");
@@ -2889,7 +2890,7 @@ describe("NdomoPlugin v2 registration", () => {
       // Obsidian brain layer (OBL-3).
       expect(names).toContain("obsidian_export");
       expect(names).toContain("obsidian_read_note");
-      expect(new Set(names).size).toBe(61);
+      expect(new Set(names).size).toBe(62);
       expect(harness.sessionHooks.map((h) => h.name)).toEqual(["compaction"]);
       expect(harness.toolHooks.map((h) => h.name).sort()).toEqual([
         "execute.after",
@@ -2917,6 +2918,37 @@ describe("NdomoPlugin v2 registration", () => {
       expect(parsed.plugin).toBe("ndomo");
       expect(parsed.directory).toBe(projectDir);
       expect(parsed.worktree).toBe(projectDir);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("stats tool returns the agent scorecard as JSON", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    try {
+      const stats = harness.tools.find((t) => t.name === "stats");
+      if (!stats) throw new Error("tool not registered: stats");
+
+      const res = await stats.execute({ since: "7d" }, harness.toolCtx("ses_v2_stats"));
+      const parsed = JSON.parse(res.content) as {
+        since: string;
+        windowStart: number | null;
+        generatedAt: number;
+        agents: unknown[];
+      };
+      expect(parsed.since).toBe("7d");
+      expect(typeof parsed.windowStart).toBe("number");
+      expect(Array.isArray(parsed.agents)).toBe(true);
+
+      // Default window + agent filter go through the shared scorecard core.
+      const filtered = await stats.execute({ agent: "js-smith" }, harness.toolCtx("ses_v2_stats"));
+      const filteredParsed = JSON.parse(filtered.content) as {
+        since: string;
+        agents: unknown[];
+      };
+      expect(filteredParsed.since).toBe("all");
+      expect(filteredParsed.agents).toEqual([]);
     } finally {
       await cleanup();
       rmSync(projectDir, { recursive: true, force: true });
@@ -3139,7 +3171,7 @@ describe("NdomoPlugin v2 registration", () => {
       const first = makePluginHarness(projectDir);
       const firstCleanup = await NdomoPlugin.setup(first.ctx);
       if (typeof firstCleanup !== "function") throw new Error("setup did not return a cleanup fn");
-      expect(first.tools).toHaveLength(61);
+      expect(first.tools).toHaveLength(62);
       await firstCleanup();
       await firstCleanup(); // idempotent — a second dispose must not throw
 
@@ -3150,8 +3182,8 @@ describe("NdomoPlugin v2 registration", () => {
       if (typeof secondCleanup !== "function") {
         throw new Error("setup did not return a cleanup fn");
       }
-      expect(second.tools).toHaveLength(61);
-      expect(first.tools).toHaveLength(61);
+      expect(second.tools).toHaveLength(62);
+      expect(first.tools).toHaveLength(62);
       await secondCleanup();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });

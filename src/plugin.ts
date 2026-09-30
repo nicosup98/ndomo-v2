@@ -116,6 +116,7 @@ import { analyzeTaskDependencies, type TaskDepInput } from "./orchestrator/jev-d
 import { classifyIntentWithJev } from "./orchestrator/jev-intent.ts";
 import { classifyCodeRiskWithJev } from "./orchestrator/jev-risk.ts";
 import { classifyTestsWithJev } from "./orchestrator/jev-tests.ts";
+import { computeAgentScorecard } from "./stats/agent-scorecard.ts";
 
 // ─── v1 → v2 tool adapter ────────────────────────────────────────────────────
 
@@ -1449,6 +1450,23 @@ export const NdomoPlugin = Plugin.define({
             activeWrites: activeWrites.size,
             preset: opts.preset ?? "default",
           });
+        },
+      }),
+
+      stats: tool({
+        description:
+          "Per-agent scorecard from the ndomo state DB: task counts (done/failed/blocked/running), success rate, verification pass rate (passed vs waived), duration p50/p95, Σ tokens, top failure modes, escalations grouped by source plan and verification bypasses. Includes archived history; filter with since (7d|30d|all, default all) and agent.",
+        args: {
+          since: z.enum(["7d", "30d", "all"]).optional(),
+          agent: z.string().optional(),
+        },
+        execute: async (args) => {
+          return JSON.stringify(
+            computeAgentScorecard(db, {
+              since: args.since ?? "all",
+              ...(args.agent ? { agent: args.agent } : {}),
+            }),
+          );
         },
       }),
 
