@@ -374,6 +374,7 @@ function routeWithHistory(
   const explore = epsilon > 0 && second !== undefined && random() < epsilon;
   const chosen = explore && second ? second : first;
   const runnerUp = scored.find((candidate) => candidate.agent !== chosen.agent);
+  const baseScored = scored.find((candidate) => candidate.agent === base.agent);
 
   const top = first.score;
   const next = runnerUp?.score ?? 0;
@@ -382,7 +383,7 @@ function routeWithHistory(
   const reason = explore
     ? `History explore: ${chosen.agent} (second-best by history, score ${round3(chosen.score)}) for ${bucket}.`
     : chosen.agent !== base.agent
-      ? `History reranked ${base.agent} → ${chosen.agent} for ${bucket} (score ${round3(chosen.score)} vs ${round3(first.score)}).`
+      ? `History reranked ${base.agent} → ${chosen.agent} for ${bucket} (score ${round3(chosen.score)} vs ${round3(baseScored?.score ?? 0)}).`
       : base.reason;
 
   const review =

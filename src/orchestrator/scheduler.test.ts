@@ -304,6 +304,9 @@ describe("routeTask", () => {
       expect(d.confidence).toBeGreaterThan(0.5);
       expect(d.explain?.join(" ")).toContain("bucket=implement:js");
       expect(d.requiresReview).toBeUndefined();
+      expect(d.reason).toContain("History reranked js-smith → craftsman");
+      expect(d.reason).toMatch(/score 0\.\d+ vs 0\.\d+/);
+      expect(d.reason).not.toMatch(/score (\d+\.\d+) vs \1/);
     });
 
     test("epsilon-exploration forces the second-best candidate", async () => {
