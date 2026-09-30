@@ -395,7 +395,7 @@ FTS5 syntax injection from hyphens and special characters (`src/db/fts-escape.ts
 
 ### Migrations
 
-5 migrations applied automatically by `runMigrations(db)` ordered by version:
+17 migrations applied automatically by `runMigrations(db)` ordered by version (v1–v5 summarized below; full registry in `MIGRATIONS`, `src/db/schema.ts`):
 
 | Version | Description |
 |---|---|

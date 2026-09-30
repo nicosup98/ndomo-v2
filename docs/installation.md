@@ -187,7 +187,7 @@ opencode
 ping all agents
 ```
 
-Expected output: each of the 22 agents responds with a status confirmation.
+Expected output: each of the 23 agents responds with a status confirmation.
 
 3. Check that the Foreman is the primary agent:
 

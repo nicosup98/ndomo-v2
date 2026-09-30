@@ -2,7 +2,7 @@
 
 ## Overview
 
-ndomo defines 22 agents grouped by function (4 primaries + 18 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
+ndomo defines 23 agents grouped by function (4 primaries + 19 subagents). All agent definitions live as Markdown files in `agents/` with YAML frontmatter specifying model, temperature, permissions, and mode.
 
 ## Primaries
 
@@ -10,7 +10,7 @@ Four primary agents operate independently. The user switches between them manual
 
 ```d2
 # ndomo plugin — arquitectura de agentes
-# 22 agents: 4 primaries (foreman/craftsman/warden/ranger) + 18 subagents.
+# 23 agents: 4 primaries (foreman/craftsman/warden/ranger) + 19 subagents.
 # Flujo de delegación: foreman persiste plan en DB → user cambia primario en TUI →
 # craftsman/warden leen tasks y ejecutan.
 # Basado en: docs/agents.md (citas a:linea) y docs/workflows.md (w:linea).

@@ -238,7 +238,7 @@ Ver [docs/configuration.md](docs/configuration.md) para referencia completa. Los
 
 ## Skills
 
-ndomo incluye 24 skills en `skills/`, agrupadas por familia:
+ndomo incluye 25 skills en `skills/`, agrupadas por familia:
 
 **Protocolo caveman**
 - `caveman` — modo de comunicación ultracomprimido (~75% reducción de tokens)

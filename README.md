@@ -238,7 +238,7 @@ See [docs/configuration.md](docs/configuration.md) for full reference. Agent pre
 
 ## Skills
 
-ndomo bundles 24 skills under `skills/`, grouped by family:
+ndomo bundles 25 skills under `skills/`, grouped by family:
 
 **Caveman protocol**
 - `caveman` — ultra-compressed communication mode (~75% token reduction)
