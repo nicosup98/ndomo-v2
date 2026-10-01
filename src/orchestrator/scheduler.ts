@@ -8,7 +8,7 @@
  */
 
 import type { JevConfig } from "../config/schema.ts";
-import type { AgentHistory } from "./agent-history.ts";
+import type { AgentHistory, HistoryCacheState } from "./agent-history.ts";
 import { bucketForTask, scoreAgentForBucket } from "./agent-history.ts";
 import type { JevClassifierDeps, JevRouteDecision } from "./jev.ts";
 import { classifyRouteWithJev } from "./jev.ts";
@@ -47,6 +47,8 @@ export interface RoutingDecision {
   fallback?: boolean;
   /** True when epsilon-exploration forced the second-best candidate. */
   explore?: boolean;
+  /** State of the AgentHistory memo backing this decision (route-only audit signal). */
+  historyCache?: HistoryCacheState;
 }
 
 /** Incoming task request from the foreman. */
@@ -232,6 +234,8 @@ export interface RouteOptions {
   random?: (() => number) | undefined;
   /** Exploration probability in [0,1] (default 0.15). Set 0 to disable. */
   epsilon?: number | undefined;
+  /** Cache state reported by the caller's history loader (route audit trail). */
+  historyCache?: HistoryCacheState;
 }
 
 /** Default epsilon-exploration probability (feedback-loop mitigation). */
@@ -389,6 +393,11 @@ function routeWithHistory(
   const review =
     chosen.agent === "sage" ? undefined : highComplexity ? "sage" : base.requiresReview;
 
+  // Route-only audit signal: only surfaced when the caller reported one, so the
+  // legacy explain shape stays byte-identical otherwise.
+  const historyCacheExplain =
+    options.historyCache !== undefined ? [`historyCache: ${options.historyCache}`] : [];
+
   const decision: RoutingDecision = {
     agent: chosen.agent,
     reason,
@@ -406,6 +415,7 @@ function routeWithHistory(
         reason: `score ${round3(candidate.score)} (cellN=${candidate.cellN}, agentN=${candidate.agentN})`,
       })),
     explain: [
+      ...historyCacheExplain,
       `history: ${history.terminalRows} terminal tasks; bucket=${bucket}; candidates=${scored
         .map((candidate) => candidate.agent)
         .join(", ")}`,
@@ -423,6 +433,7 @@ function routeWithHistory(
   };
   if (review !== undefined) decision.requiresReview = review;
   if (explore) decision.explore = true;
+  if (options.historyCache !== undefined) decision.historyCache = options.historyCache;
   return decision;
 }
 

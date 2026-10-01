@@ -89,8 +89,9 @@ import {
   canRunParallel,
   cavemanCompress,
   createWorktree,
+  getAgentHistoryCached,
+  invalidateAgentHistoryCache,
   listActive,
-  loadAgentHistory,
   removeWorktree,
   routeTask,
   verifyIntegrity,
@@ -972,6 +973,7 @@ export const NdomoPlugin = Plugin.define({
           files: z.array(z.string()).optional(),
         },
         execute: async (args) => {
+          const { history, cache } = getAgentHistoryCached(db);
           const decision = await routeTask(
             {
               description: args.description,
@@ -980,7 +982,7 @@ export const NdomoPlugin = Plugin.define({
               risk: args.risk ?? "low",
               files: args.files ?? [],
             },
-            { jev: jevConfig, history: loadAgentHistory(db) },
+            { jev: jevConfig, history, historyCache: cache },
           );
           return JSON.stringify(decision);
         },
@@ -1573,7 +1575,9 @@ export const NdomoPlugin = Plugin.define({
           confirm: z.boolean(),
         },
         execute: async (args) => {
-          return JSON.stringify(deletePlan(db, args.id, { confirm: args.confirm }));
+          const result = deletePlan(db, args.id, { confirm: args.confirm });
+          invalidateAgentHistoryCache(db);
+          return JSON.stringify(result);
         },
       }),
 
@@ -1774,6 +1778,8 @@ export const NdomoPlugin = Plugin.define({
             ctx.agent ?? "unknown",
             { agent: ctx.agent, sessionId: ctx.sessionID },
           );
+          // Route-only history memo: any transition may add/remove terminal rows.
+          if (result) invalidateAgentHistoryCache(db);
           // T3.3: auto-checkpoint when last task in plan completes
           if (result && args.status === "done" && result.planId) {
             const pending = listTasksByPlan(db, result.planId, { status: "pending" });
@@ -1831,6 +1837,8 @@ export const NdomoPlugin = Plugin.define({
               ...(args.reason !== undefined ? { reason: args.reason } : {}),
             },
           );
+          // Route-only history memo: verdicts feed the verify success factor.
+          invalidateAgentHistoryCache(db);
           return JSON.stringify(updated);
         },
       }),

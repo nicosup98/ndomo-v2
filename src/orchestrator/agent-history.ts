@@ -421,6 +421,131 @@ export function loadAgentHistory(db: Database, options: AgentHistoryOptions = {}
   return history;
 }
 
+// ─── History cache (route-only memo) ─────────────────────────────────────────
+/**
+ * In-process memo for {@link loadAgentHistory}, used exclusively by the `route`
+ * tool: every routing invocation re-scanned every terminal `plan_tasks` row,
+ * an O(n) full scan that grows with the plan backlog. The memo reuses the last
+ * snapshot for {@link HISTORY_CACHE_TTL_MS} and is invalidated in-process by
+ * the mutating hooks in `plugin.ts`.
+ *
+ * Guarantees:
+ * - **Bypass**: injecting `options.now` (the loader's test clock) skips the
+ *   memo entirely — no read, no write — so `loadAgentHistory` stays pure and
+ *   existing tests are untouched.
+ * - **Freshness clock**: `options.clock` (tests only) replaces `Date.now()` for
+ *   TTL aging; production callers never set it.
+ * - **Never throws**: a failing load degrades to `emptyAgentHistory()`, the
+ *   documented neutral fallback.
+ * - **Keying**: on-disk databases memoize per `filename`; in-memory databases
+ *   memoize per `Database` instance (WeakMap-assigned id), so two `:memory:`
+ *   handles never share a snapshot.
+ * - **Scope**: single process only. Other processes rely on the TTL; every
+ *   successful mutation here invalidates immediately instead.
+ */
+
+/** Time-to-live of one memoized history snapshot (ms). */
+export const HISTORY_CACHE_TTL_MS = 30_000;
+
+/** Freshness verdict reported next to a history snapshot. */
+export type HistoryCacheState = "hit" | "miss" | "bypass";
+
+/** Options for {@link getAgentHistoryCached}. */
+export interface AgentHistoryCacheOptions extends AgentHistoryOptions {
+  /**
+   * Injectable freshness clock (tests only) driving TTL aging. Defaults to
+   * `Date.now()`. Unrelated to `now`, which means full bypass.
+   */
+  clock?: () => number;
+}
+
+/** A history snapshot paired with the memo verdict that produced it. */
+export interface CachedAgentHistory {
+  /** Snapshot itself (same object reference across hits). */
+  history: AgentHistory;
+  /** Whether the snapshot was reused, freshly loaded or served off-memo. */
+  cache: HistoryCacheState;
+}
+
+/** One memoized snapshot plus the timestamp it was loaded at. */
+interface AgentHistoryCacheEntry {
+  history: AgentHistory;
+  loadedAt: number;
+}
+
+/** Memoized snapshots keyed by {@link historyCacheKey}. */
+const historyCache = new Map<string, AgentHistoryCacheEntry>();
+/** Stable per-handle ids for in-memory databases (a Map would pin them). */
+const memoryDbIds = new WeakMap<object, number>();
+let memoryDbSeq = 0;
+
+/**
+ * Memo key for a database: `file:<path>` for on-disk databases (shared across
+ * handles on the same file) and `memory:<id>` per in-memory handle, so two
+ * `:memory:` databases never collide.
+ */
+function historyCacheKey(db: Database): string {
+  const filename = db.filename;
+  if (typeof filename === "string" && filename.length > 0 && filename !== ":memory:") {
+    return `file:${filename}`;
+  }
+  let id = memoryDbIds.get(db);
+  if (id === undefined) {
+    memoryDbSeq += 1;
+    id = memoryDbSeq;
+    memoryDbIds.set(db, id);
+  }
+  return `memory:${id}`;
+}
+
+/**
+ * Load the agent history through the route-only memo.
+ *
+ * Returns the cached snapshot when it is younger than
+ * {@link HISTORY_CACHE_TTL_MS}, otherwise reloads and re-memoizes it. Passing
+ * `options.now` bypasses the memo completely (both read and write), which is
+ * how tests keep `loadAgentHistory` deterministic. Never throws.
+ */
+export function getAgentHistoryCached(
+  db: Database,
+  options: AgentHistoryCacheOptions = {},
+): CachedAgentHistory {
+  if (options.now !== undefined) {
+    return { history: loadAgentHistory(db, options), cache: "bypass" };
+  }
+
+  const now = (options.clock ?? Date.now)();
+  const key = historyCacheKey(db);
+  const entry = historyCache.get(key);
+  if (entry && now - entry.loadedAt < HISTORY_CACHE_TTL_MS) {
+    return { history: entry.history, cache: "hit" };
+  }
+
+  let history: AgentHistory;
+  try {
+    history = loadAgentHistory(db);
+  } catch {
+    history = emptyAgentHistory();
+  }
+  historyCache.set(key, { history, loadedAt: now });
+  return { history, cache: "miss" };
+}
+
+/**
+ * Drop memoized snapshots after a successful mutation.
+ *
+ * Call without arguments to clear every entry (test isolation); pass the
+ * `db` to invalidate only its own snapshot. In-process only: readers in other
+ * processes wait for the TTL.
+ */
+export function invalidateAgentHistoryCache(db?: Database): void {
+  if (db === undefined) {
+    historyCache.clear();
+    return;
+  }
+  historyCache.delete(historyCacheKey(db));
+}
+
 function betaMean(cell: HistoryCell | undefined, alpha: number, beta: number): number {
   const weight = cell ? cell.weightSum : 0;
   const successes = cell ? cell.weightedSuccess : 0;
