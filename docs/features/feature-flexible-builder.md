@@ -853,13 +853,17 @@ El plan original de 5 fases fue ejecutado en el plan v2 y completado. Este spec 
 
 **Severidad:** media-baja (un switch manual adicional vs delegación automática).
 
-### R7. `task_escalate` sin uso directo en prompt
+### R7. `task_escalate` sin uso directo en prompt — ✅ RESUELTO (wiring en F4)
 
-**Riesgo:** El tool `task_escalate` existe como MCP tool pero el prompt del craftsman no lo invoca — en su lugar craftsman reporta `[FUERA DE MI DOMINIO]` y sugiere cambio manual a foreman.
+**Estado original (histórico):** El tool `task_escalate` existía como MCP tool pero el prompt del craftsman no lo invocaba — craftsman reportaba `[FUERA DE MI DOMINIO]` y sugería cambio manual a foreman.
 
-**Impacto:** El tool está disponible para uso programático/automatizado pero no forma parte del flujo normal craftsman→foreman. Si en el futuro se quiere escalation automática, el prompt del craftsman debe actualizarse para usar `task_escalate`.
+**Resolución:** wiring completo en ambos prompts:
+- `agents/craftsman.md` — sección "Escalation al foreman (`task_escalate`)": ante bloqueo estructural o Estado 4 invoca `task_escalate` (`reason` obligatorio; `sourcePlanId`/`sourceTaskId`; `suggestedApproach` opcional) y reporta el `escalationPlanId` retornado.
+- `agents/foreman.md` — sección "Escalation reception (planes `escalation-*`)": detecta slug `escalation-*` / `metadata.escalatedFrom`, lee el stub y re-planifica (tasks correctivas, plan nuevo, o cierre documentado).
 
-**Severidad:** baja (el tool funciona; falta integración en el prompt).
+**Implementación:** `src/plugin.ts:2039` (tool `task_escalate`) + `escalateToForeman` (`src/plugin.ts:335-400`): crea plan stub `escalation-<uuid8>` con metadata `{escalatedFrom, escalatedBy: "craftsman", reason}`, task foreman opcional y session checkpoint. Sin cambios de código — solo prompts.
+
+**Severidad:** cerrada (flujo craftsman→foreman usa el tool).
 
 ---
 

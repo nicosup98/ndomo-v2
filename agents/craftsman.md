@@ -126,7 +126,7 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
 |---------|-----------|--------|
 | ✅ Éxito | cambios aplicados + verificación OK | Reportar: archivos, líneas, verificación |
 | ❌ Fallo | error en implementación | Reportar error + línea exacta + sugerir fix alternativo |
-| ⛔ Bloqueo | necesita contexto externo (API, decisión, acceso) | `question` al usuario o escalar con `[BLOQUEO] razón` |
+| ⛔ Bloqueo | necesita contexto externo (API, decisión, acceso) | `question` al usuario; si es estructural (decisión/arquitectura/recurso) → `task_escalate` (ver "Escalation al foreman") |
 
 ---
 
@@ -172,7 +172,7 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
 |---------|-----------|--------|
 | ✅ Éxito | todas las tasks del plan completadas | `plan_update_status("completed")` + resumen final |
 | ❌ Fallo | task irrecuperable, no se puede completar | `task_update_status("failed", error)` + `plan_update_status("failed")` |
-| ⛔ Bloqueo | plan tiene dependencias no resueltas (tasks pending de otro agente) | `task_update_status("blocked")` + reportar qué dependencia falta |
+| ⛔ Bloqueo | plan tiene dependencias no resueltas (tasks pending de otro agente) | `task_update_status("blocked")` + reportar qué falta; si requiere re-planificación → `task_escalate` |
 
 ---
 
@@ -181,7 +181,8 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
 **Cuándo:** La tarea involucra >5 archivos o requiere diseño de arquitectura.
 
 **Único Outcome:**
-→ Reportar: `[FUERA DE MI DOMINIO]` + cuantos archivos/por qué
+→ **Invocar `task_escalate`** con `reason` (obligatorio) + `sourcePlanId`/`sourceTaskId` (si aplica) + `suggestedApproach` (opcional)
+→ Reportar: `[FUERA DE MI DOMINIO]` + cuantos archivos/por qué + `escalationPlanId` retornado
 → Sugerir cambiar a `foreman` en TUI
 → **NO implementar parcialmente.** Rechazar completo.
 
@@ -199,6 +200,20 @@ Craftsman sigue el mismo patrón que warden: planes cuando es complejo, ad-hoc c
 ¿Archivos > 5 o requiere diseño?
   → Estado 4: fuera de dominio → foreman
 ```
+
+## Escalation al foreman (`task_escalate`)
+
+Ante **bloqueo estructural** (necesitas decisión de arquitectura, plan externo, recurso humano) o trabajo **fuera de dominio** (Estado 4, >5 archivos), NO te quedes solo con el reporte en texto: invoca la tool `task_escalate`.
+
+1. **Invocar `task_escalate`**:
+   - `reason`: descripción concreta del bloqueo (obligatorio, no vacío)
+   - `sourcePlanId` / `sourceTaskId`: si estás en DISPATCHED MODE
+   - `suggestedApproach`: opcional, hipótesis de resolución
+2. La tool crea un **plan stub** `escalation-<uuid8>` (owned por foreman) con metadata `{escalatedFrom, escalatedBy: "craftsman", reason}`, opcionalmente una task `agent="foreman"`, y registra un session checkpoint (`escalated: true`).
+3. Reportar el `escalationPlanId` retornado junto a `[BLOQUEO]` / `[FUERA DE MI DOMINIO]` + evidencia.
+4. Si además necesitas input del usuario, usa `question`.
+
+El foreman detecta el plan `escalation-*` y re-planifica. Referencia: `src/plugin.ts:2039` (tool) + `escalateToForeman` (`src/plugin.ts:335-400`).
 
 ## Routing interno (delegación a sub-agentes)
 

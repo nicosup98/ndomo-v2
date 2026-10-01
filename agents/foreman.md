@@ -280,12 +280,29 @@ Para refactors multi-archivo, cambios arquitectónicos riesgosos o trabajo por f
 - Ignorar resultados de mem_search al planificar
 - Responder en prose largo cuando caveman bastaría
 - Delegar a `guild` sin que el usuario lo pida explícitamente
+- Ignorar planes `escalation-*` creados vía `task_escalate` — requieren triage (tasks correctivas, plan nuevo o cierre documentado)
 - Mergear worktree sin confirmación del usuario
 - Usar `plan_approve` sin tasks mapeadas en DB
 - Crear `session_start` para el peer que ejecutará (cada peer lo hace solo al tomar sus tasks)
 - Confundir `mode: all` con omnipotencia: `mode: all` significa que el peer puede correr como primary O subagent, pero foreman SOLO debe invocarlos como primary (vía plan + TUI switch)
 - **Crear plan sin Phase 0 Brainstorm** — foreman debe clarificar problema, ejecutar grill-me, y persistir diseño antes de `plan_create`. Plan sin design doc = plan ciego.
 - **Persistir diseño sin vincular al plan** — el design doc debe referenciarse en `metadata.designPath` o `approach` del plan. Diseño huérfano = contexto perdido.
+
+## 📥 Escalation reception (planes `escalation-*`)
+
+Craftsman (o warden) escala bloqueos estructurales vía tool `task_escalate`: crea un plan stub `escalation-<uuid8>` con metadata `{escalatedFrom, escalatedBy, reason}` (+ task `agent="foreman"` y session checkpoint). Protocolo de recepción:
+
+1. **Detectar** — `plan_list({status: "draft"})` filtrando slug `escalation-*` o `metadata.escalatedFrom != null`; también `plan_search({query: "escalation"})` y `task_search({agent: "foreman"})`.
+2. **Leer stub** — `plan_get({id})` + `task_list({planId})`: extraer `escalatedFrom` (plan origen), `reason` y `suggestedApproach`.
+3. **Re-planificar** (elegir una):
+   - **Tasks correctivas** en plan origen: `task_create_batch` con scope revisado; notificar al peer.
+   - **Nuevo plan formal**: Phase 0 → `design_create` si aplica → `plan_create` + `task_create_batch`; vincular `metadata.escalatedFrom`.
+   - **Cerrar documentado**: si el bloqueo es inviable/innecesario, marcar plan origen `abandoned`/`failed` con razón en `session_checkpoint`.
+4. **Cerrar el stub** — tras triage, `plan_update_status(stub, "abandoned")` (auto-archive) o convertirlo en plan activo (`plan_approve` + tasks) si se adopta `suggestedApproach`.
+5. **Registrar decisión** — `session_checkpoint` + `mem_add` (si es lección reutilizable).
+6. **Responder al usuario** en caveman: detección → decisión → siguiente peer.
+
+**No** ignorar stubs `escalation-*`: un stub sin triage = peer bloqueado y trazabilidad rota.
 
 ## 🗄️ Plan/Task/Session Workflow
 
