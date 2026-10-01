@@ -13,7 +13,7 @@
 | Plan de evidencia | `18252705-9c4e-4f5b-85a8-4f7153ceb101` |
 | Plan de fix | `ca69222a-808a-41b0-9dae-05f7641be308` |
 | Sesión de fix | `ses_craftsman_ca69222a` |
-| Archivos afectados | `src/db/tasks.ts`, `tools/task_create_batch.ts`, `src/plugin.ts` |
+| Archivos afectados | `src/db/tasks.ts`, `src/plugin.ts` (tool inline), `src/db/tasks.test.ts` |
 
 ## Reproducción
 
@@ -53,10 +53,10 @@ Doble causa: callers + core confiaban en `orderIndex` del caller sin validación
 
 ### Caller: `orderIndex: idx` forzado
 
-Los callers en `tools/task_create_batch.ts:47` y `src/plugin.ts:965` pasaban `orderIndex: idx` desde `array.map((t, idx) => ...)`:
+El caller pasaba `orderIndex: idx` desde `array.map((t, idx) => ...)` en el mapping de tasks de la tool. Originalmente vivía en `tools/task_create_batch.ts` (directorio eliminado/absorbido); hoy el mapping está inline en `src/plugin.ts` y omite `orderIndex` a propósito:
 
 ```typescript
-// tools/task_create_batch.ts (ANTES del fix)
+// Caller (ANTES del fix; hoy src/plugin.ts omite orderIndex)
 args.tasks.map((t, idx) => ({
   orderIndex: idx,  // ← solo único intra-batch, no considera tasks existentes
   ...
@@ -109,8 +109,7 @@ let order = (maxRow?.m ?? -1) + 1;
 
 ### Cambios en callers
 
-- `tools/task_create_batch.ts`: eliminado `orderIndex: idx` del `.map()`.
-- `src/plugin.ts`: eliminado `orderIndex: idx` del `.map()`.
+- `src/plugin.ts` (tool inline): eliminado `orderIndex: idx` del `.map()` — el mapping hoy omite `orderIndex` a propósito (`src/plugin.ts:240-242`, plan ca69222a). El caller legacy `tools/task_create_batch.ts` fue absorbido por el plugin; el directorio `tools/` ya no existe.
 
 Los callers ahora pasan `orderIndex: undefined` (implícito), y el core aloca dinámicamente.
 
@@ -141,8 +140,8 @@ El patrón `array.map((item, idx) => ({ orderIndex: idx, ... }))` es seguro solo
 
 - Schema constraint: `src/db/schema.ts:53` — `UNIQUE(plan_id, order_index)`
 - Core fix: `src/db/tasks.ts:createTasksBatch` — pre-loop MAX + allocateOrderIndex + allocateSplitOrderIndex + try/catch retry
-- Caller fix (tools): `tools/task_create_batch.ts:44` — eliminado `orderIndex: idx`
-- Caller fix (plugin): `src/plugin.ts:962` — eliminado `orderIndex: idx`
+- Caller fix (tool inline): `src/plugin.ts:240-242` — mapping omite `orderIndex`; core aloca dinámicamente
+- Tool inline actual: `src/plugin.ts:1698` — `task_create_batch: tool({...})` (el directorio `tools/` ya no existe)
 - Tests: `src/db/tasks.test.ts` — describe "order_index collision-safe allocation"
 - Plan de fix: `ca69222a-808a-41b0-9dae-05f7641be308`
 - Plan de evidencia: `18252705-9c4e-4f5b-85a8-4f7153ceb101`

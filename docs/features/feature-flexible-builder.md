@@ -18,7 +18,7 @@ Novedades incorporadas en esta spec v3 respecto a v2:
 - **Nuevo: Parallel dispatch rule** — threshold >3 archivos o multi-stack o >100 líneas diff → split en sub-tasks paralelos (`agents/craftsman.md:170`)
 - **Nuevo: Parallel retry policy** — retry-1-then-isolate por defecto; ≥2/N fails → fail-fast (`agents/craftsman.md:97-99`)
 - **Nuevo: Trivium craftsman self-edit** — ≤10 líneas, 1 archivo, 0 nuevos exports, 0 behavior changes (`agents/craftsman.md:200-210`)
-- **Nuevo: plan_files multi-role consideration** — PK (plan_id, file_path) impide multi-role por file; pendiente de resolver en Fase 3 (L7) del plan v3
+- **Resuelto: plan_files multi-role (v10)** — PK `(plan_id, file_path, role)` permite multi-role por file (`src/db/schema.ts:532-553`); migración v10 implementada
 - **Migración v9 implementada** — `plan_progress` view fix para excluir archived plans (`src/db/schema.ts:507-529`)
 - **Todas las migraciones** v6/v7/v8/v9 marcadas como **IMPLEMENTED**
 - **Write-once enforcement** actualizado de "por convención" a "validado en código + tests"
@@ -645,18 +645,16 @@ session_end: tool({
 
 **Tests:** `src/plugin.test.ts:146-287` (7 sub-casos)
 
-### 7.10 plan_files multi-role PK consideration (NUEVO en v3) — PENDING
+### 7.10 plan_files multi-role PK consideration (NUEVO en v3) — ✅ RESUELTO (v10)
 
-**Problema:** La tabla `plan_files` tiene PK `(plan_id, file_path)` (`src/db/schema.ts:481-486`). Esto impide que un mismo archivo tenga múltiples roles (ej. ser `'input'` Y `'modified'` en el mismo plan). Si craftsman lee un archivo como input y luego lo modifica, el segundo INSERT con mismo `(plan_id, file_path)` pero diferente `role` falla por PK duplication.
+**Problema (histórico):** La tabla `plan_files` tenía PK `(plan_id, file_path)` (v7, `src/db/schema.ts:481-486`). Esto impedía que un mismo archivo tuviera múltiples roles (ej. ser `'input'` Y `'modified'` en el mismo plan). Si craftsman leía un archivo como input y luego lo modificaba, el segundo INSERT con mismo `(plan_id, file_path)` pero diferente `role` fallaba por PK duplication.
 
-**Estado actual:** `role` tiene default `'input'`. `plan_create` inserta con role `'input'`, `task_create_batch` inserta con role `'modified'`. Si el mismo archivo aparece en ambos, el segundo INSERT falla.
+**Resolución (v10):** PK migrada a `(plan_id, file_path, role)` + columna `created_at` (`src/db/schema.ts:532-553`, registrada en `src/db/schema.ts:916`). Consecuencias:
+- `plan_files_write` inserta con `INSERT OR IGNORE` (idempotente) y roles explícitos (`src/plugin.ts:1668-1684`)
+- `task_create_batch` inserta role `'modified'` (`src/db/tasks.ts:399-403`)
+- `plan_create` mantiene role `'input'`
 
-**Resolución:** Pendiente — tracking como L7 (Fase 3 del plan v3 `flexible-builder-v3-lows`). Posibles soluciones:
-- Cambiar PK a `(plan_id, file_path, role)` — permite multi-role
-- Usar ON CONFLICT REPLACE — pierde el role original
-- Usar array/tags en `role` en lugar de string único
-
-**Links:** `docs/features/feature-flexible-builder.md` (esta sección), plan v3 Fase 3.
+**Links:** `docs/features/feature-flexible-builder.md` (esta sección), plan v3 Fase 3 (L7) — completado.
 
 ---
 
@@ -758,9 +756,9 @@ session_end: tool({
 - [x] Verificación post-escritura: typecheck + test
 - [x] Default: >10 líneas o >1 archivo → delegar a sub-smith
 
-### 8.17 plan_files multi-role — ⏳ PENDING (L7, Fase 3 v3 plan)
-- [ ] PK `(plan_id, file_path)` impide multi-role por file
-- [ ] Resolución pendiente en Fase 3 de `flexible-builder-v3-lows`
+### 8.17 plan_files multi-role — ✅ DONE (v10)
+- [x] PK `(plan_id, file_path, role)` permite multi-role por file (`src/db/schema.ts:532-553`)
+- [x] Migración v10 aplicada; `plan_files_write` idempotente con roles explícitos (`src/plugin.ts:1668-1684`)
 
 ---
 
@@ -965,9 +963,9 @@ No se resuelve en este spec. Craftsman usa `plan_create` + `plan_update_status("
 
 No se resuelve en este spec. Craftsman genera resultados pequeños (formato caveman). Si un sub-smith produce output grande, el truncation aplica igual que hoy.
 
-### plan_files multi-role PK (`src/db/schema.ts:481-486`)
+### plan_files multi-role PK (`src/db/schema.ts:532-553`)
 
-**Estado:** ⏳ PENDING — PK `(plan_id, file_path)` impide que un archivo tenga roles múltiples (`'input'` + `'modified'`). Resolución programada para Fase 3 (L7) del plan `flexible-builder-v3-lows`.
+**Estado:** ✅ RESUELTO (v10) — PK `(plan_id, file_path, role)` + `created_at` permite roles múltiples (`'input'` + `'modified'` + ...) con `INSERT OR IGNORE` idempotente (`src/plugin.ts:1668-1684`).
 
 ---
 

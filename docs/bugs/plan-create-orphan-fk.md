@@ -2,7 +2,7 @@
 
 ## Resumen
 
-Planes creados mediante `plan_create` no pueden transicionar a `approved` ni a ningún estado terminal porque `plan_approve` y `plan_update_status` validan que `ctx.sessionID` exista en la tabla `sessions` (`src/db/plans.ts:118-121`, `src/db/plans.ts:159-162`). Dicho ID nunca se inserta en `sessions` porque corresponde a la sesión del harness (OpenCode), no a un `session_start` explícito. El plan queda bloqueado permanentemente en `draft`.
+Planes creados mediante `plan_create` no pueden transicionar a `approved` ni a ningún estado terminal porque `plan_approve` y `plan_update_status` validan que `ctx.sessionID` exista en la tabla `sessions` (`src/db/plans.ts:118-121`, `src/db/plans.ts:159-162`). Dicho ID nunca se inserta en `sessions` porque corresponde a la sesión del harness (OpenCode), no a un `session_start` explícito. Plan quedaría bloqueado permanentemente en `draft`. *(Histórico — mitigado; ver sección "Mitigación viva" abajo.)*
 
 ## Entorno
 
@@ -102,6 +102,17 @@ Exigir que toda transición de plan esté precedida por un `session_start` expl�
 
 **Opción recomendada**: (a) por simplicidad y cobertura total del lifecycle.
 
+## Mitigación viva (2026-10-01)
+
+La opción (a) + (b) fue implementada (hybrid fix):
+
+- `plan_create` auto-inserta la sesión del harness: `src/db/plan-create.ts:46` llama `ensureSession(db, ctx.sessionID, ...)`.
+- `ensureSession` (`src/db/sessions.ts:30-38`) hace `INSERT OR IGNORE` idempotente en `sessions` (estado `{}`, agent_history `[]`, `created_by`).
+- `updatePlanStatus` (`src/db/plans.ts:202-204`) sólo valida/auto-crea la sesión cuando el status la vincula (`executing`/`approved`); los terminales (`completed`/`failed`/`abandoned`) saltan el chequeo FK.
+- `approvePlan` (`src/db/plans.ts:375-377`) auto-crea la sesión cuando se provee `sessionId` (approve siempre vincula).
+
+Efecto: el error `session_id does not exist` ya no ocurre en el flujo normal; los planes creados vía `plan_create` en sesiones de OpenCode sin `session_start` previo transicionan normalmente y el auto-archive puede dispararse.
+
 ## Impacto
 
 - Todo plan creado por el foreman (o cualquier agente) en una sesión de OpenCode sin `session_start` previo queda bloqueado en `draft`.
@@ -112,6 +123,8 @@ Exigir que toda transición de plan esté precedida por un `session_start` expl�
 
 ## Referencias
 
+- `ensureSession` (hybrid fix): `src/db/sessions.ts:30-38`
+- `plan_create` auto-ensureSession: `src/db/plan-create.ts:46`
 - Código tool MCP `plan_approve`: `src/plugin.ts:644-655`
 - Código tool MCP `plan_update_status`: `src/plugin.ts:657-689`
 - Validación FK en `updatePlanStatus`: `src/db/plans.ts:117-121`
@@ -126,6 +139,6 @@ Exigir que toda transición de plan esté precedida por un `session_start` expl�
 
 | Campo | Valor |
 |---|---|
-| Estado | `Detected` |
-| Workaround | `none user-side` |
-| Fix | `pending` |
+| Estado | `Mitigated` (hybrid fix: ensureSession) |
+| Workaround | `none needed` — auto-mitigado |
+| Fix | `shipped` — `ensureSession` en `src/db/plan-create.ts:46`, `src/db/plans.ts:202-204` y `src/db/plans.ts:375-377`; helper `src/db/sessions.ts:30-38` |

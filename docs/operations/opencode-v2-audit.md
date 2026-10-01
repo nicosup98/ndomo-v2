@@ -95,7 +95,9 @@ All 46 inline tools (plugin.ts:813–1866) use `tool({ description, args: {tool.
 2. **`tool.schema.*` → JSON Schema:** `tool.schema.string/enum/array/record/number/boolean/optional/int/min/max`
    must be rewritten as `input: { type:"object", properties, required, additionalProperties:false }`. Mechanical. → MED.
 
-### 3.4 Tools — standalone `tools/*.ts` (27 files, T2)
+### 3.4 Tools — standalone `tools/*.ts` (27 files, T2) — ⚠️ HISTÓRICO: directorio eliminado
+
+> **Estado 0.7.0:** `tools/` ya no existe — las 27 tools standalone fueron absorbidas por el plugin (`src/plugin.ts` inline, 61 tools). Las referencias a `tools/*.ts` en esta sección son históricas.
 
 Each `tools/*.ts` does `export default tool({...})` and opens its own DB (`openDb` + `runMigrations`). Files:
 `analysis_archive, analysis_create, analysis_get, analysis_link_plan, analysis_list, analysis_search, analysis_update,
@@ -109,7 +111,9 @@ task_next_for_agent, task_search, task_update_status, task_verify`.
 | `stepCopyTools` (install.ts:800-851) | copies `tools/*.ts` → configDir/tools | REMOVE (obsolete in v2) | MED | T2 |
 | `install_custom_tools_symlink` (install.sh:337-362) | symlinks `tools/` → configDir/tools | REMOVE | MED | T2 |
 
-### 3.5 SDK client (`src/sdk/client.ts`, T2)
+### 3.5 SDK client (`src/sdk/client.ts`, T2) — ⚠️ HISTÓRICO: eliminado en 0.7.0
+
+> **Estado 0.7.0:** `src/sdk/` y `src/http/` fueron **eliminados** (BREAKING, ver CHANGELOG 0.7.0 — HTTP server/Web UI removed). Las refs de línea y el bridge `/api/events` de esta sección son históricas; el plugin v2 usa `ctx.event.subscribe()` (`@opencode/plugin` 2.x) sin SDK client.
 
 | Touchpoint | V1 API | V2 API | Risk | Phase |
 |---|---|---|---|---|
@@ -210,6 +214,8 @@ Per `/build/plugins/migrate-v1`, these have no direct v2 equivalent. ndomo does 
 | R8 | Install `plugin`→`plugins` key | MED | T2 | Update `stepRegisterPlugins` + `opencode.json` |
 | R9 | `opencode-mem` separate v1 plugin needs v2 migration | MED | T4 | External; track as blocker for full function |
 | R10 | v2 API still evolving / docs gaps | MED | all | This audit + gap list; verify on implementation |
+
+> **Nota R7:** este R7 es el rename `@opencode-ai/sdk`→`@opencode/client` (ya consumado: HTTP/SDK eliminados en 0.7.0). NO confundir con el "R7" de escalación (`task_escalate`) documentado en `docs/features/feature-flexible-builder.md` (~858-864), cuyo wiring se cierra en F4 (fuera de este audit).
 
 ---
 
