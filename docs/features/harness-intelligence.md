@@ -7,6 +7,7 @@
 **Created:** 2026-09-30
 **Design doc:** `.ndomo/designs/2026-09-30-harness-intelligence-pack-design.md`
 **Commits:** F1 `05e7574`, F2 `10dc2fd`, F2.1 `6c3c78f`, F3 `faa0a3`, F3.1 `1c9c027`
+**Fase 2 — History cache:** plan `fbaafcdd-7e8e-41a5-ba9e-d01abb6c1d0e` (`routing-history-cache`) — commit `190c3f1`
 
 ---
 
@@ -134,6 +135,9 @@ La complejidad se normaliza dividiendo por `len(criteria) − 1 = 3` (`pickScore
 | `fallback` | `boolean` | `true` si `cellN === 0 && agentN === 0` (cold start) (`:398`) |
 | `explore` | `boolean?` | `true` cuando epsilon-exploration forzó la 2ª opción (`:424`) |
 | `requiresReview` | `string?` | `"sage"` si `complexity >= 0.66` y el elegido no es `sage` (`:388-389`) |
+| `historyCache` | `"hit" \| "miss" \| "bypass"` | Estado del memo route-only (fase 2); solo presente si el caller lo reporta (`scheduler.ts:51`) |
+
+**Memo del historial (`historyCache`, fase 2):** el tool `route` consume el memo y reporta el estado (`plugin.ts:976-985`); `scheduler` solo lo añade si el caller lo reportó — como primera línea de `explain` (`historyCache: <state>`, `scheduler.ts:396-399`) y como campo del decision (`:436`). Sin reporte, el shape de `route` es byte-idéntico al de F1 (sin `historyCache`, sin cambio en `explain`).
 
 **Epsilon-exploration:** `DEFAULT_EXPLORE_EPSILON = 0.15` (`:238`). Con probabilidad ε fuerza el segundo mejor candidato y marca `explore: true` (mitigación del feedback loop). `epsilon` y `random` son inyectables para tests.
 
@@ -170,6 +174,60 @@ Salida (ejemplo ilustrativo; campos clave, recortada):
 ```
 
 `explain` expone bucket, `n` (cellN/agentN) y cada factor, permitiendo al consumidor entender por qué el historial re-rankeó (o no).
+
+### 2.8 Fase 2 — History cache (TTL 30s)
+
+Cada invocación del tool `route` re-escaneaba todas las filas terminales de `plan_tasks`: un scan O(n) que crece con el backlog del plan (`src/orchestrator/agent-history.ts:424-431`). La fase 2 añade un **memo route-only** in-process — `getAgentHistoryCached` (`:509`) — que reutiliza el último snapshot durante `HISTORY_CACHE_TTL_MS = 30_000` ms (`:448`).
+
+#### Mecánica y semántica
+
+| Aspecto | Detalle | Ref |
+|---------|---------|-----|
+| TTL | `HISTORY_CACHE_TTL_MS = 30_000` — ventana de frescura de un snapshot; expirado ⇒ reload (`miss`) | `agent-history.ts:448` |
+| Estado reportado | `HistoryCacheState = "hit" \| "miss" \| "bypass"` | `:451` |
+| Clave del memo | `file:<filename>` para DB on-disk (handles del mismo archivo comparten entrada); `memory:<id>` por handle `:memory:` vía WeakMap (`memoryDbIds`) — dos `:memory:` nunca comparten snapshot | `:487-499` |
+| API | `getAgentHistoryCached(db, options): CachedAgentHistory { history, cache }` — hits devuelven la misma referencia de snapshot | `:463-468`, `:509-532` |
+| Invalidación | `invalidateAgentHistoryCache(db?)`; sin argumento limpia todo el memo (aislamiento de tests) | `:541-547` |
+| Exports (`src/lib.ts`) | `getAgentHistoryCached`, `invalidateAgentHistoryCache`, `HISTORY_CACHE_TTL_MS` + tipos `HistoryCacheState`, `AgentHistoryCacheOptions`, `CachedAgentHistory` | `src/lib.ts:17-37` |
+
+Semántica de los tres estados:
+
+| Estado | Ocurre cuando | Comportamiento |
+|--------|---------------|----------------|
+| `miss` | Sin entrada o TTL expirado | Ejecuta el full-scan y re-memoiza el snapshot |
+| `hit` | Entrada más joven que el TTL | Reutiliza el snapshot memoizado (misma referencia de objeto) |
+| `bypass` | Se inyecta `options.now` (reloj de test del loader) | Ni lee ni escribe el memo — `loadAgentHistory` se mantiene puro y determinista (`:513-515`) |
+
+Garantías del memo (JSDoc `:432-445`):
+
+- **Never-throw:** un load fallido degrada a `emptyAgentHistory()`, el fallback neutro documentado (`:524-529`); el memo sigue operativo tras el fallo.
+- **Reloj inyectable:** `options.clock` (solo tests) reemplaza `Date.now()` para el envejecimiento del TTL; producción nunca lo setea (`:454-460`).
+- **Scope single-process:** los lectores de otros procesos dependen del TTL; cada mutación exitosa en este proceso invalida al instante (`:443-444`).
+
+#### Invalidación tras mutación exitosa
+
+Los hooks mutadores de `plugin.ts` invalidan el snapshot del `db` **después** de una mutación exitosa; si la mutación lanza, la excepción corta el flujo y **no** se invalida:
+
+| Tool | Comportamiento | Ref |
+|------|----------------|-----|
+| `plan_delete` | Invalida siempre tras `deletePlan` (la eliminación quita filas terminales) | `plugin.ts:1578-1579` |
+| `task_update_status` | Invalida solo `if (result)` — una transición real (`:1773-1782`); transiciones sin cambio no invalidan | `:1782` |
+| `task_verify` | Invalida tras `recordTaskVerification` (los veredictos alimentan el factor `verify`) | `:1828-1841` |
+
+Wiring del tool `route`: `const { history, cache } = getAgentHistoryCached(db)` → `options.historyCache: cache` (`plugin.ts:976-985`).
+
+#### Bench (N = 20_000 filas terminales)
+
+`src/orchestrator/agent-history-cache.test.ts:233-345` — 20k filas terminales (`status IN ('done','failed')`) en DB on-disk, 10 corridas cold (memo dropeado entre mediciones) + 100 llamadas warm:
+
+| Métrica | Gate duro (enforced) | Target de diseño (logueado) | Medido (dev 4-core) |
+|---------|----------------------|------------------------------|---------------------|
+| Cold p95 | `< 150 ms` (`COLD_P95_CI_SAFE_MS`, `:242`) — CI-safe: el full-scan es costo intrínseco de `loadAgentHistory` (comportamiento pre-cache) y varía con la máquina | `< 50 ms` (`COLD_P95_TARGET_MS`, `:235`) — solo impreso en el log del bench | p50 ~48-50 ms / p95 ~62-80 ms (el JSDoc del bench documenta ~49-73 ms p95 en caja 4-core, `:236-241`) |
+| Hit p95 | `< 1 ms` (`:338`) | — | p50 ~0.001 ms / p95 ~0.003 ms |
+
+Durante la implementación se probó iterar el full-scan con `.values()`/cursor para evitar materializar el resultado: **sin mejora medible**, así que `loadAgentHistory` quedó intacto (el memo solo envuelve el loader; la firma y semántica del historial pre-cache no cambian).
+
+Nota: el snapshot memoizado capa por celda (`HISTORY_MAX_ROWS_PER_CELL`), así que `terminalRows` del snapshot es menor que N=20_000 aunque el scan recorra todas las filas (`:294-299`).
 
 ---
 
@@ -315,7 +373,7 @@ Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad veri
 | Límite | Detalle |
 |--------|---------|
 | **Reranking completo** | F1 re-rankea el pool completo de candidatos, no solo como tiebreaker/cold-start. El diseño original hablaba de tiebreaker top-3; los tests codifican el comportamiento más agresivo (hallazgo no bloqueante del inspector) |
-| **Sin cache** | `loadAgentHistory` se ejecuta por llamada; no hay snapshot ni cache en v1 |
+| **Cache v1 (fase 2)** | Memo route-only in-process: TTL 30 s + invalidación tras mutación exitosa (§2.8). Límite restante: single-process — lectores de otros procesos esperan el TTL (30 s) tras una mutación externa |
 | **Bucketing por extensión** | El stack se deriva de extensiones de archivo; un `.ts` en contexto Go se clasifica como `js` |
 | **Sin tablas nuevas** | El historial es on-the-fly desde `plan_tasks`; no hay persistencia de decisiones de route ni de transiciones |
 | **Sin accuracy / A-B** | No se registran las decisiones `route`, por lo que no hay medición de precisión ni experimentos A/B |
@@ -324,7 +382,8 @@ Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad veri
 
 ### 5.2 Fase 2 diferida
 
-- Cache / snapshot del historial (evitar `loadAgentHistory` por llamada).
+> **Hecho en fase 2 (cache route-only v1):** memo in-process TTL 30 s + invalidación tras mutación — ver §2.8.
+
 - Tabla dedicada de historial / `routing_events` con migración y link a outcome → routing accuracy y A/B.
 - Pattern Bank / ReasoningBank, workers auto-trigger, outcome-quality Score.
 - Fit tiebreaker parametrizable (on/off configurable).
@@ -337,7 +396,8 @@ Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad veri
 
 | Archivo | Rol |
 |---------|-----|
-| `src/orchestrator/agent-history.ts` | Historial on-the-fly + scoring bayesiano jerárquico |
+| `src/orchestrator/agent-history.ts` | Historial on-the-fly + scoring bayesiano jerárquico + memo route-only (fase 2) |
+| `src/orchestrator/agent-history-cache.test.ts` | Tests del memo (miss/hit/TTL/bypass/keys) + bench 20k (fase 2) |
 | `src/orchestrator/scheduler.ts` | `routeTask` history-aware, reranking, epsilon-explore, `requiresReview` |
 | `src/orchestrator/jev.ts` | `classifyRouteWithJev` (1 request, 4 preguntas) |
 | `src/plugin.ts` | Tool `route` (`:955-987`) + tool `stats` (`:1456`) |
