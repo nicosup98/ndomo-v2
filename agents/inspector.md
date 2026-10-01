@@ -1,7 +1,7 @@
 ---
 description: Inspector (Auditor de Calidad y Seguridad)
 mode: subagent
-model: opencode-go/deepseek-v4-pro
+model: opencode-go/kimi-k2.7-code
 temperature: 0.2
 permission:
   edit: deny

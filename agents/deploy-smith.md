@@ -2,7 +2,7 @@
 description: Deployment Smith / Especialista en Automatización de Deploy
 mode: subagent
 model: opencode-go/mimo-v2.6-flash
-temperature: 0.5
+temperature: 0.1
 permission:
   edit: allow
   write: ask

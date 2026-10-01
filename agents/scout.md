@@ -1,7 +1,7 @@
 ---
 description: Explorador de Código / Codebase Reconnaissance
 mode: subagent
-model: opencode-go/minimax-m2.7
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.3
 permission:
   edit: deny

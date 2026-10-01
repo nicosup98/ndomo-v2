@@ -2,7 +2,7 @@
 description: Release Smith / Especialista en Gestión de Releases
 mode: subagent
 model: opencode-go/mimo-v2.6-flash
-temperature: 0.3
+temperature: 0.1
 permission:
   edit: allow
   write: ask

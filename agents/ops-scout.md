@@ -1,8 +1,8 @@
 ---
 description: Operations Scout / Explorador de Infraestructura Ops
 mode: subagent
-model: opencode-go/minimax-m2.7
-temperature: 0.5
+model: opencode-go/deepseek-v4-flash
+temperature: 0.2
 permission:
   edit: deny
   write: deny

@@ -2,7 +2,7 @@
 description: Implementador Artesano / Disciplined Craftsman (modo ad-hoc o planificado)
 mode: all
 model: opencode-go/gpt-5.6-luna
-temperature: 0.1
+temperature: 0.3
 permission:
   edit: allow
   write: allow

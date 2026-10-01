@@ -1,7 +1,7 @@
 ---
 description: Gremio de Mentes / Multi-LLM Consensus
 mode: subagent
-model: opencode-go/deepseek-v4-pro
+model: minimax/MiniMax-M3
 temperature: 0.3
 permission:
   edit: deny

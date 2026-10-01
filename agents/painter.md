@@ -1,7 +1,7 @@
 ---
 description: Diseñador UI/UX / Visual Excellence
 mode: subagent
-model: opencode-go/kimi-k2.6
+model: opencode-go/qwen3.7-plus
 temperature: 0.2
 permission:
   edit: allow

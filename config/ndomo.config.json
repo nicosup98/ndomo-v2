@@ -67,11 +67,11 @@
         "reasoning_effort": "high"
       },
       "scout": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode-go/mimo-v2.6-flash",
         "temperature": 0.3
       },
       "scribe": {
-        "model": "opencode/mimo-v2.5-free",
+        "model": "opencode-go/mimo-v2.6-flash",
         "temperature": 0.3
       },
       "painter": {
