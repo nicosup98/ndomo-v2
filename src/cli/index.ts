@@ -9,6 +9,7 @@
  *   status    Show plans grouped by status with task counts
  *   stats     Per-agent scorecard: success rate, verify pass %, durations, tokens
  *   audit     Self-audit: drift, permissions, counts, config, manifest (score 1-100)
+ *   analyses  List, get, search, archive analyses
  *   vacuum    Reclaim disk space from .ndomo/state.db
  *   smoke     Run smoke tests
  *   install   Install agents, skills, and config into ~/.config/opencode/
@@ -20,6 +21,7 @@
  *   bun run src/cli/status.ts --plans
  *   bun run src/cli/stats.ts --since 7d --json
  *   bun run src/cli/audit.ts --json
+ *   bun run src/cli/analyses.ts list
  *   bun run src/cli/plan.ts create --slug foo --title Foo --overview "Foo plan"
  *   bun run src/cli/task.ts create --plan <planId> --agent craft --description "Do something"
  */
@@ -48,6 +50,13 @@ const COMMANDS: Record<
       const { runAuditCli } = await import("./audit.ts");
       // Propagates the exit-code contract (1 when the report has ERROR findings).
       process.exitCode = runAuditCli(args);
+    },
+  },
+  analyses: {
+    description: "List, get, search, archive analyses",
+    run: async (args) => {
+      const { runAnalyses } = await import("./analyses.ts");
+      runAnalyses(args);
     },
   },
   vacuum: {
@@ -112,6 +121,7 @@ Each subcommand can also be run directly:
   bun run src/cli/status.ts --plans
   bun run src/cli/stats.ts --since 7d
   bun run src/cli/audit.ts --json
+  bun run src/cli/analyses.ts list
   bun run src/cli/vacuum.ts`);
 }
 
