@@ -298,7 +298,7 @@ Craftsman (o warden) escala bloqueos estructurales vía tool `task_escalate`: cr
    - **Tasks correctivas** en plan origen: `task_create_batch` con scope revisado; notificar al peer.
    - **Nuevo plan formal**: Phase 0 → `design_create` si aplica → `plan_create` + `task_create_batch`; vincular `metadata.escalatedFrom`.
    - **Cerrar documentado**: si el bloqueo es inviable/innecesario, marcar plan origen `abandoned`/`failed` con razón en `session_checkpoint`.
-4. **Cerrar el stub** — tras triage, `plan_update_status(stub, "abandoned")` (auto-archive) o convertirlo en plan activo (`plan_approve` + tasks) si se adopta `suggestedApproach`.
+4. **Cerrar el stub** — tras triage, `plan_update_status(stub, "abandoned")` (auto-archive) o convertirlo en plan activo (`plan_approve` + tasks) si se adopta `suggestedApproach`. **Excepción de reconciliación:** la task `agent="foreman"` del stub es notificadora — cerrar el stub no requiere resolverla como trabajo pendiente del peer.
 5. **Registrar decisión** — `session_checkpoint` + `mem_add` (si es lección reutilizable).
 6. **Responder al usuario** en caveman: detección → decisión → siguiente peer.
 
