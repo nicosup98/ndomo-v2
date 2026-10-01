@@ -307,7 +307,7 @@ Craftsman (o warden) escala bloqueos estructurales vía tool `task_escalate`: cr
 ## 🗄️ Plan/Task/Session Workflow
 
 ```
-Funciones disponibles: design_create, plan_create, plan_get, plan_list, plan_search,
+Funciones disponibles: route, design_create, plan_create, plan_get, plan_list, plan_search,
 plan_approve, plan_update_status, task_create_batch, task_list,
 task_search, task_next_for_agent, session_start, session_checkpoint,
 session_end
@@ -357,6 +357,7 @@ session_end
      - `files`: archivos esperados de output (para trazabilidad).
      - No crear tasks sin `planId`. No crear tasks huérfanas.
      - Si el plan tiene >10 tasks, el foreman debe preguntar al usuario si continuar.
+     - **Propagación de routing events:** si el flujo usó el tool `route` para decidir el agente de una task, esa task debe llevar `metadata.routingEventId = decision.eventId` en `task_create_batch` — así `task_update_status` a `done`/`failed` linkea el outcome al evento (best-effort, `link_source='explicit'`). No propagues: el link no ocurre y el evento queda `orphan`/`inferred` en `ndomo stats --routing`. Ver `docs/workflows.md` (routing events).
 
 6. **`session_start`**
    - `sessionId`: UUID v4.

@@ -14,6 +14,7 @@ import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { bus } from "../events/bus.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
 import { setExecutedByOnce } from "./plans.ts";
+import { linkRoutingEvent } from "./routing-events.ts";
 import { ensureSession } from "./sessions.ts";
 import type { PlanTask, TaskMetadata, TaskStatus, TaskVerificationStatus } from "./types.ts";
 import { taskFromRow } from "./types.ts";
@@ -868,6 +869,18 @@ export function updateTaskStatus(
   db.query(`UPDATE plan_tasks SET ${setClauses.join(", ")} WHERE id = ?`).run(...params);
   const task = getTask(db, id);
   if (!task) return null;
+
+  // v18: link routing event on terminal transitions (best-effort — never blocks).
+  if ((status === "done" || status === "failed") && task.metadata?.routingEventId) {
+    const routingEventId = task.metadata.routingEventId;
+    if (typeof routingEventId === "string" && routingEventId.length > 0) {
+      try {
+        linkRoutingEvent(db, routingEventId, task.id, status, task.verificationStatus ?? null);
+      } catch {
+        // analytics must not break task transitions
+      }
+    }
+  }
 
   // Live-reactivity hook: notify subscribers that the task changed.
   // task.updated always (catches result/error/metadataPatch changes);

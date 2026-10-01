@@ -1,13 +1,17 @@
 #!/usr/bin/env bun
 /**
  * ndomo stats CLI — per-agent scorecard (success rate, verify pass %,
- * duration percentiles, tokens, failure modes, escalations, bypasses).
+ * duration percentiles, tokens, failure modes, escalations, bypasses) and
+ * the routing-events report (`--routing`: sources, fallback/explore %, top
+ * agents/buckets, task-link coverage).
  *
  * Reads .ndomo/state.db from the project root (resolved same as status.ts).
- * Supports --since 7d|30d|all (default all), --agent <name> and --json.
+ * Supports --since 7d|30d|all (default all), --agent <name>, --routing and
+ * --json. `--agent` applies to the scorecard only (ignored by --routing).
  *
- * Aggregation lives in src/stats/agent-scorecard.ts (shared with the MCP
- * `stats` tool); this file only resolves the DB, renders and parses flags.
+ * Aggregation lives in src/stats/agent-scorecard.ts and
+ * src/stats/routing-report.ts (both shared with the MCP `stats` tool); this
+ * file only resolves the DB, renders and parses flags.
  *
  * Uses bun:sqlite (synchronous) — no async/await on DB ops.
  */
@@ -21,6 +25,7 @@ import {
   type ScorecardReport,
   type ScorecardSince,
 } from "../stats/agent-scorecard.ts";
+import { computeRoutingReport, type RoutingReport } from "../stats/routing-report.ts";
 
 const NDOMO_DIR = ".ndomo";
 const DB_FILE = "state.db";
@@ -40,6 +45,15 @@ const COL = {
   tokens: 11,
   esc: 5,
   byp: 5,
+} as const;
+
+/** Column widths for the `--routing` renderer. */
+const RCOL = {
+  source: 16,
+  count: 8,
+  pct: 8,
+  agent: 16,
+  bucket: 24,
 } as const;
 
 /**
@@ -163,6 +177,64 @@ function printJson(report: ScorecardReport): void {
   console.log(JSON.stringify(report, null, 2));
 }
 
+/** Human window label: "all time" or "since YYYY-MM-DD". */
+function windowLabel(windowStart: number | null): string {
+  return windowStart === null
+    ? "all time"
+    : `since ${new Date(windowStart).toISOString().slice(0, 10)}`;
+}
+
+/** Print the routing report as caveman-readable sections. */
+function printRoutingTable(report: RoutingReport): void {
+  console.log(
+    `ROUTING EVENTS — since=${report.since} (${windowLabel(report.windowStart)}), total=${report.total}`,
+  );
+  if (report.total === 0) {
+    console.log("");
+    console.log("no routing events found");
+    return;
+  }
+  console.log("");
+
+  console.log("SOURCES");
+  console.log(
+    `  ${"source".padEnd(RCOL.source)}${"count".padEnd(RCOL.count)}${"pct".padEnd(RCOL.pct)}`,
+  );
+  for (const entry of report.bySource) {
+    const pct = fmtPct((entry.count / report.total) * 100);
+    console.log(
+      `  ${truncate(entry.source, RCOL.source).padEnd(RCOL.source)}` +
+        `${String(entry.count).padEnd(RCOL.count)}${pct.padEnd(RCOL.pct)}`,
+    );
+  }
+
+  console.log("");
+  console.log(`fallback=${fmtPct(report.fallbackPct)}  explore=${fmtPct(report.explorePct)}`);
+
+  console.log("");
+  console.log("AGENTS (top 10)");
+  console.log(`  ${"agent".padEnd(RCOL.agent)}${"count".padEnd(RCOL.count)}`);
+  for (const entry of report.byAgent) {
+    console.log(
+      `  ${truncate(entry.agent, RCOL.agent).padEnd(RCOL.agent)}${String(entry.count).padEnd(RCOL.count)}`,
+    );
+  }
+
+  console.log("");
+  console.log("BUCKETS (top 10)");
+  console.log(`  ${"bucket".padEnd(RCOL.bucket)}${"count".padEnd(RCOL.count)}`);
+  for (const entry of report.byBucket) {
+    console.log(
+      `  ${truncate(entry.bucket, RCOL.bucket).padEnd(RCOL.bucket)}${String(entry.count).padEnd(RCOL.count)}`,
+    );
+  }
+
+  console.log("");
+  console.log(
+    `COVERAGE  linked=${report.coverage.linked} inferred=${report.coverage.inferred} orphan=${report.coverage.orphan}`,
+  );
+}
+
 /** Parse CLI args and run. */
 export function runStats(args: string[]): void {
   const dbPath = resolveDbPath();
@@ -174,11 +246,14 @@ export function runStats(args: string[]): void {
   let asJson = false;
   let since: ScorecardSince = "all";
   let agent: string | undefined;
+  let routing = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--json") {
       asJson = true;
+    } else if (arg === "--routing") {
+      routing = true;
     } else if (arg === "--since" && i + 1 < args.length) {
       const value = args[i + 1] ?? "";
       i += 1;
@@ -195,6 +270,24 @@ export function runStats(args: string[]): void {
   }
 
   const db = new Database(dbPath);
+
+  if (routing) {
+    // Routing-events report ONLY — the scorecard is not printed alongside it.
+    // --agent does not apply to routing and is intentionally ignored.
+    let routingReport: RoutingReport;
+    try {
+      routingReport = computeRoutingReport(db, { since });
+    } finally {
+      db.close();
+    }
+    if (asJson) {
+      console.log(JSON.stringify({ routing: routingReport }, null, 2));
+    } else {
+      printRoutingTable(routingReport);
+    }
+    return;
+  }
+
   let report: ScorecardReport;
   try {
     report = computeAgentScorecard(db, agent ? { since, agent } : { since });

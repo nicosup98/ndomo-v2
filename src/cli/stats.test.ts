@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../db/migrations.ts";
+import { recordRoutingEvent } from "../db/routing-events.ts";
 import { runStats } from "./stats.ts";
 
 let db: Database;
@@ -386,5 +387,105 @@ describe("stats CLI", () => {
       agents: Array<{ agent: string }>;
     };
     expect(parsed.agents).toEqual([]);
+  });
+});
+
+describe("stats CLI --routing", () => {
+  test("--routing prints the routing table without the scorecard", () => {
+    recordRoutingEvent(db, {
+      agent: "js-smith",
+      source: "rules",
+      intent: "implement",
+      stack: "js",
+    });
+    recordRoutingEvent(db, {
+      agent: "js-smith",
+      source: "rules",
+      intent: "implement",
+      stack: "js",
+      fallback: true,
+    });
+    db.close();
+
+    const { stdout } = runInProject(["--routing"]);
+    expect(stdout).toContain("ROUTING EVENTS");
+    expect(stdout).toContain("since=all");
+    expect(stdout).toContain("total=2");
+    expect(stdout).not.toContain("AGENT SCORECARD");
+    expect(stdout).toContain("SOURCES");
+    expect(stdout).toContain("rules");
+    expect(stdout).toContain("fallback=50.0%");
+    expect(stdout).toContain("explore=0.0%");
+    expect(stdout).toContain("implement:js");
+    expect(stdout).toContain("linked=0 inferred=0 orphan=2");
+  });
+
+  test("--routing --json returns { routing: { total, bySource, coverage } }", () => {
+    recordRoutingEvent(db, {
+      agent: "warden",
+      source: "jev",
+      intent: "audit",
+      stack: "generic",
+    });
+    db.close();
+
+    const parsed = JSON.parse(runInProject(["--routing", "--json"]).stdout) as {
+      routing: {
+        since: string;
+        total: number;
+        bySource: Array<{ source: string; count: number }>;
+        byAgent: Array<{ agent: string; count: number }>;
+        coverage: { linked: number; inferred: number; orphan: number };
+      };
+    };
+    expect(parsed.routing.since).toBe("all");
+    expect(parsed.routing.total).toBe(1);
+    expect(parsed.routing.bySource).toEqual([{ source: "jev", count: 1 }]);
+    expect(parsed.routing.byAgent).toEqual([{ agent: "warden", count: 1 }]);
+    expect(parsed.routing.coverage).toEqual({ linked: 0, inferred: 0, orphan: 1 });
+  });
+
+  test("--routing --since 7d filters older events (default = all)", () => {
+    recordRoutingEvent(db, {
+      agent: "old-agent",
+      source: "rules",
+      intent: "explore",
+      createdAt: Date.now() - 10 * 24 * 60 * 60 * 1000,
+    });
+    recordRoutingEvent(db, { agent: "recent-agent", source: "jev", intent: "explore" });
+    db.close();
+
+    const all = JSON.parse(runInProject(["--routing", "--json"]).stdout) as {
+      routing: { total: number };
+    };
+    expect(all.routing.total).toBe(2);
+
+    const week = JSON.parse(runInProject(["--routing", "--json", "--since", "7d"]).stdout) as {
+      routing: { total: number; byAgent: Array<{ agent: string; count: number }> };
+    };
+    expect(week.routing.total).toBe(1);
+    expect(week.routing.byAgent).toEqual([{ agent: "recent-agent", count: 1 }]);
+  });
+
+  test("--routing on an empty DB reports 'no routing events found'", () => {
+    db.close();
+    const { stdout } = runInProject(["--routing"]);
+    expect(stdout).toContain("ROUTING EVENTS");
+    expect(stdout).toContain("total=0");
+    expect(stdout).toContain("no routing events found");
+    expect(stdout).not.toContain("AGENT SCORECARD");
+  });
+
+  test("--routing ignores --agent (routing report is always full)", () => {
+    recordRoutingEvent(db, { agent: "js-smith", source: "rules", intent: "implement" });
+    recordRoutingEvent(db, { agent: "warden", source: "rules", intent: "audit" });
+    db.close();
+
+    const parsed = JSON.parse(
+      runInProject(["--routing", "--json", "--agent", "warden"]).stdout,
+    ) as {
+      routing: { total: number };
+    };
+    expect(parsed.routing.total).toBe(2);
   });
 });

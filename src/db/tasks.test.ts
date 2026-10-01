@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "./migrations.ts";
 import { createPlan, getPlan } from "./plans.ts";
+import { recordRoutingEvent } from "./routing-events.ts";
 import { getSession } from "./sessions.ts";
 import {
   createTasksBatch,
@@ -987,5 +988,133 @@ describe("updateTaskFields — dependencies persistence", () => {
     expect(updated?.files).toEqual(["src/a.ts", "src/b.ts"]);
     expect(updated?.complexity).toBe(5);
     expect(updated?.dependencies).toEqual([depId]);
+  });
+});
+
+// ─── v18: routing event link on terminal transitions ─────────────────────────
+
+interface LinkRow {
+  task_id: string | null;
+  task_status: string | null;
+  verification_status: string | null;
+  linked_at: number | null;
+  link_source: string | null;
+}
+
+function getLinkRow(eventId: string): LinkRow | undefined {
+  return db
+    .query(
+      "SELECT task_id, task_status, verification_status, linked_at, link_source FROM routing_events WHERE id = ?",
+    )
+    .get(eventId) as LinkRow | undefined;
+}
+
+describe("updateTaskStatus — routing event link (v18)", () => {
+  test("'done' links the routing event referenced in metadata", () => {
+    const event = recordRoutingEvent(db, { agent: "js-smith", source: "hybrid" });
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { routingEventId: event.id } }),
+    ]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "done", { result: "ok" }, "foreman");
+
+    const linked = getTask(db, taskId);
+    const row = getLinkRow(event.id);
+    expect(row).toBeDefined();
+    expect(row?.task_id).toBe(taskId);
+    expect(row?.task_status).toBe("done");
+    expect(row?.verification_status).toBe(linked?.verificationStatus);
+    expect(row?.link_source).toBe("explicit");
+    expect(typeof row?.linked_at).toBe("number");
+  });
+
+  test("'failed' links the routing event with task_status='failed'", () => {
+    const event = recordRoutingEvent(db, { agent: "js-smith", source: "rules" });
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { routingEventId: event.id } }),
+    ]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "failed", { error: "boom" }, "foreman");
+
+    const row = getLinkRow(event.id);
+    expect(row?.task_id).toBe(taskId);
+    expect(row?.task_status).toBe("failed");
+    expect(row?.link_source).toBe("explicit");
+    expect(typeof row?.linked_at).toBe("number");
+  });
+
+  test("task without routingEventId — no error, event stays unlinked", () => {
+    const event = recordRoutingEvent(db, { agent: "js-smith", source: "rules" });
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [makeTask()]);
+    const taskId = tasks[0]?.id as string;
+
+    expect(() => {
+      updateTaskStatus(db, taskId, "done", { result: "ok" }, "foreman");
+    }).not.toThrow();
+
+    expect(getTask(db, taskId)?.status).toBe("done");
+    const row = getLinkRow(event.id);
+    expect(row?.task_id).toBeNull();
+    expect(row?.link_source).toBeNull();
+    expect(row?.linked_at).toBeNull();
+  });
+
+  test("unknown routingEventId — best-effort, does not throw", () => {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { routingEventId: "no-such-event" } }),
+    ]);
+    const taskId = tasks[0]?.id as string;
+
+    expect(() => {
+      updateTaskStatus(db, taskId, "done", { result: "ok" }, "foreman");
+    }).not.toThrow();
+    expect(getTask(db, taskId)?.status).toBe("done");
+    expect(
+      db.query("SELECT COUNT(*) as c FROM routing_events WHERE id = ?").get("no-such-event"),
+    ).toEqual({ c: 0 });
+  });
+
+  test("second terminal update does not throw and does not overwrite the link", () => {
+    const event = recordRoutingEvent(db, { agent: "js-smith", source: "rules" });
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { routingEventId: event.id } }),
+    ]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "done", { result: "ok" }, "foreman");
+    const first = getLinkRow(event.id);
+    expect(first?.task_status).toBe("done");
+
+    expect(() => {
+      updateTaskStatus(db, taskId, "failed", { error: "regression" }, "foreman");
+    }).not.toThrow();
+
+    const second = getLinkRow(event.id);
+    expect(second?.task_id).toBe(taskId);
+    expect(second?.task_status).toBe("done"); // write-once: first link wins
+    expect(second?.link_source).toBe("explicit");
+    expect(second?.linked_at).toBe(first?.linked_at);
+  });
+
+  test("non-terminal transition never links", () => {
+    const event = recordRoutingEvent(db, { agent: "js-smith", source: "rules" });
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { routingEventId: event.id } }),
+    ]);
+    const taskId = tasks[0]?.id as string;
+
+    updateTaskStatus(db, taskId, "running", undefined, "js-smith", { agent: "js-smith" });
+
+    const row = getLinkRow(event.id);
+    expect(row?.task_id).toBeNull();
+    expect(row?.link_source).toBeNull();
   });
 });

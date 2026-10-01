@@ -7,10 +7,10 @@ import { MIGRATIONS } from "./schema.ts";
  * v17 migration: execution gates.
  *
  * Verifies:
- *  - schema_version moves to 17 after runMigrations
+ *  - schema_version moves to >= 17 after runMigrations
  *  - all 5 verification columns exist on plan_tasks with correct defaults
  *  - migration is idempotent (addColumnIfMissing pattern)
- *  - v17 is the last entry in MIGRATIONS
+ *  - v17 is present in MIGRATIONS (v18+ may exist after it)
  *  - CHECK on verification_status is app-layer only (documents the same
  *    SQLite limitation as v16 plans.owner)
  */
@@ -22,16 +22,16 @@ describe("migration v17 — plan_tasks verification columns (T1)", () => {
     db.exec("PRAGMA foreign_keys = ON");
   });
 
-  test("applies all migrations up to v17", () => {
+  test("applies v17 (and any later migrations) — schema_version >= 17", () => {
     runMigrations(db);
     const row = db.query("SELECT MAX(version) as v FROM schema_version").get() as { v: number };
-    expect(row.v).toBe(17);
+    expect(row.v).toBeGreaterThanOrEqual(17);
   });
 
-  test("v17 is the last entry in MIGRATIONS array", () => {
-    const last = MIGRATIONS[MIGRATIONS.length - 1];
-    expect(last).toBeDefined();
-    expect(last!.version).toBe(17);
+  test("v17 is present in MIGRATIONS array (v18+ may exist after it)", () => {
+    const v17 = MIGRATIONS.find((m) => m.version === 17);
+    expect(v17).toBeDefined();
+    expect(v17?.version).toBe(17);
   });
 
   test("verification_required column exists, default 0, NOT NULL", () => {

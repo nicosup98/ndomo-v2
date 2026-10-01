@@ -38,6 +38,7 @@ import { planCreateExecutor } from "./db/plan-create.ts";
 import { planUpdateStatusExecutor } from "./db/plan-update-status.ts";
 import { createPlan, getPlan } from "./db/plans.ts";
 import { recordRollback } from "./db/rollbacks.ts";
+import { recordRoutingEvent } from "./db/routing-events.ts";
 import { getSession, startSession } from "./db/sessions.ts";
 import {
   createTasksBatch,
@@ -2955,6 +2956,44 @@ describe("NdomoPlugin v2 registration", () => {
     }
   });
 
+  test("stats tool with query='routing' returns the routing report JSON", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    const pluginDb = new Database(join(projectDir, ".ndomo", "state.db"));
+    try {
+      recordRoutingEvent(pluginDb, {
+        agent: "js-smith",
+        source: "rules",
+        intent: "implement",
+        stack: "js",
+        sessionId: "ses_v2_routing",
+      });
+
+      const stats = harness.tools.find((t) => t.name === "stats");
+      if (!stats) throw new Error("tool not registered: stats");
+      const res = await stats.execute({ query: "routing" }, harness.toolCtx("ses_v2_routing"));
+      const parsed = JSON.parse(res.content) as {
+        since: string;
+        windowStart: number | null;
+        total: number;
+        bySource: Array<{ source: string; count: number }>;
+        byAgent: Array<{ agent: string; count: number }>;
+        byBucket: Array<{ bucket: string; count: number }>;
+        coverage: { linked: number; inferred: number; orphan: number };
+      };
+      expect(parsed.since).toBe("all");
+      expect(parsed.windowStart).toBeNull();
+      expect(parsed.total).toBe(1);
+      expect(parsed.bySource).toEqual([{ source: "rules", count: 1 }]);
+      expect(parsed.byAgent).toEqual([{ agent: "js-smith", count: 1 }]);
+      expect(parsed.byBucket).toEqual([{ bucket: "implement:js", count: 1 }]);
+      expect(parsed.coverage).toEqual({ linked: 0, inferred: 0, orphan: 1 });
+    } finally {
+      pluginDb.close();
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   test("plan_create tool persists agent + session audit fields in the v2 path", async () => {
     const { projectDir, harness, cleanup } = await setupPlugin();
     const pluginDb = new Database(join(projectDir, ".ndomo", "state.db"));
@@ -2978,6 +3017,70 @@ describe("NdomoPlugin v2 registration", () => {
         .get(created.id) as { created_by: string; source_session_id: string; status: string };
       expect(row.created_by).toBe("js-smith");
       expect(row.source_session_id).toBe("ses_v2_plancreate");
+    } finally {
+      pluginDb.close();
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("route tool records a routing event and returns an additive eventId (v18)", async () => {
+    const { projectDir, harness, cleanup } = await setupPlugin();
+    const pluginDb = new Database(join(projectDir, ".ndomo", "state.db"));
+    try {
+      const route = harness.tools.find((t) => t.name === "route");
+      expect(route).toBeDefined();
+      if (!route) throw new Error("route tool not registered");
+      const res = await route.execute(
+        { description: "explore repo", type: "explore" },
+        harness.toolCtx("ses_v2_route", "foreman"),
+      );
+      const parsed = JSON.parse(res.content) as {
+        agent: string;
+        reason: string;
+        source?: string;
+        eventId?: string;
+      };
+
+      // additive: decision payload unchanged, eventId attached
+      expect(parsed.eventId).toBeTruthy();
+      expect(parsed.reason).toBeTruthy();
+      expect(parsed.agent).toBeTruthy();
+      const eventId = parsed.eventId;
+      if (typeof eventId !== "string" || eventId.length === 0) {
+        throw new Error("route tool did not return a non-empty eventId");
+      }
+
+      const row = pluginDb
+        .query(
+          `SELECT agent, source, intent, stack, risk, session_id, fallback, explore, task_id, link_source
+           FROM routing_events WHERE id = ?`,
+        )
+        .get(eventId) as
+        | {
+            agent: string;
+            source: string;
+            intent: string;
+            stack: string;
+            risk: string;
+            session_id: string;
+            fallback: number;
+            explore: number;
+            task_id: string | null;
+            link_source: string | null;
+          }
+        | undefined;
+      if (!row) throw new Error(`routing_events row '${eventId}' not found`);
+      expect(row.agent).toBe(parsed.agent);
+      expect(row.source).toBe(parsed.source ?? "rules");
+      expect(row.intent).toBe("explore");
+      expect(row.stack).toBe("unknown");
+      expect(row.risk).toBe("low");
+      expect(row.session_id).toBe("ses_v2_route");
+      expect([0, 1]).toContain(row.fallback);
+      expect([0, 1]).toContain(row.explore);
+      expect(row.task_id).toBeNull();
+      expect(row.link_source).toBeNull();
     } finally {
       pluginDb.close();
       await cleanup();

@@ -59,6 +59,7 @@ import {
 } from "./db/plans.ts";
 import { resolveProjectDir } from "./db/resolve-project-dir.ts";
 import { recordRollback } from "./db/rollbacks.ts";
+import { recordRoutingEvent } from "./db/routing-events.ts";
 import { checkpointSession, endSession, listSessions, startSession } from "./db/sessions.ts";
 import { registerShutdownHandlers } from "./db/shutdown.ts";
 import {
@@ -118,6 +119,7 @@ import { classifyIntentWithJev } from "./orchestrator/jev-intent.ts";
 import { classifyCodeRiskWithJev } from "./orchestrator/jev-risk.ts";
 import { classifyTestsWithJev } from "./orchestrator/jev-tests.ts";
 import { computeAgentScorecard } from "./stats/agent-scorecard.ts";
+import { computeRoutingReport } from "./stats/routing-report.ts";
 
 // ─── v1 → v2 tool adapter ────────────────────────────────────────────────────
 
@@ -972,7 +974,7 @@ export const NdomoPlugin = Plugin.define({
           risk: z.enum(["low", "medium", "high"]).optional(),
           files: z.array(z.string()).optional(),
         },
-        execute: async (args) => {
+        execute: async (args, ctx) => {
           const { history, cache } = getAgentHistoryCached(db);
           const decision = await routeTask(
             {
@@ -984,7 +986,24 @@ export const NdomoPlugin = Plugin.define({
             },
             { jev: jevConfig, history, historyCache: cache },
           );
-          return JSON.stringify(decision);
+          // v18: route decision event log — analytics best-effort, never breaks route.
+          let eventId: string | undefined;
+          try {
+            eventId = recordRoutingEvent(db, {
+              sessionId: ctx?.sessionID ?? null,
+              agent: decision.agent,
+              source: decision.source ?? "rules",
+              intent: args.type,
+              stack: args.stack ?? "unknown",
+              risk: args.risk ?? "low",
+              confidence: decision.confidence ?? null,
+              fallback: decision.fallback ?? false,
+              explore: decision.explore ?? false,
+            }).id;
+          } catch {
+            // analytics best-effort: nunca romper route
+          }
+          return JSON.stringify(eventId ? { ...decision, eventId } : decision);
         },
       }),
 
@@ -1457,12 +1476,16 @@ export const NdomoPlugin = Plugin.define({
 
       stats: tool({
         description:
-          "Per-agent scorecard from the ndomo state DB: task counts (done/failed/blocked/running), success rate, verification pass rate (passed vs waived), duration p50/p95, Σ tokens, top failure modes, escalations grouped by source plan and verification bypasses. Includes archived history; filter with since (7d|30d|all, default all) and agent.",
+          "Per-agent scorecard from the ndomo state DB: task counts (done/failed/blocked/running), success rate, verification pass rate (passed vs waived), duration p50/p95, Σ tokens, top failure modes, escalations grouped by source plan and verification bypasses. Includes archived history; filter with since (7d|30d|all, default all) and agent. Set query='routing' for the route-decision report instead (sources, fallback/explore %, top agents/buckets, task-link coverage over routing_events).",
         args: {
           since: z.enum(["7d", "30d", "all"]).optional(),
           agent: z.string().optional(),
+          query: z.enum(["scorecard", "routing"]).optional(),
         },
         execute: async (args) => {
+          if (args.query === "routing") {
+            return JSON.stringify(computeRoutingReport(db, { since: args.since ?? "all" }));
+          }
           return JSON.stringify(
             computeAgentScorecard(db, {
               since: args.since ?? "all",

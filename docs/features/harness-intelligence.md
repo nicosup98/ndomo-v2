@@ -1,19 +1,20 @@
 # Feature: Harness Intelligence Pack — routing con historial + JEV Score · Agent Scorecard · Self-Audit
 
 **Slug:** `harness-intelligence-pack`
-**Status:** Implemented (v1, post-merge)
+**Status:** Implemented (v1 + fase 2: history cache + routing events)
 **Plan ID:** `e1afae99-8ca5-4908-a28b-9a056cc6dd42`
 **Plan slug:** `harness-intelligence-pack`
 **Created:** 2026-09-30
 **Design doc:** `.ndomo/designs/2026-09-30-harness-intelligence-pack-design.md`
 **Commits:** F1 `05e7574`, F2 `10dc2fd`, F2.1 `6c3c78f`, F3 `faa0a3`, F3.1 `1c9c027`
 **Fase 2 — History cache:** plan `fbaafcdd-7e8e-41a5-ba9e-d01abb6c1d0e` (`routing-history-cache`) — commit `190c3f1`
+**Fase 2 — Routing events:** plan `f717ccd9-1fa1-4d6a-849c-66bee8c6a603` (`routing-events`) — migración v18 (`routing_events`, §2.9)
 
 ---
 
 ## 1. Resumen ejecutivo
 
-Pack de inteligencia de harness que añade tres capacidades al orquestador de ndomo, sin migraciones de DB:
+Pack de inteligencia de harness que añade tres capacidades al orquestador de ndomo (v1 sin migraciones de DB; la fase 2 de routing events levanta parcialmente esa restricción con la tabla `routing_events`, migración v18 — ver §2.9):
 
 | # | Pieza | Superficie | Entrada |
 |---|-------|-----------|---------|
@@ -21,7 +22,7 @@ Pack de inteligencia de harness que añade tres capacidades al orquestador de nd
 | F2 | **Agent Scorecard** | CLI `ndomo stats` (`src/cli/stats.ts`) + tool MCP `stats` (`src/plugin.ts:1456`) | `src/stats/agent-scorecard.ts` (nuevo) |
 | F3 | **Self-Audit** | CLI `ndomo audit` (`src/cli/audit.ts`) | `src/audit/*` (nuevo) |
 
-**Restricción transversal:** sin tablas nuevas, sin migraciones. F1 lee el historial on-the-fly desde `plan_tasks`; F2 agrega las mismas filas; F3 audita la instalación (frontmatter, permisos, conteos, config, manifest). Toda la señal histórica degrada a la heurística previa si no hay datos suficientes.
+**Restricción transversal (v1):** sin tablas nuevas, sin migraciones. F1 lee el historial on-the-fly desde `plan_tasks`; F2 agrega las mismas filas; F3 audita la instalación (frontmatter, permisos, conteos, config, manifest). Toda la señal histórica degrada a la heurística previa si no hay datos suficientes. **Fase 2 (routing events)** añade la tabla `routing_events` (migración v18) para persistir cada decisión de `route` — siempre best-effort, nunca bloqueante (§2.9).
 
 **Inspiración:** agentic-flow (self-learning hooks, route/metrics) y ruflo (MetaHarness audit grade 1-100).
 
@@ -229,6 +230,59 @@ Durante la implementación se probó iterar el full-scan con `.values()`/cursor 
 
 Nota: el snapshot memoizado capa por celda (`HISTORY_MAX_ROWS_PER_CELL`), así que `terminalRows` del snapshot es menor que N=20_000 aunque el scan recorra todas las filas (`:294-299`).
 
+### 2.9 Fase 2 — Routing events (tabla v18 + link de outcomes)
+
+Cada invocación del tool `route` persiste una **fila slim** en `routing_events` (migración v18, `src/db/schema.ts:862-899`; registrada en `MIGRATIONS` con `version: 18`, `schema.ts:999`) y devuelve `eventId` en el output — **aditivo**: si el insert falla, el evento se omite y `route` nunca rompe (`src/plugin.ts:990-1006`).
+
+#### Tabla `routing_events` + retención FIFO
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | TEXT PK | UUID v4 (`src/db/routing-events.ts:145-147`) |
+| `created_at` | INTEGER NOT NULL | Epoch ms; default `Date.now()` (`:148`) |
+| `session_id` | TEXT NULL | `ctx.sessionID` del caller del tool (`plugin.ts:993`) |
+| `agent` | TEXT NOT NULL | Agente elegido por `routeTask` |
+| `source` | TEXT NOT NULL | `rules \| jev \| history \| hybrid` |
+| `intent` | TEXT NULL | `type` de la tarea |
+| `stack` | TEXT NULL | `stack` de la tarea |
+| `risk` | TEXT NULL | `low \| medium \| high` |
+| `confidence` | REAL NULL | `confidence` de la decisión |
+| `fallback` | INTEGER NOT NULL DEFAULT 0 | Flag cold-start |
+| `explore` | INTEGER NOT NULL DEFAULT 0 | Flag epsilon-exploration |
+| `task_id` / `task_status` / `verification_status` | TEXT NULL | Outcome linkeado por `linkRoutingEvent` |
+| `linked_at` | INTEGER NULL | Epoch ms del link |
+| `link_source` | TEXT NULL | `'explicit'` (único valor escrito por el link; el resto queda NULL) |
+
+Índices: `idx_routing_events_created (created_at DESC)`, `idx_routing_events_agent`, `idx_routing_events_task` (`schema.ts:897-899`).
+
+**Retención FIFO cap 5000** (`ROUTING_EVENTS_MAX = 5000`, `routing-events.ts:23`): `recordRoutingEvent` inserta y poda en el mismo paso (`pruneRoutingEvents`, `:121-133`; invocado en `:182`) — conserva las 5000 filas más recientes por `created_at DESC, rowid DESC`.
+
+#### Link explícito de outcomes (`metadata.routingEventId`)
+
+`task_update_status` a `done`/`failed` linkea el evento **best-effort** cuando la task trae `metadata.routingEventId` (string no vacío): `linkRoutingEvent(db, eventId, task.id, status, verificationStatus)` con `link_source = 'explicit'` (`src/db/tasks.ts:873-883`, `routing-events.ts:193-212`). El link es **write-once guarded**: devuelve `false` si el evento no existe o ya está linkeado (`WHERE id = ? AND task_id IS NULL`, `:203-210`), así la segunda llamada no re-linkea. La propagación la hace el caller: `metadata.routingEventId = decision.eventId` en `task_create_batch` (ver [docs/workflows.md](../workflows.md) y `agents/foreman.md`).
+
+#### Cobertura de outcomes (read-time, reporte)
+
+`computeRoutingReport` (`src/stats/routing-report.ts:142`) clasifica cada evento de la ventana (`src/stats/routing-report.ts:17-20`):
+
+| Clase | Condición |
+|---|---|
+| `linked` | `task_id` ya fijado por el link explícito |
+| `inferred` | Sin link, pero existe una task terminal (`done`/`failed`) del **mismo agente** con `completed_at ∈ [created_at, created_at + 24h]` — `LIMIT 1` por evento |
+| `orphan` | Ni una ni otra: `route` disparó sin outcome atribuible |
+
+#### `ndomo stats --routing` + tool `stats`
+
+`ndomo stats --routing` imprime la sección routing report-only (total, `SOURCES`, `fallback%`/`explore%`, `AGENTS` top-10, `BUCKETS` top-10 `intent:stack`, `COVERAGE linked/inferred/orphan`) (`src/cli/stats.ts:187-236`, flag en `:255`); con `--json` emite el report bajo la clave `routing`. Ventanas `7d`/`30d`/`all` (default `all`). Distribuciones: `total`, `bySource`, `fallbackPct`, `explorePct`, `byAgent` top-10, `byBucket` top-10 y `coverage { linked, inferred, orphan }` (`routing-report.ts:42-65`). **Accuracy/regret siguen fuera de alcance** — el reporte mide distribución y cobertura de outcomes, no precisión de la decisión.
+
+El tool MCP `stats` acepta `query: z.enum(["scorecard", "routing"])` (default `scorecard`); `query: "routing"` devuelve `JSON.stringify(computeRoutingReport(...))` (`src/plugin.ts:1483-1486`). **Tool count intacto (62)**: no se registró tool nuevo (`route` y `stats` ya existían).
+
+#### Garantías
+
+- **Nunca rompe `route`**: el insert corre en try/catch; fallo ⇒ `eventId` omitido y output byte-idéntico al de fase previa (`plugin.ts:990-1006`).
+- **Nunca rompe `task_update_status`**: el link corre post-UPDATE en try/catch (`tasks.ts:877-881`).
+- **Merge-friendly aditivo**: `RoutingDecision` y el output JSON solo ganan el campo `eventId`; el shape previo no cambia.
+
 ---
 
 ## 3. F2 — `ndomo stats` (Agent Scorecard)
@@ -255,8 +309,9 @@ Scorecard por agente construido desde `plan_tasks` (y `plans` para escalaciones/
 | Flag | Valores | Default | Descripción |
 |------|---------|---------|-------------|
 | `--since` | `7d` \| `30d` \| `all` | `all` | Ventana temporal (`SCORECARD_SINCE_VALUES`, `:28`) |
-| `--agent` | `<name>` | — | Restringe todas las métricas a un agente |
-| `--json` | — | — | Emite `ScorecardReport` como JSON |
+| `--agent` | `<name>` | — | Restringe todas las métricas a un agente (scorecard; ignorado por `--routing`) |
+| `--routing` | — | — | Imprime solo la sección de routing events (§2.9); con `--json` emite el report bajo la clave `routing` |
+| `--json` | — | — | Emite `ScorecardReport` como JSON (o `{routing: report}` con `--routing`) |
 
 Por defecto **incluye archivadas** (historial completo); `--since` filtra. El `ScorecardReport` (`:112`) incluye `since`, `windowStart` (epoch-ms o `null` para `all`), `generatedAt` y `agents[]`.
 
@@ -362,7 +417,7 @@ score: 88/100 — 0 error, 0 warn, 12 info (12 findings)
 
 ### 4.6 Estado del repo
 
-Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad verificada: `62 tools`, `23 agents`, `25 skills`, `17 migraciones`.
+Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad verificada: `62 tools`, `23 agents`, `25 skills`, `18 migraciones`.
 
 ---
 
@@ -375,16 +430,18 @@ Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad veri
 | **Reranking completo** | F1 re-rankea el pool completo de candidatos, no solo como tiebreaker/cold-start. El diseño original hablaba de tiebreaker top-3; los tests codifican el comportamiento más agresivo (hallazgo no bloqueante del inspector) |
 | **Cache v1 (fase 2)** | Memo route-only in-process: TTL 30 s + invalidación tras mutación exitosa (§2.8). Límite restante: single-process — lectores de otros procesos esperan el TTL (30 s) tras una mutación externa |
 | **Bucketing por extensión** | El stack se deriva de extensiones de archivo; un `.ts` en contexto Go se clasifica como `js` |
-| **Sin tablas nuevas** | El historial es on-the-fly desde `plan_tasks`; no hay persistencia de decisiones de route ni de transiciones |
-| **Sin accuracy / A-B** | No se registran las decisiones `route`, por lo que no hay medición de precisión ni experimentos A/B |
+| **Sin tablas nuevas (v1)** | En v1 el historial es on-the-fly desde `plan_tasks`; fase 2 añade la tabla `routing_events` (v18) solo para el log de decisiones de `route` (§2.9). El resto del pack sigue sin tablas |
+| **Sin accuracy / regret / A-B** | Fase 2 registra cada decisión de `route` en `routing_events` (v18) y expone distribuciones + cobertura de outcomes (`ndomo stats --routing`, tool `stats` `query: "routing"` — §2.9); **no** hay medición de precisión (accuracy/regret) ni experimentos A/B — fuera de alcance de fase 2 |
 | **Cold start frecuente** | Con ~200 tasks / 12 agentes, `fallback: true` es común al inicio; pooling jerárquico acepta scores mayormente agente/global |
 | **Verify casi sin uso** | `verify` es neutral (`1.0`) hasta que T1 se use más (histórico: 4 tareas verificadas) |
 
 ### 5.2 Fase 2 diferida
 
 > **Hecho en fase 2 (cache route-only v1):** memo in-process TTL 30 s + invalidación tras mutación — ver §2.8.
+>
+> **Hecho en fase 2 (routing events):** tabla `routing_events` (migración v18) + `eventId` aditivo en `route` + link de outcomes (`metadata.routingEventId`) + cobertura read-time (linked/inferred/orphan) + `ndomo stats --routing` / tool `stats` `query: "routing"` — ver §2.9.
 
-- Tabla dedicada de historial / `routing_events` con migración y link a outcome → routing accuracy y A/B.
+- Routing accuracy / regret / A-B sobre `routing_events` (la infraestructura de registro + distribuciones está; la medición de precisión queda fuera de fase 2).
 - Pattern Bank / ReasoningBank, workers auto-trigger, outcome-quality Score.
 - Fit tiebreaker parametrizable (on/off configurable).
 - `-fix` automático en audit (v1 es report-only).
@@ -400,12 +457,14 @@ Al momento del cierre: **88/100**, `0 ERROR`, `0 WARN`, `12 INFO`. Realidad veri
 | `src/orchestrator/agent-history-cache.test.ts` | Tests del memo (miss/hit/TTL/bypass/keys) + bench 20k (fase 2) |
 | `src/orchestrator/scheduler.ts` | `routeTask` history-aware, reranking, epsilon-explore, `requiresReview` |
 | `src/orchestrator/jev.ts` | `classifyRouteWithJev` (1 request, 4 preguntas) |
-| `src/plugin.ts` | Tool `route` (`:955-987`) + tool `stats` (`:1456`) |
+| `src/plugin.ts` | Tool `route` (`:955-1007`, `eventId` fase 2) + tool `stats` (`:1456`, `query: "routing"`) |
+| `src/db/routing-events.ts` | Tabla `routing_events` (v18): `recordRoutingEvent` insert+FIFO prune 5000, `pruneRoutingEvents`, `linkRoutingEvent` guarded (`link_source='explicit'`) (fase 2) |
+| `src/stats/routing-report.ts` | `computeRoutingReport`: distribuciones (bySource/byAgent/byBucket top-10, fallback/explore %) + coverage linked/inferred/orphan (fase 2) |
 | `src/stats/agent-scorecard.ts` | Core compartido del scorecard CLI + tool |
-| `src/cli/stats.ts` | CLI `ndomo stats` |
+| `src/cli/stats.ts` | CLI `ndomo stats` (+ flag `--routing`, fase 2) |
 | `src/cli/audit.ts` | CLI `ndomo audit` |
 | `src/audit/*` | Runner + checks drift/permisos/conteos/config/manifest + score |
-| `docs/workflows.md` | Nota de routing history-aware (link a este doc) |
+| `docs/workflows.md` | Nota de routing history-aware + propagación de `metadata.routingEventId` (link a este doc) |
 
 ## 7. Referencias
 

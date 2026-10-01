@@ -31,9 +31,10 @@ Survives OpenCode restarts. Indexed with FTS5 for full-text search.
 
 ```d2
 # ndomo — ERD del plugin
-# Core: src/db/schema.ts (v1-v15). Tablas core + ops (v13) documentadas en
-# docs/database.md (citas d:linea); analyses (v14) en src/db/schema.ts:751-806
-# (referenciado en docs/agents.md:87 y docs/configuration.md:136).
+# Core: src/db/schema.ts (v1-v18). Tablas core + ops (v13) documentadas en
+# docs/database.md (citas d:linea); analyses (v14) en src/db/schema.ts:751-806;
+# routing_events (v18) en src/db/schema.ts:862-899 (referenciado en
+# docs/features/harness-intelligence.md §2.9).
 # Memoria embebida (~/.ndomo/mem/projects/<tag>.db) es OTRO store — docs/database.md:367-373.
 # Fuente canónica: docs/diagrams/database-erd.d2
 direction: right
@@ -368,6 +369,32 @@ Indexes: `idx_tasks_plan`, `idx_tasks_status`, `idx_tasks_agent`,
 
 Indexes: `idx_sessions_started`, `idx_sessions_plan`, `idx_sessions_archived`.
 
+#### `routing_events` (v18)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID v4 (`src/db/routing-events.ts:145-147`) |
+| `created_at` | INTEGER NOT NULL | Epoch ms; default `Date.now()` |
+| `session_id` | TEXT NULL | Session id del caller del tool `route` |
+| `agent` | TEXT NOT NULL | Agente elegido |
+| `source` | TEXT NOT NULL | `rules \| jev \| history \| hybrid` |
+| `intent` | TEXT NULL | `type` de la tarea |
+| `stack` | TEXT NULL | Stack de la tarea |
+| `risk` | TEXT NULL | `low \| medium \| high` |
+| `confidence` | REAL NULL | Confianza de la decisión |
+| `fallback` | INTEGER NOT NULL DEFAULT 0 | Flag cold-start |
+| `explore` | INTEGER NOT NULL DEFAULT 0 | Flag epsilon-exploration |
+| `task_id` | TEXT NULL | Task linkeada por `linkRoutingEvent` |
+| `task_status` | TEXT NULL | Status de la task al linkear |
+| `verification_status` | TEXT NULL | Verificación de la task al linkear |
+| `linked_at` | INTEGER NULL | Epoch ms del link |
+| `link_source` | TEXT NULL | `'explicit'` cuando hubo link explícito |
+
+Indexes: `idx_routing_events_created`, `idx_routing_events_agent`, `idx_routing_events_task`
+(`src/db/schema.ts:897-899`). Retención FIFO cap 5000 (`ROUTING_EVENTS_MAX`,
+`src/db/routing-events.ts:23`). Flujos de registro/link/cobertura:
+[harness-intelligence.md](features/harness-intelligence.md#29-fase-2--routing-events-tabla-v18--link-de-outcomes).
+
 ### FTS5 indexes
 
 - **`plans_fts_v2`** — content=`plans` (external), columns `id` (UNINDEXED), `title`,
@@ -395,7 +422,7 @@ FTS5 syntax injection from hyphens and special characters (`src/db/fts-escape.ts
 
 ### Migrations
 
-17 migrations applied automatically by `runMigrations(db)` ordered by version (v1–v5 summarized below; full registry in `MIGRATIONS`, `src/db/schema.ts`):
+18 migrations applied automatically by `runMigrations(db)` ordered by version (v1–v5 summarized below; full registry in `MIGRATIONS`, `src/db/schema.ts`):
 
 | Version | Description |
 |---|---|
@@ -407,6 +434,19 @@ FTS5 syntax injection from hyphens and special characters (`src/db/fts-escape.ts
 
 `SCHEMA_V5_SQL` note: columns are added via `addColumnIfMissing()` in `migrations.ts`
 because SQLite 3.45 lacks `IF NOT EXISTS` for `ALTER TABLE ADD COLUMN` (`src/db/schema.ts:400-403`).
+
+### v18 — `routing_events` (harness-intelligence fase 2)
+
+v18 adds a single table, **`routing_events`** — route-decision log (`src/db/schema.ts:862-899`,
+registered in `MIGRATIONS` with `version: 18`, `schema.ts:999`). Cada invocación de la tool `route`
+persiste una fila slim (best-effort) y su output JSON gana `eventId` **aditivo**: si el insert falla,
+`route` nunca rompe y el `eventId` se omite (`src/plugin.ts:990-1006`). `task_update_status` a
+`done`/`failed` linkea el outcome cuando la task trae `metadata.routingEventId`
+(`link_source='explicit'`, write-once guarded — `src/db/tasks.ts:873-883`,
+`src/db/routing-events.ts:193-212`). Retención **FIFO cap 5000** en app layer
+(`ROUTING_EVENTS_MAX`, `src/db/routing-events.ts:23`). Consumido por `ndomo stats --routing`
+y la tool `stats` con `query: "routing"`. Detalle y semántica:
+[harness-intelligence.md](features/harness-intelligence.md#29-fase-2--routing-events-tabla-v18--link-de-outcomes).
 
 ## Tools (22)
 

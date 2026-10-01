@@ -27,7 +27,7 @@ User envía prompt
 ## Routing Intelligence (history-aware + JEV Score)
 
 The `route` tool is history-aware: it builds an on-the-fly snapshot from
-`plan_tasks` (no migrations) and re-ranks candidates by a pooled factor —
+`plan_tasks` (no migrations needed for the scoring) and re-ranks candidates by a pooled factor —
 hierarchical Bayesian success (cell → agent → global) × recency (EWMA, 30d
 half-life) × verify × duration × JEV confidence. Each decision carries additive
 fields: `source` (`rules|jev|history|hybrid`), `confidence`, `alternatives[]`,
@@ -37,6 +37,20 @@ JEV classifies agent/type/risk plus a normalized `complexity` in a single
 `sage` was already chosen. Without history or JEV, routing degrades to the
 previous heuristic. See [docs/features/harness-intelligence.md](features/harness-intelligence.md)
 for the full scoring formulas, `ndomo stats`, and `ndomo audit`.
+
+### Routing events (registro de decisiones, fase 2)
+
+`route` persists each decision as a **slim row** in `routing_events` (table v18, FIFO cap 5000)
+and its output is **additive**: `{ ...decision, eventId }` — if the insert fails the `eventId` is
+omitted and `route` never breaks (best-effort). **Propagate the link:** when persisting a plan that
+used `route`, each matching task in `task_create_batch` must carry
+`metadata.routingEventId = decision.eventId` — `task_update_status` to `done`/`failed` then links
+the outcome automatically (best-effort, `link_source='explicit'`, write-once, never breaks the
+transition). Events without a link get classified read-time in the report: `inferred` when a
+terminal task of the same agent completed within `[created_at, created_at + 24h]`, `orphan`
+otherwise. Inspect via `ndomo stats --routing` (table) / `--json` (key `routing`) or the `stats`
+tool with `query: "routing"`. Details:
+[harness-intelligence.md](features/harness-intelligence.md#29-fase-2--routing-events-tabla-v18--link-de-outcomes).
 
 ## Foreman Workflow (Planner, 4 pasos)
 

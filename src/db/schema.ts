@@ -858,6 +858,47 @@ export const SCHEMA_V16_SQL =
 export const SCHEMA_V17_SQL =
   "-- v17: plan_tasks verification columns (T1 execution gates), executed in runMigrations()";
 
+/**
+ * v18: routing_events — route decision log (harness-intelligence fase 2).
+ *
+ * Slim row per `route` invocation: which agent routed, from which source,
+ * with what intent/stack/risk/confidence, the fallback/explore flags, and
+ * the optional link to the task the decision spawned
+ * (task_id / task_status / verification_status / linked_at / link_source).
+ *
+ * Retention: FIFO cap of ROUTING_EVENTS_MAX (5000) rows is enforced in the
+ * APP layer by pruneRoutingEvents() (called on every insert) — no triggers,
+ * matching the "constants pattern" of the design doc. No FKs to plan_tasks
+ * on purpose: a routing event must survive task deletion/rebuild.
+ *
+ * Pure DDL — no addColumnIfMissing special-case needed in runMigrations();
+ * the generic hasStatements path executes it (same as v1/v11/v13/v14).
+ */
+export const SCHEMA_V18_SQL = `
+-- v18: route decision event log (harness-intelligence fase 2), FIFO cap enforced in app layer
+CREATE TABLE IF NOT EXISTS routing_events (
+  id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  session_id TEXT,
+  agent TEXT NOT NULL,
+  source TEXT NOT NULL,
+  intent TEXT,
+  stack TEXT,
+  risk TEXT,
+  confidence REAL,
+  fallback INTEGER NOT NULL DEFAULT 0,
+  explore INTEGER NOT NULL DEFAULT 0,
+  task_id TEXT,
+  task_status TEXT,
+  verification_status TEXT,
+  linked_at INTEGER,
+  link_source TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_routing_events_created ON routing_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_routing_events_agent ON routing_events(agent);
+CREATE INDEX IF NOT EXISTS idx_routing_events_task ON routing_events(task_id);
+`;
+
 export const MIGRATIONS: Array<{
   version: number;
   description: string;
@@ -953,5 +994,11 @@ export const MIGRATIONS: Array<{
     description:
       "execution gates (T1): plan_tasks verification_required/status/result/passed_at/verified_by columns",
     sql: SCHEMA_V17_SQL,
+  },
+  {
+    version: 18,
+    description:
+      "routing events: route decision log (fase 2 harness-intelligence), FIFO cap in app layer",
+    sql: SCHEMA_V18_SQL,
   },
 ];

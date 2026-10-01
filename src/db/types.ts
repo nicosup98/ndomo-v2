@@ -63,6 +63,12 @@ export interface TaskMetadata {
     forcedBy: string;
     forcedAt: number;
   };
+  /**
+   * v18: routing_events.id this task originated from (foreman propagates
+   * route decisions via task_create_batch). When present, updateTaskStatus
+   * links the event on terminal transitions (done/failed).
+   */
+  routingEventId?: string;
 }
 
 export interface SessionMetadata {
