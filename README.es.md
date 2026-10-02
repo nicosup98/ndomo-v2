@@ -241,7 +241,7 @@ Ver [docs/configuration.md](docs/configuration.md) para referencia completa. Los
 
 ## Skills
 
-ndomo incluye 25 skills en `skills/`, agrupadas por familia:
+ndomo incluye 26 skills en `skills/`, agrupadas por familia:
 
 **Protocolo caveman**
 - `caveman` — modo de comunicación ultracomprimido (~75% reducción de tokens)
@@ -249,6 +249,7 @@ ndomo incluye 25 skills en `skills/`, agrupadas por familia:
 - `caveman-review` — comentarios de code review ultracomprimidos (ubicación, problema, fix)
 
 **Workflow y calidad**
+- `ndomo` — guía de operación del ecosistema ndomo (planes, tasks, sesiones, memoria, gates)
 - `grill-me` — entrevista implacable para afilar un plan o diseño
 - `find-skills` — descubrir e instalar skills adicionales
 - `frontend-design` — guía de diseño visual distintivo, sin plantillas
