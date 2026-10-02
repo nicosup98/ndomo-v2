@@ -17,6 +17,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-02
+
+### Added
+
+- **Harness Intelligence pack** — history-aware routing: JEV-scored `route`
+  decisions informed by agent outcome history, with an in-process memo
+  (TTL 30s) invalidated on plan/task mutations; `routing_events` registry
+  (v18 migration, FIFO cap 5000) linking route decisions to task outcomes;
+  `ndomo stats --routing` coverage report (7d/30d/all; linked | inferred 24h
+  | orphan).
+- **`ndomo stats`** — agent scorecard CLI command + MCP `stats` tool
+  (success, verify, durations, failure modes per agent).
+- **`ndomo audit`** — report-only self-audit CLI (`--json`,
+  `--update-manifest`) checking frontmatter↔preset drift, permissions, docs
+  counts and DB migrations; exit 1 only when the report has ERROR findings.
+- **D2 diagrams as documentation** — `design_create` optional `diagrams`
+  parameter serialized into a managed `## Diagrams` section (best-effort d2
+  validation), chronicler d2 workflow + `d2-diagrams` skill, `docs/diagrams/`
+  sources, `scripts/render-diagrams.sh` and a `d2.yml` CI gate.
+- **Escalation protocol wiring (R7)** — craftsman/foreman prompts now invoke
+  `task_escalate` on blocked states; feature doc marks R7 resolved (prompt
+  wiring, no code changes).
+
+### Changed
+
+- Docs refresh: README (62 MCP tools, `stats`/`audit` commands), database
+  schema v18 (`routing_events`), harness-intelligence feature doc and
+  workflow propagation.
+- Stale debt docs corrected (F3 D1): `plan_files` multi-role resolved v10,
+  plan-create orphan FK live mitigation, order-index collision refs, OpenCode
+  v2 audit (`tools/`, `src/sdk/`, `src/http/` marked historical).
+- `ndomo analyses` registered in the CLI COMMANDS table; orphan
+  `bin/ndomo-*` shims removed.
+
+### Fixed
+
+- Agent frontmatter aligned with `config/ndomo.config.json` default preset —
+  11 drift fields (models/temperatures) across 10 agents; audit drift 11 → 0.
+- Routing rerank rationale now compares the winner against the base agent
+  score.
+
 ## [0.7.0] - 2026-09-29
 
 ### Added
@@ -226,9 +267,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven medium-priority `craftsman` fixes shipped alongside the Bun skill
   bootstrap for the `js-smith` specialist
 
+[0.8.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.0...v0.5.1
-[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.8.0...HEAD
 [0.3.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/nicosup98/ndomo-v2/releases/tag/v0.1.0
