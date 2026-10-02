@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-02
+
+### Added
+
+- **`ndomo` skill** — bundled operating guide for the ndomo ecosystem
+  (`skills/ndomo/SKILL.md`): decision tree, plan/task/session cycles, gates
+  T1-T5, memory, routing, worktrees, ops warden, Obsidian and a compact
+  reference for the 62 tools; README/README.es updated to 26 bundled skills.
+
 ## [0.8.0] - 2026-10-02
 
 ### Added
@@ -267,10 +276,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Seven medium-priority `craftsman` fixes shipped alongside the Bun skill
   bootstrap for the `js-smith` specialist
 
+[0.8.1]: https://github.com/nicosup98/ndomo-v2/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/nicosup98/ndomo-v2/compare/v0.5.0...v0.5.1
-[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/nicosup98/ndomo-v2/compare/v0.8.1...HEAD
 [0.3.0]: https://github.com/nicosup98/ndomo-v2/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/nicosup98/ndomo-v2/releases/tag/v0.1.0
