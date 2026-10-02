@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/nicosup98/ndomo-v2/compare/v0.7.0...v0.8.0) (2026-10-02)
+
+
+### Features
+
+* **agents:** wire task_escalate escalation protocol (F4 D3) ([0dc9dd8](https://github.com/nicosup98/ndomo-v2/commit/0dc9dd8d9841910b0676b605af72a5f5089e0105))
+* **audit:** self-audit core checks + docs count fixes (F3 harness-intelligence-pack) ([faaa0a3](https://github.com/nicosup98/ndomo-v2/commit/faaa0a3e2e79c561ad5cfc19aaed080f0b316855))
+* **cli:** ndomo audit command + audit tests (F3.1 harness-intelligence-pack) ([1c9c027](https://github.com/nicosup98/ndomo-v2/commit/1c9c027941ccb760491d8762c8caa76feecd1721))
+* **cli:** ndomo stats agent scorecard + MCP stats tool (F2 harness-intelligence-pack) ([10dc2fd](https://github.com/nicosup98/ndomo-v2/commit/10dc2fd642170d4dcb97281e3e4e4464477c88e8))
+* d2 diagrams as documentation (design_create + chronicler + obsidian + CI) ([15fd1ae](https://github.com/nicosup98/ndomo-v2/commit/15fd1ae0ebc872d6d7c9387d5b714ca64384c5a8))
+* **orchestrator:** history-aware routing with JEV score (F1 harness-intelligence-pack) ([05e7574](https://github.com/nicosup98/ndomo-v2/commit/05e75747779328b08503a0a63383ff43b6139e20))
+* **orchestrator:** route history memo TTL 30s + mutation hooks (F1 routing-history-cache) ([190c3f1](https://github.com/nicosup98/ndomo-v2/commit/190c3f1c794492e2a39f67ed618405b5850fe24b))
+* **routing-events:** register route decisions + stats --routing (harness-intelligence fase 2) ([9498fcf](https://github.com/nicosup98/ndomo-v2/commit/9498fcf131a03a3001b64426006840e5818d8ac2))
+* **skills:** add bundled ndomo operating guide ([7c52d61](https://github.com/nicosup98/ndomo-v2/commit/7c52d6172f1a234400e0c1b965086c5f5bd70446))
+
+
+### Bug Fixes
+
+* **agents:** align frontmatter with config preset (F2 D2) ([9a8fae7](https://github.com/nicosup98/ndomo-v2/commit/9a8fae7325813cf73030e5a3f5f19a555df66007))
+* **cli:** register analyses command, drop orphan bin/ shims (F1 D5) ([4300830](https://github.com/nicosup98/ndomo-v2/commit/43008304fb5457085c357bb67392a2fdcba3d10b))
+* **orchestrator:** rerank reason compares winner vs base agent score (F1 follow-up) ([cdd9198](https://github.com/nicosup98/ndomo-v2/commit/cdd919890dcfadfaf2c1d72e60334480398f19ec))
+
 ## [0.5.1] - 2026-09-22
 
 ### Changed
