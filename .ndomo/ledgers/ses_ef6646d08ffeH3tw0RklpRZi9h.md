@@ -4,48 +4,32 @@
 **Goal:** Plan: SDD core: spec como fuente de verdad + spec_lint + gates T0/T1 + TDD red-proof  
 **Plan:** —  
 **Started:** 2026-10-05T01:27:36.970Z  
-**Last Checkpoint:** 2026-10-05T01:33:39.530Z  
+**Last Checkpoint:** 2026-10-05T03:54:52.431Z  
 **Ended:** —  
 **Outcome:** —  
-**Updated:** 2026-10-05T01:33:39.531Z  
+**Updated:** 2026-10-05T03:54:52.432Z  
 
 ## State
 
 ```json
 {
-  "phase": "planificado",
-  "planId": "7b337b7a-121a-457f-8f86-ceecb7401fce",
-  "planSlug": "spec-driven-core",
-  "spec": {
-    "id": "SPEC-001",
-    "path": ".ndomo/specs/001-sdd-core/spec.md",
-    "version": "1.1",
-    "reqs": 9
-  },
-  "design": ".ndomo/designs/2026-10-04-sdd-core-design.md",
-  "tasks": {
-    "total": 7,
-    "craftsman": 4,
-    "jsSmith": 1,
-    "smith": 1,
-    "warden": 1
-  },
-  "completedTasks": 0,
-  "currentPhase": "P1",
-  "blockers": [
-    "gate T0 no ejecutable sobre este plan (bootstrap: spec_lint aun no existe)"
-  ],
-  "decisions": [
-    "Opcion C (spec como archivo + lint) sobre A/B/D",
-    "opt-in por plan via metadata.specId",
-    "sin migracion de DB"
+  "plan": "spec-driven-core",
+  "planStatus": "completed",
+  "commit": "9807c86",
+  "specVersion": "1.4",
+  "tasksDone": 7,
+  "verification": "6/7 tasks inspector-verified (T6 not_required)",
+  "suite": "1337 pass / 2 fail (2 pre-existentes, ambientales)",
+  "followups": [
+    "docs/diagrams/sdd-workflow.d2 no bloqueante (flaggeado por chronicler)",
+    "git identity sin configurar: 2 fails de src/mem/tags.test.ts"
   ]
 }
 ```
 
 ## Key Decisions
 
-Spec como artefacto-file canonico en .ndomo/specs/ (docs-as-code) en vez de tabla specs: cero drift DB-file, cero migracion, mismo patron ya probado por design_create. SDD limitado al desarrollo interno de ndomo. Gate T0 en approvePlan + gate T1 ampliado con red-proof TDD, ambos opt-in por metadata.specId/reqIds. Design doc (por que) convive con spec (que). Plan slug UNIQUE: primer batch abandono (5ef40833) porque task_create_batch auto-split por stack y no aplico verificationRequired; recreado con stacks homogeneos y flag explicito.
+1) Opt-in por metadata.specId/reqIds: sin ellos no cambia nada (REQ-006). 2) Gate T0 corre spec_lint sin ctx.tasks a proposito: L6 solo bloquea por fila de matriz faltante, la trazabilidad task-REQ la cubre el gate T1. 3) El gate T1 matchea TODOS los tags REQ-xxx de cada testRef, no solo el primero (fix post-auditoria del inspector). 4) Force-waiver del implementador corregido: solo inspector registra verdicts, el force quedo para re-grabar un registro stale. 5) Commit con identidad de maquina ndomo-craftsman@localhost porque el repo no tiene git user.email configurado (misma causa raiz de los 2 fails de src/mem/tags.test.ts). 6) SPEC-001 subio a v1.4: v1.2 arreglo los ACs que violaban L5, v1.3 paso la matriz a green, v1.4 documento los fixes post-auditoria.
 
 ## Agent History (0)
 
@@ -55,6 +39,6 @@ Spec como artefacto-file canonico en .ndomo/specs/ (docs-as-code) en vez de tabl
 
 <!-- ndomo:ledger-data -->
 ```json
-{"sessionId":"ses_ef6646d08ffeH3tw0RklpRZi9h","goal":"Plan: SDD core: spec como fuente de verdad + spec_lint + gates T0/T1 + TDD red-proof","planId":null,"state":{"phase":"planificado","planId":"7b337b7a-121a-457f-8f86-ceecb7401fce","planSlug":"spec-driven-core","spec":{"id":"SPEC-001","path":".ndomo/specs/001-sdd-core/spec.md","version":"1.1","reqs":9},"design":".ndomo/designs/2026-10-04-sdd-core-design.md","tasks":{"total":7,"craftsman":4,"jsSmith":1,"smith":1,"warden":1},"completedTasks":0,"currentPhase":"P1","blockers":["gate T0 no ejecutable sobre este plan (bootstrap: spec_lint aun no existe)"],"decisions":["Opcion C (spec como archivo + lint) sobre A/B/D","opt-in por plan via metadata.specId","sin migracion de DB"]},"keyDecisions":"Spec como artefacto-file canonico en .ndomo/specs/ (docs-as-code) en vez de tabla specs: cero drift DB-file, cero migracion, mismo patron ya probado por design_create. SDD limitado al desarrollo interno de ndomo. Gate T0 en approvePlan + gate T1 ampliado con red-proof TDD, ambos opt-in por metadata.specId/reqIds. Design doc (por que) convive con spec (que). Plan slug UNIQUE: primer batch abandono (5ef40833) porque task_create_batch auto-split por stack y no aplico verificationRequired; recreado con stacks homogeneos y flag explicito.","agentHistory":[],"startedAt":1791163656970,"lastCheckpoint":1791164019530,"endedAt":null,"outcome":null,"metadata":{}}
+{"sessionId":"ses_ef6646d08ffeH3tw0RklpRZi9h","goal":"Plan: SDD core: spec como fuente de verdad + spec_lint + gates T0/T1 + TDD red-proof","planId":null,"state":{"plan":"spec-driven-core","planStatus":"completed","commit":"9807c86","specVersion":"1.4","tasksDone":7,"verification":"6/7 tasks inspector-verified (T6 not_required)","suite":"1337 pass / 2 fail (2 pre-existentes, ambientales)","followups":["docs/diagrams/sdd-workflow.d2 no bloqueante (flaggeado por chronicler)","git identity sin configurar: 2 fails de src/mem/tags.test.ts"]},"keyDecisions":"1) Opt-in por metadata.specId/reqIds: sin ellos no cambia nada (REQ-006). 2) Gate T0 corre spec_lint sin ctx.tasks a proposito: L6 solo bloquea por fila de matriz faltante, la trazabilidad task-REQ la cubre el gate T1. 3) El gate T1 matchea TODOS los tags REQ-xxx de cada testRef, no solo el primero (fix post-auditoria del inspector). 4) Force-waiver del implementador corregido: solo inspector registra verdicts, el force quedo para re-grabar un registro stale. 5) Commit con identidad de maquina ndomo-craftsman@localhost porque el repo no tiene git user.email configurado (misma causa raiz de los 2 fails de src/mem/tags.test.ts). 6) SPEC-001 subio a v1.4: v1.2 arreglo los ACs que violaban L5, v1.3 paso la matriz a green, v1.4 documento los fixes post-auditoria.","agentHistory":[],"startedAt":1791163656970,"lastCheckpoint":1791172492431,"endedAt":null,"outcome":null,"metadata":{}}
 ```
 <!-- /ndomo:ledger-data -->
