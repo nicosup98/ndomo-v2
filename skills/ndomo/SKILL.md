@@ -3,8 +3,8 @@ name: ndomo
 description: >
   Guía de operación del ecosistema ndomo (plans, tasks, sessions, memoria, gates) —
   operating guide for the ndomo ecosystem (plans, tasks, sessions, memory, gates).
-  Workflow-first: decision tree, plan/task/session lifecycles, gates T1-T5, routing,
-  worktrees, ops warden, obsidian y referencia compacta de las 62 tools.
+  Workflow-first: decision tree, plan/task/session lifecycles, gates T0-T5, routing,
+  worktrees, ops warden, obsidian y referencia compacta de las 65 tools.
   Use when working with ndomo, plans, tasks, sessions, dispatch, memory,
   orchestration, routing, gates, worktrees, incidents. Triggers: "skill ndomo",
   "how to use ndomo", "planes", "tareas", "sesiones", "memoria", "gates", "plan", "task".
@@ -12,11 +12,11 @@ description: >
 
 # ndomo — Guía de uso para agentes
 
-Fuente única y compacta de cómo operar ndomo. Prosa en español; tools, estados y comandos en inglés. Stamp: **v0.8.0 / schema v18 / 62 tools / 23 agents** (4 primaries + 19 specialists). Verifica cada afirmación contra `src/plugin.ts` (fuente de verdad de tools).
+Fuente única y compacta de cómo operar ndomo. Prosa en español; tools, estados y comandos en inglés. Stamp: **v0.8.0 / schema v18 / 65 tools / 23 agents** (4 primaries + 19 specialists). Verifica cada afirmación contra `src/plugin.ts` (fuente de verdad de tools).
 
 ## 1. Qué es ndomo y sus stores
 
-ndomo es el plugin de orquestación multi-agente de OpenCode. Un agente lo opera vía **62 tools registradas** (`src/plugin.ts:955`, bloque `toolDefs`). Almacena estado en varios stores:
+ndomo es el plugin de orquestación multi-agente de OpenCode. Un agente lo opera vía **65 tools registradas** (`src/plugin.ts:955`, bloque `toolDefs`). Almacena estado en varios stores:
 
 | Store | Ubicación | Contenido |
 |---|---|---|
@@ -78,13 +78,14 @@ Estados: `pending` → `running` → `done|failed` (más `blocked` como estado d
 - **Auto-checkpoint** (`src/db/auto-checkpoint.ts`): triggers `phase_transition` (tras `plan_update_status` real, no dryRun) y `task_batch_complete` (última task pending → done). Debounced `minIntervalMs` (default 30000), non-blocking, loop-safe (`isAutoCheckpointing`).
 - Ledgers: `ledger_create` (idempotente), `ledger_get` (+`raw:true`), `ledger_update` (patch; null limpia campo; sessionId/startedAt inmutables). DB sigue siendo fuente de verdad; ledger best-effort.
 
-## 6. Gates T1-T5
+## 6. Gates T0-T5
 
 | Gate | Qué es | Tools |
 |---|---|---|
-| T1 Execution gate | `task_create_batch` con `verificationRequired:true` (o `metadata.verificationRequired`) → `verification_status='pending'` bloquea `done` | `task_verify({taskId, verdict:"passed"|"failed"|"waived", reason?, force?, forceReason?})` — passed inspector-only salvo force; waive requiere reason; override de passed requiere force |
+| T0 SDD approve | plan con `metadata.specId` no llega a `approved` con `spec_lint` con findings `error` (mensaje nombra path/rule; spec borrada bloquea nombrando el path faltante) | `plan_approve` re-corre `spec_lint`; `spec_create`, `spec_get`, `spec_lint` |
+| T1 Execution gate | `task_create_batch` con `verificationRequired:true` (o `metadata.verificationRequired`) → `verification_status='pending'` bloquea `done`. **Ampliado (SDD):** task con `metadata.reqIds` no vacío exige además `result.redProof` + ≥1 `testRef` tag `REQ-xxx` para `passed` | `task_verify({taskId, verdict:"passed"|"failed"|"waived", reason?, force?, forceReason?})` — passed inspector-only salvo force; waive requiere reason; override de passed requiere force |
 | T2 Critic | Verdict binario sobre diff para el execution gate | `critic_review({diff, verdict:"APPROVED"|"REJECTED", critical?, optimizations?, compliance?, scores?, actionRequired?})` → incluye payload de task_verify; nunca bypassa a inspector |
-| T3 Brainstorm / close flow | Phase 0 con `design_create`; cierre de plan con pre-check dryRun + force auditado | `plan_update_status` (dryRun/force/forceReason) |
+| T3 Brainstorm / close flow | Phase 0 con `design_create` (+ spec opt-in, ver skill `spec-driven`); cierre de plan con pre-check dryRun + force auditado | `plan_update_status` (dryRun/force/forceReason) |
 | T4 Continuity ledger | Checkpoint → `.ndomo/ledgers/` | `ledger_*` + auto-write en session_checkpoint |
 | T5 Circuit breaker | `src/db/circuit-breaker.ts`: **4000** llamadas totales / **20** idénticas consecutivas por session (one-shot trip) | trip emite warning + marca task `failed` con `"Circuit breaker: potential loop detected"`; `task_update_status` exenta para recuperación; después bloquea en silencio |
 
@@ -137,7 +138,7 @@ Capa brain **one-way** (repo → vault), determinista e idempotente (SHA-256 ski
 - `obsidian_export({entityType:"plan"|"task"|"design"|"memory", entityId, scope:"single"|"plan", kind?})` — `scope:"plan"` exporta el plan + sus tasks no-archivadas (fail-fast). Responde SIEMPRE envelope `{ok:true,data} | {ok:false,error}` (nunca throw).
 - `obsidian_read_note({path} | {entityType, entityId})` — lee la nota proyectada. Sin reverse sync, watchers ni CLI. Requiere bloque `obsidian` en ndomo.json.
 
-## 13. Referencia compacta de las 62 tools
+## 13. Referencia compacta de las 65 tools
 
 Agrupadas por dominio (nombre — propósito — args clave). Fuente: `src/plugin.ts:955-2544`.
 
@@ -263,6 +264,16 @@ Agrupadas por dominio (nombre — propósito — args clave). Fuente: `src/plugi
 | `design_create` | ADR/brainstorm doc en .ndomo/designs/ (d2 validate opcional) | slug, title, problem, goals?, constraints?, scope?, exclusions?, options?, decision?, tradeoffs?, consequences?, diagrams?, openQuestions?, planId?, sessionId?, agent?, date? |
 | `critic_review` | Review binario APPROVED/REJECTED + payload task_verify | diff, verdict (APPROVED/REJECTED), critical?, optimizations?, compliance?, actionRequired?, scores? |
 
+### Spec / SDD (3)
+
+| Tool | Propósito | Args |
+|---|---|---|
+| `spec_create` | Scaffold `.ndomo/specs/NNN-<slug>/spec.md` (13 secciones, NNN monótono; error si el slug ya existe) | slug (req), title?, planId?, sessionId?, agent?, date? |
+| `spec_get` | Spec parseada (frontmatter + secciones + requirements con ACs + matriz) | id \| path (uno req), planId? |
+| `spec_lint` | Lint determinista L0–L9; da `{ok, findings[{rule,severity,line,message}], stats}`; byte-idéntico entre runs; sin DB-writes | id \| path (uno req), planId? |
+
+CLI espejo (REQ-009): `ndomo spec list | show <id> | lint <id> [--plan <planId>]`. Detalle del flujo SDD: skill `spec-driven` + `docs/workflows.md` (gates T0/T1).
+
 ## 14. Anti-patterns (errores recurrentes)
 
 - ❌ **Primaries como subagents** (pierden su flota de specialists). → Siempre plan + TUI switch, salvo ranger vía `agent:"ranger"` en task_create_batch.
@@ -284,6 +295,7 @@ status     # planes agrupados por status con task counts
 stats      # scorecard por agente [--since 7d|30d|all] [--agent] [--json] [--routing]
 audit      # self-audit: drift/permissions/counts/config/manifest (score 1-100; exit 1 si ERROR)
 analyses   # list | get | search | archive
+spec       # list | show <id> | lint <id> [--plan <planId>] (REQ-009; misma salida JSON que spec_lint)
 vacuum     # reclaim de espacio en .ndomo/state.db
 smoke      # smoke tests
 install    # instala agents/skills/config en ~/.config/opencode/
@@ -303,4 +315,4 @@ También ejecutables directos: `bun run src/cli/plan.ts ...`, `bun run src/cli/t
 - Routing intelligence + JEV: `docs/features/harness-intelligence.md`.
 - Installer: `docs/installer.md`; ops docs: `docs/operations/`.
 
-Stamp: **ndomo v0.8.0 — schema v18 — 62 tools — 23 agents**.
+Stamp: **ndomo v0.8.0 — schema v18 — 65 tools — 23 agents**.

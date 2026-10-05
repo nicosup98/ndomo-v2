@@ -16,11 +16,12 @@ import {
   getTask,
   listTasksByPlan,
   nextTaskForAgent,
+  recordTaskVerification,
   splitFilesByStack,
   updateTaskFields,
   updateTaskStatus,
 } from "./tasks.ts";
-import type { Plan } from "./types.ts";
+import type { Plan, PlanTask } from "./types.ts";
 
 let db: Database;
 
@@ -1116,5 +1117,44 @@ describe("updateTaskStatus — routing event link (v18)", () => {
     const row = getLinkRow(event.id);
     expect(row?.task_id).toBeNull();
     expect(row?.link_source).toBeNull();
+  });
+});
+
+// ─── AC-006-1: REQ-006 backward compatibility — opt-in only ──────────────────
+
+describe("AC-006-1 — tasks without metadata.reqIds are unaffected by the T1 evidence gate", () => {
+  test("task with NO metadata.reqIds records verdict='passed' with no evidence (unchanged)", () => {
+    const plan = makePlan();
+    const task = createTasksBatch(db, plan.id, [makeTask()])[0] as PlanTask;
+
+    const out = recordTaskVerification(db, task.id, "passed", undefined, "inspector");
+
+    expect(out.verificationStatus).toBe("passed");
+    expect(out.verificationResult).toBeNull();
+    expect(out.verifiedBy).toBe("inspector");
+    expect(out.verificationPassedAt).toBeTypeOf("number");
+  });
+
+  test("task with unrelated metadata (no reqIds key) is NOT spec-bound — evidence not required", () => {
+    const plan = makePlan();
+    const task = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { reviewedBy: "chronicler", tokensUsed: 1500 } }),
+    ])[0] as PlanTask;
+
+    const out = recordTaskVerification(db, task.id, "passed", { coverage: 0.8 }, "inspector");
+
+    expect(out.verificationStatus).toBe("passed");
+    expect(out.verificationResult).toEqual({ coverage: 0.8 });
+  });
+
+  test("task with metadata.reqIds = [] (empty array) is NOT spec-bound either", () => {
+    const plan = makePlan();
+    const task = createTasksBatch(db, plan.id, [
+      makeTask({ metadata: { reqIds: [] } }),
+    ])[0] as PlanTask;
+
+    const out = recordTaskVerification(db, task.id, "passed", undefined, "inspector");
+
+    expect(out.verificationStatus).toBe("passed");
   });
 });

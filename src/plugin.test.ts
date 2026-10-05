@@ -47,7 +47,7 @@ import {
   resolveTaskDependencies,
   updateTaskStatus,
 } from "./db/tasks.ts";
-import type { Plan } from "./db/types.ts";
+import type { Plan, TaskMetadata } from "./db/types.ts";
 import { getProjectTagInfo } from "./mem/tags.ts";
 import { sanitizeSegment } from "./obsidian/paths.ts";
 import {
@@ -2864,11 +2864,11 @@ describe("NdomoPlugin v2 registration", () => {
     return { projectDir, harness, cleanup };
   };
 
-  test("setup registers 62 tools, all 4 hooks, and returns a cleanup fn", async () => {
+  test("setup registers 65 tools, all 4 hooks, and returns a cleanup fn", async () => {
     const { projectDir, harness, cleanup } = await setupPlugin();
     try {
       expect(typeof cleanup).toBe("function");
-      expect(harness.tools).toHaveLength(62);
+      expect(harness.tools).toHaveLength(65);
       const names = harness.tools.map((t) => t.name);
       expect(names).toContain("plan_create");
       expect(names).toContain("task_update_status");
@@ -2881,6 +2881,11 @@ describe("NdomoPlugin v2 registration", () => {
       expect(names).toContain("ledger_update");
       expect(names).toContain("design_create");
       expect(names).toContain("critic_review");
+      // Spec tooling (SPEC-001 §7) — file artifacts; spec_lint reads DB tasks
+      // for traceability only when planId is supplied.
+      expect(names).toContain("spec_create");
+      expect(names).toContain("spec_get");
+      expect(names).toContain("spec_lint");
       // Embedded memory surface (replaces the former external memory plugin tool).
       expect(names).toContain("memory_compress");
       expect(names).toContain("mem_add");
@@ -2891,7 +2896,7 @@ describe("NdomoPlugin v2 registration", () => {
       // Obsidian brain layer (OBL-3).
       expect(names).toContain("obsidian_export");
       expect(names).toContain("obsidian_read_note");
-      expect(new Set(names).size).toBe(62);
+      expect(new Set(names).size).toBe(65);
       expect(harness.sessionHooks.map((h) => h.name)).toEqual(["compaction"]);
       expect(harness.toolHooks.map((h) => h.name).sort()).toEqual([
         "execute.after",
@@ -3274,7 +3279,7 @@ describe("NdomoPlugin v2 registration", () => {
       const first = makePluginHarness(projectDir);
       const firstCleanup = await NdomoPlugin.setup(first.ctx);
       if (typeof firstCleanup !== "function") throw new Error("setup did not return a cleanup fn");
-      expect(first.tools).toHaveLength(62);
+      expect(first.tools).toHaveLength(65);
       await firstCleanup();
       await firstCleanup(); // idempotent — a second dispose must not throw
 
@@ -3285,8 +3290,8 @@ describe("NdomoPlugin v2 registration", () => {
       if (typeof secondCleanup !== "function") {
         throw new Error("setup did not return a cleanup fn");
       }
-      expect(second.tools).toHaveLength(62);
-      expect(first.tools).toHaveLength(62);
+      expect(second.tools).toHaveLength(65);
+      expect(first.tools).toHaveLength(65);
       await secondCleanup();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
@@ -3375,6 +3380,507 @@ describe("NdomoPlugin v2 registration", () => {
         ).content,
       ) as { executionGate: { verdict: string } };
       expect(critic.executionGate.verdict).toBe("passed");
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── spec tools (SPEC-001 §7): spec_create / spec_get / spec_lint ───────────
+
+/** Canonical `## N. Title` section titles for spec fixtures (SPEC-001 §2). */
+const SPEC_SECTION_TITLES: Record<number, string> = {
+  1: "Purpose",
+  2: "Scope",
+  3: "Non-goals",
+  4: "Actors",
+  5: "Requirements",
+  6: "Acceptance Criteria",
+  7: "Interfaces / Contracts",
+  8: "Data Model",
+  9: "Edge Cases",
+  10: "NFRs",
+  11: "Traceability",
+  12: "Open Questions",
+  13: "Changelog",
+};
+
+interface SpecFixtureOptions {
+  id?: string;
+  slug?: string;
+  status?: string;
+  section5?: string;
+  section11?: string;
+  /** Section numbers in emission order; defaults to the canonical 1..13. */
+  order?: number[];
+}
+
+/**
+ * Lint-clean spec markdown: all 11 frontmatter keys, all 13 sections in
+ * canonical order, one active REQ with a complete Given/When/Then AC and a
+ * fully-populated matrix row. Individual tests override section5/section11 or
+ * scramble `order` to trip a single rule. Fixtures live in a temp project dir
+ * — never against the real `.ndomo/specs/001-sdd-core/spec.md` (which is
+ * `approved` and intentionally fails L5).
+ */
+function specFixture(opts: SpecFixtureOptions = {}): string {
+  const id = opts.id ?? "SPEC-001";
+  const slug = opts.slug ?? "fixture";
+  const status = opts.status ?? "draft";
+  const order = opts.order ?? Array.from({ length: 13 }, (_, i) => i + 1);
+  const bodies: Record<number, string> = {
+    1: "Why this fixture exists.",
+    2: "What is in scope.",
+    3: "What is out of scope.",
+    4: "Who interacts with the feature.",
+    5:
+      opts.section5 ??
+      [
+        "### REQ-001 — Fixture requirement",
+        "",
+        "WHEN something happens, THE system SHALL react.",
+        "",
+        "- AC-001-1: **Given** a precondition, **When** an action, **Then** an outcome.",
+        "- type: ubiq · priority: P1 · owner: tester · status: active",
+      ].join("\n"),
+    6: "ACs live nested under each requirement.",
+    7: "Tools and contracts.",
+    8: "No schema changes.",
+    9: "Edge cases table.",
+    10: "Determinism required.",
+    11:
+      opts.section11 ??
+      [
+        "| REQ | AC | Tasks | Tests | state |",
+        "|---|---|---|---|---|",
+        "| REQ-001 | AC-001-1 | task-1 | src/thing.test.ts | red |",
+      ].join("\n"),
+    12: "_(none)_",
+    13: "- **2026-10-01 v1.0 (tester)** — initial.",
+  };
+  const parts: string[] = [
+    "---",
+    `id: ${id}`,
+    `slug: ${slug}`,
+    "title: Fixture Spec",
+    `status: ${status}`,
+    "version: 1.0",
+    "owner: tester",
+    "created: 2026-10-01",
+    "updated: 2026-10-01",
+    "related_plans:",
+    "  - plan-aaa",
+    "related_designs: []",
+    "supersedes: null",
+    "---",
+    "",
+    `# ${id} Fixture Spec`,
+    "",
+  ];
+  for (const n of order) {
+    parts.push(`## ${n}. ${SPEC_SECTION_TITLES[n] ?? ""}`, "", (bodies[n] ?? "").trim(), "");
+  }
+  return `${parts.join("\n").replace(/\s+$/, "")}\n`;
+}
+
+describe("spec tools (spec_create, spec_get, spec_lint)", () => {
+  const priorSkipFrontmatter = process.env.NDOMO_SKIP_FRONTMATTER_SYNC;
+
+  afterAll(() => {
+    if (priorSkipFrontmatter === undefined) delete process.env.NDOMO_SKIP_FRONTMATTER_SYNC;
+    else process.env.NDOMO_SKIP_FRONTMATTER_SYNC = priorSkipFrontmatter;
+  });
+
+  /** Fresh plugin instance bound to its own temp project dir (fixture isolation). */
+  const setupSpecPlugin = async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "spec-plugin-"));
+    process.env.NDOMO_SKIP_FRONTMATTER_SYNC = "1";
+    const harness = makePluginHarness(projectDir);
+    const cleanup = await NdomoPlugin.setup(harness.ctx);
+    if (typeof cleanup !== "function") throw new Error("setup did not return a cleanup fn");
+    return { projectDir, harness, cleanup };
+  };
+
+  const findTool = (harness: ReturnType<typeof makePluginHarness>, name: string) => {
+    const tool = harness.tools.find((t) => t.name === name);
+    if (!tool) throw new Error(`tool not registered: ${name}`);
+    return tool;
+  };
+
+  /** Drop a hand-built spec into `<projectDir>/.ndomo/specs/<dirName>/spec.md`. */
+  const writeFixture = (projectDir: string, dirName: string, markdown: string): string => {
+    const dir = join(projectDir, ".ndomo", "specs", dirName);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "spec.md");
+    writeFileSync(file, markdown, "utf8");
+    return file;
+  };
+
+  test("spec tool surface: spec_create, spec_get and spec_lint are registered (65 tools)", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      const names = harness.tools.map((t) => t.name);
+      expect(names).toContain("spec_create");
+      expect(names).toContain("spec_get");
+      expect(names).toContain("spec_lint");
+      expect(harness.tools).toHaveLength(65);
+      expect(new Set(names).size).toBe(65);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC-001-1: spec_create writes 001-<slug>/spec.md and the next slug gets NNN+1 [REQ-001]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      const create = findTool(harness, "spec_create");
+
+      const first = JSON.parse(
+        (
+          await create.execute(
+            { slug: "alpha-spec", title: "Alpha Spec" },
+            harness.toolCtx("ses_spec", "artisan"),
+          )
+        ).content,
+      ) as { id: string; slug: string; path: string; created: boolean; byteSize: number };
+
+      expect(first.id).toBe("SPEC-001");
+      expect(first.slug).toBe("alpha-spec");
+      expect(first.created).toBe(true);
+      expect(first.path).toBe(join(projectDir, ".ndomo", "specs", "001-alpha-spec", "spec.md"));
+      expect(existsSync(first.path)).toBe(true);
+      expect(first.byteSize).toBeGreaterThan(0);
+
+      const markdown = readFileSync(first.path, "utf8");
+      expect(markdown).toContain("id: SPEC-001");
+      // frontmatter owner mirrors the calling agent (args.agent ?? ctx.agent)
+      expect(markdown).toContain("owner: artisan");
+      expect(markdown).toContain("## 13. Changelog");
+
+      // Monotonic 3-digit index: the second slug lands in 002-<slug>.
+      const second = JSON.parse(
+        (await create.execute({ slug: "beta-spec" }, harness.toolCtx("ses_spec"))).content,
+      ) as { id: string; path: string };
+      expect(second.id).toBe("SPEC-002");
+      expect(second.path).toBe(join(projectDir, ".ndomo", "specs", "002-beta-spec", "spec.md"));
+
+      // Explicit args.agent wins over the calling agent.
+      const third = JSON.parse(
+        (
+          await create.execute(
+            { slug: "gamma-spec", agent: "foreman" },
+            harness.toolCtx("ses_spec", "artisan"),
+          )
+        ).content,
+      ) as { path: string };
+      expect(readFileSync(third.path, "utf8")).toContain("owner: foreman");
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC-001-2: spec_create refuses a duplicate slug and reports the existing path [REQ-001]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      const create = findTool(harness, "spec_create");
+      await create.execute({ slug: "dupe-spec" }, harness.toolCtx("ses_spec"));
+
+      await expect(
+        create.execute({ slug: "dupe-spec" }, harness.toolCtx("ses_spec")),
+      ).rejects.toThrow(/already exists at .*001-dupe-spec/);
+      // The original file is untouched — creation never overwrites.
+      expect(existsSync(join(projectDir, ".ndomo", "specs", "001-dupe-spec", "spec.md"))).toBe(
+        true,
+      );
+      expect(existsSync(join(projectDir, ".ndomo", "specs", "002-dupe-spec"))).toBe(false);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("spec_get returns frontmatter, sections, requirements and matrix — no raw/body blobs", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      writeFixture(projectDir, "001-fixture", specFixture({ id: "SPEC-003", slug: "fixture" }));
+      const get = findTool(harness, "spec_get");
+
+      const doc = JSON.parse(
+        (await get.execute({ id: "SPEC-003" }, harness.toolCtx("ses_spec"))).content,
+      ) as {
+        frontmatter: Record<string, unknown>;
+        sections: { number: number; title: string }[];
+        requirements: Record<string, unknown>[];
+        matrix: { req: string; ac: string; tasks: string; tests: string; state: string }[];
+        raw?: unknown;
+      };
+
+      expect(doc.frontmatter.id).toBe("SPEC-003");
+      expect(doc.frontmatter.slug).toBe("fixture");
+      expect(doc.frontmatter.status).toBe("draft");
+      expect(doc.sections).toHaveLength(13);
+      expect(doc.sections[0]).toMatchObject({ number: 1, title: "Purpose" });
+
+      expect(doc.requirements).toHaveLength(1);
+      const req = doc.requirements[0];
+      // Contract projection: { id, type, priority, status, acs } — nothing else.
+      expect(Object.keys(req ?? {}).sort()).toEqual(["acs", "id", "priority", "status", "type"]);
+      expect(req).toMatchObject({
+        id: "REQ-001",
+        type: "ubiq",
+        priority: "P1",
+        status: "active",
+      });
+      const acs = (req?.acs ?? []) as {
+        id: string;
+        given?: string;
+        when?: string;
+        then?: string;
+      }[];
+      expect(acs).toHaveLength(1);
+      expect(acs[0]?.id).toBe("AC-001-1");
+      expect(acs[0]?.given).toBeDefined();
+      expect(acs[0]?.when).toBeDefined();
+      expect(acs[0]?.then).toBeDefined();
+
+      expect(doc.matrix).toHaveLength(1);
+      expect(doc.matrix[0]).toMatchObject({
+        req: "REQ-001",
+        ac: "AC-001-1",
+        tasks: "task-1",
+        tests: "src/thing.test.ts",
+        state: "red",
+      });
+
+      // The document source never leaks into the payload.
+      expect(doc.raw).toBeUndefined();
+
+      // The `path` argument resolves exactly like `id`.
+      const byPath = JSON.parse(
+        (await get.execute({ path: "001-fixture/spec.md" }, harness.toolCtx("ses_spec"))).content,
+      ) as { frontmatter: Record<string, unknown> };
+      expect(byPath.frontmatter.id).toBe("SPEC-003");
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("spec_get enforces exactly one of id/path and names a missing spec", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      writeFixture(projectDir, "001-fixture", specFixture({ id: "SPEC-003" }));
+      const get = findTool(harness, "spec_get");
+      const ctx = harness.toolCtx("ses_spec");
+
+      await expect(
+        get.execute({ id: "SPEC-003", path: "001-fixture/spec.md" }, ctx),
+      ).rejects.toThrow(/exactly one of 'id' or 'path'/);
+      await expect(get.execute({}, ctx)).rejects.toThrow(/exactly one of 'id' or 'path'/);
+      // The error must name the unresolved reference, not a generic L0.
+      await expect(get.execute({ id: "SPEC-999" }, ctx)).rejects.toThrow(/SPEC-999/);
+      await expect(get.execute({ path: "999-missing/spec.md" }, ctx)).rejects.toThrow(
+        /999-missing/,
+      );
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("spec_lint on a clean fixture returns ok:true with zero findings", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      writeFixture(projectDir, "001-clean", specFixture({ id: "SPEC-001", slug: "clean" }));
+      const lint = findTool(harness, "spec_lint");
+
+      const report = JSON.parse(
+        (await lint.execute({ id: "SPEC-001" }, harness.toolCtx("ses_spec"))).content,
+      ) as {
+        ok: boolean;
+        findings: unknown[];
+        stats: { reqs: number; acs: number; orphans: number };
+      };
+
+      expect(report.ok).toBe(true);
+      expect(report.findings).toEqual([]);
+      expect(report.stats).toEqual({ reqs: 1, acs: 1, orphans: 0 });
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC-002-1: spec_lint reports L2 for a spec missing section 5 [REQ-002]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      writeFixture(
+        projectDir,
+        "001-missing-section",
+        specFixture({ id: "SPEC-001", order: [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13] }),
+      );
+      const lint = findTool(harness, "spec_lint");
+
+      const report = JSON.parse(
+        (await lint.execute({ id: "SPEC-001" }, harness.toolCtx("ses_spec"))).content,
+      ) as {
+        ok: boolean;
+        findings: { rule: string; severity: string; line: number; message: string }[];
+      };
+
+      expect(report.ok).toBe(false);
+      const l2 = report.findings.filter((f) => f.rule === "L2");
+      expect(l2.length).toBeGreaterThanOrEqual(1);
+      expect(l2[0]?.severity).toBe("error");
+      expect(l2[0]?.message).toContain("5. Requirements");
+      expect(l2[0]?.line).toBeGreaterThan(1);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("spec_lint flags a broken section order as L2 [REQ-002]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      // Sections 2 and 1 swapped: both land outside their canonical slots.
+      writeFixture(
+        projectDir,
+        "001-scrambled",
+        specFixture({ id: "SPEC-001", order: [2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] }),
+      );
+      const lint = findTool(harness, "spec_lint");
+
+      const report = JSON.parse(
+        (await lint.execute({ id: "SPEC-001" }, harness.toolCtx("ses_spec"))).content,
+      ) as { ok: boolean; findings: { rule: string; message: string }[] };
+
+      expect(report.ok).toBe(false);
+      expect(
+        report.findings.some(
+          (f) => f.rule === "L2" && f.message.includes("out of canonical order"),
+        ),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("spec_lint one-of validation plus an L0 report naming a missing path [REQ-002]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      writeFixture(projectDir, "001-fixture", specFixture({ id: "SPEC-003" }));
+      const lint = findTool(harness, "spec_lint");
+      const ctx = harness.toolCtx("ses_spec");
+
+      await expect(
+        lint.execute({ id: "SPEC-003", path: "001-fixture/spec.md" }, ctx),
+      ).rejects.toThrow(/exactly one of 'id' or 'path'/);
+      await expect(lint.execute({}, ctx)).rejects.toThrow(/exactly one of 'id' or 'path'/);
+
+      // Missing file never throws — it comes back as an L0 naming the path.
+      const report = JSON.parse(
+        (await lint.execute({ path: "999-missing/spec.md" }, ctx)).content,
+      ) as { ok: boolean; findings: { rule: string; message: string }[] };
+      expect(report.ok).toBe(false);
+      expect(report.findings).toHaveLength(1);
+      expect(report.findings[0]?.rule).toBe("L0");
+      expect(report.findings[0]?.message).toContain("999-missing");
+    } finally {
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC-003-1: spec_lint with planId fires L6 for an active REQ no task references [REQ-003]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    const pluginDb = new Database(join(projectDir, ".ndomo", "state.db"));
+    try {
+      writeFixture(projectDir, "001-trace", specFixture({ id: "SPEC-001", slug: "trace" }));
+      const lint = findTool(harness, "spec_lint");
+      const ctx = harness.toolCtx("ses_spec");
+
+      // Without planId the linter sees no tasks → the matrix row keeps L6 quiet.
+      const withoutPlan = JSON.parse((await lint.execute({ id: "SPEC-001" }, ctx)).content) as {
+        findings: { rule: string }[];
+      };
+      expect(withoutPlan.findings.filter((f) => f.rule === "L6")).toHaveLength(0);
+
+      // Seed a plan whose only task points at REQ-999 (undefined), not REQ-001.
+      createPlan(pluginDb, {
+        id: "plan-spec-trace",
+        slug: "spec-trace",
+        title: "Spec traceability plan",
+        status: "draft",
+        priority: 1,
+        overview: "traceability fixture",
+        complexity: 3,
+        createdBy: "test",
+        updatedBy: "test",
+        sessionId: null,
+        approvedAt: null,
+        completedAt: null,
+        approach: null,
+        sourceSessionId: null,
+        sourceMessageId: null,
+        category: null,
+        metadata: {},
+        archivedAt: null,
+      });
+      const tasks = createTasksBatch(pluginDb, "plan-spec-trace", [
+        {
+          description: "task bound to an undefined requirement",
+          agent: "craftsman",
+          createdBy: "test",
+          metadata: { reqIds: ["REQ-999"] } as unknown as TaskMetadata,
+        },
+      ]);
+      const taskId = tasks[0]?.id ?? "";
+      expect(taskId).toBeTruthy();
+
+      const withPlan = JSON.parse(
+        (await lint.execute({ id: "SPEC-001", planId: "plan-spec-trace" }, ctx)).content,
+      ) as { ok: boolean; findings: { rule: string; message: string }[] };
+
+      const l6 = withPlan.findings.filter((f) => f.rule === "L6");
+      expect(l6.some((f) => f.message.includes("REQ-001") && f.message.includes("task"))).toBe(
+        true,
+      );
+      const l7 = withPlan.findings.filter((f) => f.rule === "L7");
+      expect(l7.some((f) => f.message.includes(taskId) && f.message.includes("REQ-999"))).toBe(
+        true,
+      );
+      expect(withPlan.ok).toBe(false);
+    } finally {
+      pluginDb.close();
+      await cleanup();
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC-002-2: spec_lint returns a byte-identical report across runs [REQ-002]", async () => {
+    const { projectDir, harness, cleanup } = await setupSpecPlugin();
+    try {
+      // Violating fixture (scrambled sections) so the sort, not an empty array,
+      // is what determinism rides on.
+      writeFixture(
+        projectDir,
+        "001-scrambled",
+        specFixture({ id: "SPEC-001", order: [2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] }),
+      );
+      const lint = findTool(harness, "spec_lint");
+      const ctx = harness.toolCtx("ses_spec");
+
+      const first = await lint.execute({ id: "SPEC-001" }, ctx);
+      const second = await lint.execute({ id: "SPEC-001" }, ctx);
+
+      const firstReport = JSON.parse(first.content) as { findings: unknown[] };
+      expect(firstReport.findings.length).toBeGreaterThan(0);
+      expect(second.content).toBe(first.content);
     } finally {
       await cleanup();
       rmSync(projectDir, { recursive: true, force: true });

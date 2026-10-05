@@ -280,7 +280,12 @@ function handleApprove(
   const planId = positional[0];
   if (!planId) throw new Error("[plan] error: plan id is required");
 
-  const plan = approvePlan(db, planId, { updatedBy: "cli" });
+  // Gate T0 (spec-driven): the DB lives at <projectDir>/.ndomo/state.db, so the
+  // project root is two levels up from the file. Deriving it from the DB path
+  // instead of resolveProjectDir({}) avoids resolving against cwd, which the
+  // CLI's upward DB search can differ from (5 levels up).
+  const projectDir = join(db.filename, "../..");
+  const plan = approvePlan(db, planId, { updatedBy: "cli", projectDir });
   if (!plan) {
     throw new Error(`[plan] error: plan not found: ${planId}`);
   }

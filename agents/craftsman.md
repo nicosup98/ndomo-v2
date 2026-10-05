@@ -259,6 +259,29 @@ Al cerrar planes, siempre setear audit trail:
 4. **Verificar** — correr suite del scope afectado (typecheck, test, lint)
 5. **Commit atómico** — un commit por feature/fix
 
+### Red-proof obligatorio (tasks con `metadata.reqIds` no vacío — SDD)
+
+Regla dura, aplica ANTES de tocar código de implementación (SPEC-001 REQ-005):
+
+1. **Test rojo primero** — escribir/actualizar el test ANTES del código de implementación.
+2. **Etiquetar con `REQ-xxx` en el nombre** — `REQ-001-AC-1`, `REQ-002-AC-2`, etc. El tag es lo que hace la trazabilidad machine-checkable (matriz sección 11 de la spec ↔ test).
+3. **Correr el test y capturar el output fallido** — esa captura es el red-proof (debe reflejar una ejecución PRE-implementación: ruta del run o nota).
+4. **Cerrar con `task_verify`**:
+
+```typescript
+task_verify({
+  taskId,
+  verdict: "passed",
+  result: {
+    redProof: "bun test src/spec/lint.test.ts → 1 failed (L2 ...)", // output previo a implementar
+    testRefs: ["REQ-002-AC-1"], // ≥1 tag REQ-xxx
+  },
+})
+```
+
+- **Gate T1 rechaza `verdict:"passed"` sin evidencia** cuando la task trae `reqIds`: faltan `result.redProof` y/o ≥1 `testRef` tag `REQ-xxx` → mensaje nombrando los campos ausentes (regla inspector-only sigue aplicando).
+- Task **sin** `reqIds` → flujo actual sin cambios (opt-in, REQ-006). No aplicar este bloque.
+
 ## 🏷️ Metadata Conventions
 
 Craftsman marca sus planes con metadata distinguible (mismo patrón que warden):

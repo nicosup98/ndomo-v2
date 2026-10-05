@@ -117,7 +117,7 @@ Ver [docs/installer.md](docs/installer.md) para pasos detallados y referencia co
 
 ndomo persiste planes, tareas, sesiones, análisis y registros de ops (incidentes, deployments, releases, rollbacks) en una base de datos SQLite local al proyecto
 (`<project>/.ndomo/state.db`) con búsqueda FTS5, trazabilidad de auditoría y
-archivado automático a markdown al completarse. 62 herramientas expuestas vía OpenCode, agrupadas por dominio:
+archivado automático a markdown al completarse. 65 herramientas expuestas vía OpenCode, agrupadas por dominio:
 
 | Dominio | Herramientas |
 |---|---|
@@ -132,6 +132,7 @@ archivado automático a markdown al completarse. 62 herramientas expuestas vía 
 | Obsidian | `obsidian_export`, `obsidian_read_note` |
 | Ops | `incident_create`, `rollback_record` |
 | Diseño y review | `design_create`, `critic_review` |
+| Specs | `spec_create`, `spec_get`, `spec_lint` |
 | Utilidades | `status`, `ndomo_write_unlock`, `stats` |
 
 El foreman las usa para rastrear trabajo a través de despachos de agentes; ranger escribe filas en `analyses` (enlazables a planes vía `analysis_link_plan`). Ver
@@ -215,6 +216,27 @@ Al dispararse: se emite un warning, la tarea objetivo se marca `failed` con erro
 {
   "circuitBreaker": { "threshold": 4000 }
 }
+```
+
+### Spec-Driven Gates (T0/T1)
+
+El spec-driven development es opt-in por plan (ver [docs/workflows.md](docs/workflows.md)):
+
+| Gate | Alcance | Regla |
+|---|---|---|
+| T0 | plan con `metadata.specId` | no puede llegar a `approved` mientras `spec_lint` reporte cualquier finding `error`; el mensaje del bloqueo nombra el path/rule culpable; spec borrada bloquea la aprobación nombrando el path faltante |
+| T1 (ampliado) | task con `metadata.reqIds` no vacío | `task_verify({verdict:"passed"})` exige además `result.redProof` (output de test fallido capturado antes de implementar) + ≥1 `testRef` etiquetado `REQ-xxx`; la regla inspector-only existente sigue aplicando |
+
+Los planes/tasks sin esas claves de metadata se comportan exactamente igual que antes (REQ-006
+— sin migración; la metadata reutiliza las columnas JSON existentes).
+
+```typescript
+// Spec tools (SDD opt-in)
+spec_create({ slug: 'sdd-core' })          // → { path, id, created }
+spec_lint({ id: 'SPEC-001' })              // → { ok, findings: [{ rule, severity, line, message }], stats }
+
+// Task verification con red-proof (T1 ampliado)
+task_verify({ taskId, verdict: 'passed', result: { redProof: 'bun test ... → 1 failed', testRefs: ['REQ-001-AC-1'] } })
 ```
 
 ## Configuración

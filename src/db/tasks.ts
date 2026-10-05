@@ -946,6 +946,83 @@ function resolveVerificationActor(
   return null;
 }
 
+/** Matches a `REQ-xxx` requirement tag inside a test reference (case-insensitive). */
+const REQ_TAG_RE = /\bREQ-\d{3}\b/gi;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Normalize the caller-supplied verification `result` into a plain object for
+ * evidence extraction (REQ-005). Accepts BOTH the direct object form and the
+ * serialized JSON-string form a caller may forward as-is.
+ *
+ * Read-only helper: the persisted payload is untouched — storage still
+ * `JSON.stringify()`s exactly what the caller passed, exactly as before.
+ * Returns null for anything that is not a plain object (including malformed
+ * JSON strings), which the gate treats as "no evidence".
+ */
+function normalizeVerificationEvidence(result: unknown): Record<string, unknown> | null {
+  if (typeof result === "string") {
+    try {
+      const parsed: unknown = JSON.parse(result);
+      return isPlainRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return isPlainRecord(result) ? result : null;
+}
+
+/**
+ * Evidence gate for spec-bound tasks (REQ-005 / T1 ampliado).
+ *
+ * A task is spec-bound when `metadata.reqIds` is a non-empty array. For such
+ * tasks a `passed` verdict must carry:
+ *   1. `result.redProof`   — a non-blank string (free-form proof text or a
+ *      path; both are accepted as "evidence exists"), and
+ *   2. `result.testRefs` (array of strings; the singular `testRef: string`
+ *      shape is also accepted) — at least ONE entry containing a `REQ-xxx`
+ *      tag belonging to this task's `metadata.reqIds`.
+ *
+ * Returns the labels of the missing pieces (empty ⇒ evidence complete).
+ * Pure and side-effect free so the gate is unit-testable in isolation.
+ */
+function missingSpecEvidence(reqIds: string[], result: unknown): string[] {
+  const missing: string[] = [];
+  const evidence = normalizeVerificationEvidence(result);
+
+  const redProof = evidence?.redProof;
+  if (typeof redProof !== "string" || redProof.trim().length === 0) {
+    missing.push("redProof");
+  }
+
+  const refs: string[] = [];
+  const rawRefs = evidence?.testRefs;
+  if (Array.isArray(rawRefs)) {
+    for (const ref of rawRefs) {
+      if (typeof ref === "string") refs.push(ref);
+    }
+  }
+  if (typeof evidence?.testRef === "string") refs.push(evidence.testRef);
+
+  const bound = new Set(reqIds.map((r) => r.trim().toUpperCase()));
+  // A single ref may carry several tags ("suite.test.ts: REQ-004, REQ-005").
+  // Match ALL of them, not just the first: a leading unbound tag (REQ-999)
+  // must not mask a later bound one and reject otherwise-valid evidence.
+  // matchAll clones the regex, so REQ_TAG_RE.lastIndex is never mutated.
+  const hasTaggedRef = refs.some((ref) => {
+    for (const match of ref.matchAll(REQ_TAG_RE)) {
+      if (bound.has(match[0].trim().toUpperCase())) return true;
+    }
+    return false;
+  });
+  if (!hasTaggedRef) missing.push("REQ-xxx testRef");
+
+  return missing;
+}
+
 /**
  * Independent-verifier rule (T1 / v17).
  *
@@ -967,6 +1044,13 @@ function resolveVerificationActor(
  *    a non-blank `opts.forceReason` — a positive verification is immutable-ish.
  * 6. Writing verdict='passed' also stamps verification_passed_at = now and
  *    verified_by = the resolved caller (verifiedBy ?? forcedBy ?? 'inspector').
+ * 7. **passed** on a SPEC-BOUND task (non-empty `metadata.reqIds`) requires
+ *    evidence: a non-blank `result.redProof` AND at least one `testRef`/
+ *    `testRefs` entry tagged with one of the task's `REQ-xxx` ids (REQ-005).
+ *    Missing pieces throw an `ndomo:` error naming them. `force`+`forceReason`
+ *    skips the gate — the same escape hatch as every other rule. Tasks without
+ *    `metadata.reqIds` are untouched (REQ-006 backward compatibility), and the
+ *    rule never applies to 'failed'/'waived' verdicts.
  *
  * Column updates per verdict:
  *   passed  → status='passed',  passed_at=now, verified_by=caller, result=result ?? null
@@ -976,7 +1060,10 @@ function resolveVerificationActor(
  * @param db        open DB handle
  * @param taskId    plan_tasks.id
  * @param verdict   one of 'passed' | 'failed' | 'waived'
- * @param result    optional structured payload (JSON column)
+ * @param result    optional structured payload (JSON column). Typed `unknown`
+ *   rather than `Record<string, unknown>` because a JSON *string* is also
+ *   accepted at runtime (normalizeVerificationEvidence parses it); the column
+ *   is a JSON blob, not a guaranteed object.
  * @param verifiedBy caller agent name (typically 'inspector' for passed)
  * @param opts      { force?, forceReason?, reason? } — see rules above
  */
@@ -984,7 +1071,7 @@ export function recordTaskVerification(
   db: Database,
   taskId: string,
   verdict: TaskVerificationVerdict,
-  result?: Record<string, unknown>,
+  result?: unknown,
   verifiedBy?: string,
   opts: { force?: boolean; forceReason?: string; reason?: string } = {},
 ): TaskVerificationResult {
@@ -1011,6 +1098,32 @@ export function recordTaskVerification(
         throw new Error(
           `ndomo: only 'inspector' may record verdict='passed' ` +
             `(got verifiedBy="${caller}") — pass force=true with non-blank forceReason to override.`,
+        );
+      }
+    }
+  }
+
+  // Rule 3b (REQ-005 / gate T1 ampliado): a spec-bound task must prove its
+  // work before a positive verdict lands. Applies ONLY when ALL hold:
+  //   - verdict === 'passed' (REQ-005 is literal — 'failed'/'waived' exempt),
+  //   - metadata.reqIds is a non-empty array (opt-in; missing/empty ⇒ ZERO
+  //     new behavior, REQ-006 backward compatibility), and
+  //   - NOT force-overridden: force+forceReason is the same escape hatch the
+  //     authority rules above use.
+  // Sits AFTER the inspector-only rule so legacy authority error messages are
+  // unchanged, and BEFORE the UPDATE so a rejected verdict leaves the row
+  // (and its verification columns) untouched.
+  if (verdict === "passed") {
+    const reqIds = existing.metadata.reqIds;
+    const specBound = Array.isArray(reqIds) && reqIds.length > 0;
+    const forced = Boolean(opts.force && opts.forceReason?.trim());
+    if (specBound && !forced) {
+      const missing = missingSpecEvidence(reqIds, result);
+      if (missing.length > 0) {
+        throw new Error(
+          `ndomo: task ${taskId} is spec-bound (metadata.reqIds=[${reqIds.join(",")}]); ` +
+            `verdict "passed" requires result.redProof and >=1 testRef tagged REQ-xxx ` +
+            `(got: ${missing.map((m) => `missing ${m}`).join(", ")})`,
         );
       }
     }

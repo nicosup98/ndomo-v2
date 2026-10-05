@@ -11,6 +11,10 @@
 
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createSpec } from "../spec/index.ts";
 import { runMigrations } from "./migrations.ts";
 import {
   approvePlan,
@@ -155,6 +159,130 @@ describe("approvePlan", () => {
     // No session row should exist — no sessionId was provided
     const rows = db.query("SELECT * FROM sessions").all();
     expect(rows).toHaveLength(0);
+  });
+});
+
+// ─── REQ-004: gate T0 — spec lint before approval ─────────────────────────────
+
+describe("approvePlan — T0 spec gate (REQ-004)", () => {
+  /** Fresh tmpdir project root — createSpec writes <dir>/.ndomo/specs/<NNN-slug>/spec.md. */
+  function makeTmpProject(): string {
+    return mkdtempSync(join(tmpdir(), "ndomo-plan-t0-"));
+  }
+
+  test("AC-004-1: error-severity finding blocks approval; status and approved_at untouched", () => {
+    const projectDir = makeTmpProject();
+    try {
+      const spec = createSpec(projectDir, { slug: "gate-t0", title: "Gate T0" });
+      // Inject an L2 error: duplicate a canonical section heading.
+      const raw = readFileSync(spec.path, "utf8");
+      writeFileSync(spec.path, `${raw}\n## 5. Requirements\n\nduplicate section injected\n`);
+
+      const plan = makePlan({ metadata: { specId: spec.id } });
+
+      let caught: Error | null = null;
+      try {
+        approvePlan(db, plan.id, { updatedBy: "test", projectDir });
+      } catch (err) {
+        caught = err as Error;
+      }
+
+      expect(caught).not.toBeNull();
+      expect(caught?.message).toContain("ndomo:");
+      expect(caught?.message).toContain(spec.id);
+      expect(caught?.message).toContain(spec.path);
+      expect(caught?.message).toContain("L2");
+
+      // Blocked BEFORE any write: previous status, approved_at still null.
+      const after = getPlan(db, plan.id);
+      expect(after?.status).toBe("draft");
+      expect(after?.approvedAt).toBeNull();
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC-004-2: clean spec → approve succeeds with status approved and approved_at set", () => {
+    const projectDir = makeTmpProject();
+    try {
+      const spec = createSpec(projectDir, { slug: "clean-spec", title: "Clean Spec" });
+      const plan = makePlan({ metadata: { specId: spec.id } });
+
+      const approved = approvePlan(db, plan.id, { updatedBy: "test", projectDir });
+
+      expect(approved).not.toBeNull();
+      expect(approved?.status).toBe("approved");
+      expect(approved?.approvedAt).toBeTypeOf("number");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("warning-only findings (L8: matrix row with empty tests cell) do NOT block approval", () => {
+    const projectDir = makeTmpProject();
+    try {
+      const spec = createSpec(projectDir, { slug: "warn-spec", title: "Warn Spec" });
+      // Inject ONE live (non-fenced) matrix row with an empty tests cell into
+      // section 11 → the linter reports it as an L8 warning, never an error.
+      const raw = readFileSync(spec.path, "utf8");
+      const anchor = "## 12.";
+      const idx = raw.indexOf(anchor);
+      expect(idx).toBeGreaterThan(-1);
+      const liveMatrix = [
+        "| REQ | AC | Tasks | Tests | state |",
+        "|---|---|---|---|---|",
+        "| REQ-001 | AC-001-1 | task-x |  | red |",
+        "",
+        "",
+      ].join("\n");
+      writeFileSync(spec.path, `${raw.slice(0, idx)}${liveMatrix}${raw.slice(idx)}`);
+
+      const plan = makePlan({ metadata: { specId: spec.id } });
+      const approved = approvePlan(db, plan.id, { updatedBy: "test", projectDir });
+
+      expect(approved?.status).toBe("approved");
+      expect(approved?.approvedAt).toBeTypeOf("number");
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test("REQ-006: plan WITHOUT metadata.specId approves with zero new behavior (no fs access)", () => {
+    const plan = makePlan({ metadata: { category: "feature" } });
+
+    // No projectDir, no specId → falls back to resolveProjectDir({}) and must
+    // behave exactly like the pre-gate implementation.
+    const approved = approvePlan(db, plan.id, { updatedBy: "test" });
+
+    expect(approved).not.toBeNull();
+    expect(approved?.status).toBe("approved");
+    expect(approved?.approvedAt).toBeTypeOf("number");
+    expect(approved?.sessionId).toBeNull();
+  });
+
+  test("edge (§9): specId pointing at a missing file blocks; message names the missing path", () => {
+    const projectDir = makeTmpProject();
+    try {
+      const plan = makePlan({ metadata: { specId: "missing/no-such-spec.md" } });
+
+      let caught: Error | null = null;
+      try {
+        approvePlan(db, plan.id, { updatedBy: "test", projectDir });
+      } catch (err) {
+        caught = err as Error;
+      }
+
+      expect(caught).not.toBeNull();
+      expect(caught?.message).toContain("ndomo:");
+      // The L0 finding itself names the missing path.
+      expect(caught?.message).toContain("no-such-spec.md");
+
+      const after = getPlan(db, plan.id);
+      expect(after?.status).toBe("draft");
+      expect(after?.approvedAt).toBeNull();
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 });
 

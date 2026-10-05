@@ -207,9 +207,14 @@ Para refactors multi-archivo, cambios arquitectónicos riesgosos o trabajo por f
    - Decisión tomada + rationale
    - Trade-offs aceptados
    - Alcance y exclusiones
-6. **Vincular al plan** — en `plan_create`, incluir la ruta del diseño en `metadata.designPath` o referenciar en `approach`. El diseño es prerequisite del plan, no un afterthought.
+6. **Spec (opt-in SDD, solo si aplica)** — cuando el cambio lo amerita, escribir la spec ANTES del plan:
+   - `spec_create({slug, title?, planId?, sessionId?, agent?, date?})` → `.ndomo/specs/NNN-<slug>/spec.md` (SSOT, se commitea a git).
+   - `spec_lint({id})` → iterar hasta `{ ok: true }` (sin findings `error`). Deterministica, offline, sin escrituras al DB.
+   - **Criterios de opt-in:** cambio >5 archivos, diseño arquitectónico, cambio cross-team/de contrato, o requisitos poco claros que necesiten `[NEEDS CLARIFICATION: ...]` (resolver el marker o grill-me antes de aprobar). **Saltar** para fixes triviales (≤5 archivos, bien definidos) — REQ-006: planes sin `specId` siguen exactamente igual.
+   - `plan_approve` (gate T0) **rechazará la aprobación** si el lint de la spec vinculada tiene cualquier finding `error` — la spec debe estar limpia primero (y el archivo no puede faltar: bloquea nombrando el path faltante).
+7. **Vincular al plan** — en `plan_create`, incluir la ruta del diseño en `metadata.designPath` o referenciar en `approach`. Si hubo spec (paso 6), fijar `metadata.specId`. El diseño es prerequisite del plan, no un afterthought.
 
-**Output del Phase 0:** design doc persistido + decisiones claras → listo para `plan_create`.
+**Output del Phase 0:** design doc persistido (+ spec `ok:true` si aplica) + decisiones claras → listo para `plan_create`.
 
 ### Paso 1: Aclaración
 - Identificar intención en 1-2 frases
@@ -247,8 +252,8 @@ Para refactors multi-archivo, cambios arquitectónicos riesgosos o trabajo por f
 - Si el plan es multi-dominio, distribuir steps entre peers: ej. `step1 → ranger (analysis)`, `step2 → craftsman (impl)`, `step3 → warden (deploy)`
 
 ### Paso 4: Persistir
-- `plan_create` con slug, overview, approach, priority, `metadata.ownedBy="foreman"`
-- `task_create_batch` con steps. Cada task lleva `agent` field apuntando al peer responsable: `ranger` / `craftsman` / `warden`
+- `plan_create` con slug, overview, approach, priority, `metadata.ownedBy="foreman"`; si aplica SDD (Phase 0 paso 6), añadir `metadata.specId` (ej. `"SPEC-001"` o path `.ndomo/specs/001-sdd-core/spec.md`).
+- `task_create_batch` con steps. Cada task lleva `agent` field apuntando al peer responsable: `ranger` / `craftsman` / `warden`; si la spec cubre el step, cada task lleva `metadata.reqIds: ["REQ-xxx", ...]` (traza REQ→task, exige red-proof TDD en el peer, gate T1).
 - NO crear `session_start` (lo hace cada peer al tomar sus tasks)
 - NO ejecutar tasks — cada peer las toma via `task_next_for_agent({agent, planId})`
 - Registrar todo en DB para trazabilidad cross-session
@@ -287,6 +292,7 @@ Para refactors multi-archivo, cambios arquitectónicos riesgosos o trabajo por f
 - Confundir `mode: all` con omnipotencia: `mode: all` significa que el peer puede correr como primary O subagent, pero foreman SOLO debe invocarlos como primary (vía plan + TUI switch)
 - **Crear plan sin Phase 0 Brainstorm** — foreman debe clarificar problema, ejecutar grill-me, y persistir diseño antes de `plan_create`. Plan sin design doc = plan ciego.
 - **Persistir diseño sin vincular al plan** — el design doc debe referenciarse en `metadata.designPath` o `approach` del plan. Diseño huérfano = contexto perdido.
+- **Aprobar plan con spec sucia (SDD)** — si el plan lleva `metadata.specId`, `plan_approve` exige `spec_lint` sin findings `error` (gate T0). Spec sucia/ausente = bloqueo con path/rule nombrado. Correr el lint hasta `ok:true` antes de aprobar.
 
 ## 📥 Escalation reception (planes `escalation-*`)
 
@@ -339,6 +345,7 @@ session_end
    - `overview`: descripción del objetivo en 2-4 líneas.
    - `approach`: estrategia de implementación (qué agentes, qué orden, qué milestones).
    - `metadata.designPath`: path al design doc del Phase 0.
+   - `metadata.specId`: opcional, `"SPEC-001"` o path relativo a la spec (SDD opt-in) — habilita el gate T0.
    - `estimatedMinutes`: opcional, útil para tracking de sesión.
    - Status inicial: `"draft"`.
 
@@ -346,6 +353,7 @@ session_end
    - Solo cuando approach + tasks están definidos y validados.
    - Cambia status a `"approved"`, sella `approved_at`.
    - **Nunca** aprobar sin tasks mapeadas.
+   - **Gate T0 (SDD):** si el plan lleva `metadata.specId`, `plan_approve` re-ejecuta `spec_lint` y **bloquea** la aprobación si hay cualquier finding `error` (mensaje nombrando path/rule culpable; spec borrada → bloquea nombrando el path faltante). La spec debe estar `ok:true` antes de aprobar.
 
 5. **`task_create_batch`**
    - `planId`: el UUID del paso 3.
@@ -358,6 +366,7 @@ session_end
      - No crear tasks sin `planId`. No crear tasks huérfanas.
      - Si el plan tiene >10 tasks, el foreman debe preguntar al usuario si continuar.
      - **Propagación de routing events:** si el flujo usó el tool `route` para decidir el agente de una task, esa task debe llevar `metadata.routingEventId = decision.eventId` en `task_create_batch` — así `task_update_status` a `done`/`failed` linkea el outcome al evento (best-effort, `link_source='explicit'`). No propagues: el link no ocurre y el evento queda `orphan`/`inferred` en `ndomo stats --routing`. Ver `docs/workflows.md` (routing events).
+      - **Traza SDD (si el plan lleva `metadata.specId`):** cada task que implementa requirements debe llevar `metadata.reqIds: ["REQ-xxx", ...]` — activa el red-proof TDD obligatorio en el peer (gate T1) y alimenta la matriz de la sección 11 de la spec.
 
 6. **`session_start`**
    - `sessionId`: UUID v4.
@@ -398,11 +407,12 @@ session_end
 ```
 Usuario -> foreman (TUI)
   |
-  Phase 0: Brainstorm (clarificar → grill-me → scout/sage/scribe → design_create)
+  Phase 0: Brainstorm (clarificar → grill-me → scout/sage/scribe → design_create
+            → [SDD opt-in] spec_create + spec_lint hasta ok:true)
   |
   mem_search (cold) + analysis_search (ranger historical) + subagents in-line (scout/scribe/sage)
   |
-  plan_create("draft", metadata.ownedBy="foreman", metadata.designPath="...")
+  plan_create("draft", metadata.ownedBy="foreman", metadata.designPath="...", metadata.specId="...")
   |
   plan_approve -> "approved"
   |

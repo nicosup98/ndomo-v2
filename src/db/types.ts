@@ -37,6 +37,14 @@ export interface PlanMetadata {
     githubPrUrl?: string;
     jiraTicket?: string;
   };
+  /**
+   * v19 (REQ-004): spec binding for the T0 approval gate. When present as a
+   * non-empty string (spec id like `SPEC-001`, specs-dir relative path, or a
+   * project-relative/absolute path), `approvePlan` re-lints the referenced
+   * spec and blocks the transition on any error-severity finding.
+   * Pure metadata — no DB schema migration. Absent/empty ⇒ legacy behavior.
+   */
+  specId?: string;
 }
 
 export interface TaskMetadata {
@@ -69,6 +77,15 @@ export interface TaskMetadata {
    * links the event on terminal transitions (done/failed).
    */
   routingEventId?: string;
+  /**
+   * v19 (REQ-005): requirement ids this task implements. A non-empty array
+   * makes the task "spec-bound": `recordTaskVerification(..., "passed")`
+   * then requires evidence (`result.redProof` + a `testRefs` entry tagged
+   * with one of these `REQ-xxx` ids) unless force-overridden.
+   * Pure metadata — no DB schema migration. Absent/empty ⇒ legacy behavior
+   * (REQ-006 backward compatibility).
+   */
+  reqIds?: string[];
 }
 
 export interface SessionMetadata {

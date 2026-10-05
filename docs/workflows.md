@@ -147,6 +147,50 @@ session_end(id="s1")
 Ver [docs/database.md](docs/database.md) para referencia completa de tools y
 [agents/foreman.md](../agents/foreman.md) para el flujo detallado del foreman.
 
+## Spec-Driven Workflow (SDD)
+
+Spec-Driven Development is **opt-in by plan**: the spec (`.ndomo/specs/NNN-<slug>/spec.md`)
+is written before the code and is the single source of truth (SSOT), committed to git.
+Each requirement becomes a failing test first (tagged `REQ-xxx` in the test name), which is
+what makes traceability machine-checkable against the spec's traceability matrix (§11).
+
+```
+spec_create → spec_lint (ok:true) → plan_create (metadata.specId) → task_create_batch (metadata.reqIds)
+→ test rojo (tag REQ-xxx) → código → verde → refactor → task_verify (redProof + testRefs)
+```
+
+1. **`spec_create`** — scaffolds `.ndomo/specs/NNN-<slug>/spec.md` (canonical 13-section layout; monotonic `NNN`; fails without overwriting if the slug exists).
+2. **`spec_lint`** — iterate until `{ ok: true }` (no `error` findings) **before** `plan_create`. Deterministic, offline, no DB writes. Same JSON via CLI: `ndomo spec lint <id> [--plan <planId>]` (exit ≠ 0 when error findings exist).
+3. **`plan_create`** with `metadata.specId` (`"SPEC-001"` or relative path) + **`task_create_batch`** with `metadata.reqIds: ["REQ-xxx", ...]` per task.
+4. **Test rojo primero** — for each spec-bound task, write the failing test tagged `REQ-xxx` before touching implementation code; capture the failing output (red proof).
+5. **Verde → refactor** — implement the minimum, keep tests green, commit.
+6. **`task_verify`** with `result: { redProof, testRefs }` — closes the extended gate T1.
+
+### Gate T0 (approve)
+
+A plan with `metadata.specId` **cannot reach `approved`** while `spec_lint` reports any
+`error` finding. `plan_approve` re-runs the lint and throws actionable blockers; the block
+message names the offending **path/rule** (e.g. `L2` on `.ndomo/specs/001-sdd-core/spec.md`).
+A **deleted spec file** also blocks approval, naming the missing path (not a generic `L0`).
+
+### Gate T1 (task verification — extended)
+
+The existing inspector-only rule is unchanged, **plus**: if the task has non-empty
+`metadata.reqIds`, `verdict: "passed"` **additionally requires**:
+
+- `result.redProof` — path or note of a failing-test run executed **before** implementation;
+- ≥1 `testRef` tagged `REQ-xxx` (e.g. `["REQ-002-AC-1"]`).
+
+Missing fields → verdict rejected with a message naming them. `force`+`forceReason` audit
+bypass remains available for emergencies.
+
+### Backward compatibility (REQ-006)
+
+- A plan with **no `specId`** or a task with **no `reqIds`** behaves exactly as before: no new lint, no new blockers.
+- **No DB migration**: reuses existing JSON metadata columns — `plans.metadata.specId`,
+  `plan_tasks.metadata.reqIds`, `task_verify.result` (`plan_tasks.verification_result`).
+- Spec files live in `.ndomo/specs/` (versioned); `.ndomo/state.db` and sidecars stay ignored.
+
 ## T3 Unified Close Flow
 
 The `plan_update_status` tool now includes readiness checks before closing a plan.

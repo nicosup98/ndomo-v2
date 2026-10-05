@@ -12,9 +12,11 @@
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { bus } from "../events/bus.ts";
+import { lintSpecFile, resolveSpecPath } from "../spec/index.ts";
 import { escapeFtsQuery } from "./fts-escape.ts";
+import { resolveProjectDir } from "./resolve-project-dir.ts";
 import { ensureSession } from "./sessions.ts";
-import type { Plan, PlanCategory, PlanStatus } from "./types.ts";
+import type { Plan, PlanCategory, PlanMetadata, PlanStatus } from "./types.ts";
 import { planFromRow, planWithFilesFromRow } from "./types.ts";
 
 // Terminal statuses that should set completed_at when entered
@@ -350,10 +352,38 @@ export function updatePlanFields(
 }
 
 /**
+ * Extract the T0 spec binding from a raw `plans.metadata` JSON column value.
+ *
+ * Returns null when the column is absent, corrupt, or carries no non-empty
+ * `specId` — in every one of those cases `approvePlan` keeps its legacy flow
+ * (REQ-006: zero new behavior without an explicit binding).
+ */
+function readSpecId(metadataJson: string | null | undefined): string | null {
+  if (metadataJson == null || metadataJson === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(metadataJson);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const specId = (parsed as PlanMetadata).specId;
+  return typeof specId === "string" && specId.trim().length > 0 ? specId : null;
+}
+
+/**
  * Approve a plan. Optionally links a session (Fix #8) and records who approved it.
  *
  * The sessionId is validated/auto-created when linking (approve always links).
  * Uses ensureSession for idempotent FK integrity (Fix #1 hybrid).
+ *
+ * Gate T0 (REQ-004): when the plan carries `metadata.specId`, the referenced
+ * spec is re-linted BEFORE any write and any error-severity finding aborts
+ * the transition with an actionable `ndomo:` message (rule + line + message,
+ * plus the spec path). Warnings never block. A missing spec file surfaces as
+ * the linter's L0 error naming the path (SPEC-001 §9). Plans without a
+ * `specId` skip the gate entirely — no fs access, byte-identical legacy
+ * behavior (REQ-006).
  *
  * @see Plan.sessionId — foreign key constraint enforced at app level (Fix #1)
  * @see ensureSession — idempotent auto-creation of session rows (hybrid fix)
@@ -361,13 +391,41 @@ export function updatePlanFields(
 export function approvePlan(
   db: Database,
   id: string,
-  opts: { updatedBy?: string; sessionId?: string } = {},
+  opts: { updatedBy?: string; sessionId?: string; projectDir?: string } = {},
 ): Plan | null {
   // Capture prior status BEFORE the UPDATE for status_changed emission.
-  const priorRow = db.query("SELECT status FROM plans WHERE id = ?").get(id) as
-    | { status: PlanStatus }
+  // T0 also needs `metadata` (specId) so the gate can run before any write.
+  const priorRow = db.query("SELECT status, metadata FROM plans WHERE id = ?").get(id) as
+    | { status: PlanStatus; metadata: string | null }
     | undefined;
   const previousStatus = priorRow?.status;
+
+  // ── Gate T0 (REQ-004): re-lint the referenced spec BEFORE any mutation ────
+  // Must stay above ensureSession / UPDATE / bus.emit: a blocked approval
+  // leaves status and approved_at exactly as they were (AC-004-1).
+  const specId = readSpecId(priorRow?.metadata);
+  if (specId !== null) {
+    const projectDir = opts.projectDir ?? resolveProjectDir({});
+    // `ctx` is intentionally omitted (no ctx.tasks): without task context L6
+    // only fires when a requirement has no traceability-matrix row — the
+    // structural semantics the T0 gate wants. Task-level traceability
+    // (task ↔ REQ binding) is enforced by the T1 gate in recordTaskVerification,
+    // so passing ctx.tasks here would double-enforce and couple this gate to
+    // live task state.
+    const report = lintSpecFile(projectDir, specId);
+    const blockers = report.findings.filter((f) => f.severity === "error");
+    if (blockers.length > 0) {
+      const list = blockers.map((f) => `${f.rule} line ${f.line}: ${f.message}`).join("; ");
+      // Only resolved when blocking — a resolved path gives the caller the
+      // exact file to fix; when the file is missing, the L0 blocker message
+      // already names the path (SPEC-001 §9), so fall back to the raw ref.
+      const specPath = resolveSpecPath(projectDir, specId) ?? specId;
+      throw new Error(
+        `ndomo: plan ${id} references spec ${specId} but lint reported ${blockers.length} error(s): ${list}\n` +
+          `spec: ${specPath}`,
+      );
+    }
+  }
 
   const now = Date.now();
 

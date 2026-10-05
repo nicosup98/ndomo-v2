@@ -15,6 +15,7 @@
  *   install   Install agents, skills, and config into ~/.config/opencode/
  *   plan      Manage plans: create | list | show | update | approve | complete | delete | assign-task
  *   task      Manage tasks: create | list | show | update | reassign | complete | fail
+ *   spec      Manage specs: list | show <id> | lint <id> [--plan <planId>]
  *   help      Show this help
  *
  * Each subcommand can also be run directly:
@@ -100,6 +101,14 @@ const COMMANDS: Record<
     run: async (args) => {
       const { runTask } = await import("./task.ts");
       runTask(args);
+    },
+  },
+  spec: {
+    description: "Manage specs: list | show <id> | lint <id> [--plan <planId>]",
+    run: async (args) => {
+      const { runSpecCli } = await import("./spec.ts");
+      // Propagates the exit-code contract (1 on error-severity lint findings).
+      process.exitCode = runSpecCli(args);
     },
   },
 };

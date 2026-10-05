@@ -448,7 +448,7 @@ persiste una fila slim (best-effort) y su output JSON gana `eventId` **aditivo**
 y la tool `stats` con `query: "routing"`. Detalle y semántica:
 [harness-intelligence.md](features/harness-intelligence.md#29-fase-2--routing-events-tabla-v18--link-de-outcomes).
 
-## Tools (22)
+## Tools (25)
 
 ### Plans (8)
 
@@ -473,6 +473,18 @@ y la tool `stats` con `query: "routing"`. Detalle y semántica:
   JOINs with `plans` and filters via `json_extract(metadata, '$.ownedBy')` (`src/plugin.ts:843`).
 - `plan_files_write` uses `INSERT OR IGNORE` for idempotency. PK is `(plan_id, file_path, role)`.
   Roles: "input", "modified", "output", "reference" (`src/plugin.ts:875`).
+
+### Specs (3)
+
+| Tool | Args | Returns |
+|---|---|---|
+| `spec_create` | `slug`, `title?`, `planId?`, `sessionId?`, `agent?`, `date?` | `{id, slug, path, created, byteSize}` (JSON) — errors if a spec with that slug already exists |
+| `spec_get` | `id` OR `path`, `planId?` | `{frontmatter, sections[], requirements[{id, type, priority, status, acs[]}], matrix[]}` (JSON) |
+| `spec_lint` | `id` OR `path`, `planId?` | `{ok, findings[], stats: {reqs, acs, orphans}}` (JSON) |
+
+- No DB migration: specs are file artifacts at `<project>/.ndomo/specs/NNN-<slug>/spec.md`, reusing
+  existing JSON fields `plans.metadata.specId`, `plan_tasks.metadata.reqIds`, and the existing
+  `task_verify.result` JSON blob (`{redProof, testRefs}`).
 
 ### Tasks (9)
 

@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "./migrations.ts";
 import { createPlan } from "./plans.ts";
 import { createTasksBatch, getTask, recordTaskVerification, updateTaskStatus } from "./tasks.ts";
-import type { Plan } from "./types.ts";
+import type { Plan, PlanTask } from "./types.ts";
 
 let db: Database;
 
@@ -517,5 +517,222 @@ describe("updateTaskStatus — caller-input immutability (T1)", () => {
     expect(done!.metadata.verificationBypass!.forcedAt).not.toBe(0);
     // The caller's other (non-forged) keys still land normally.
     expect((done!.metadata as Record<string, unknown>).note).toBe("legit caller key");
+  });
+});
+
+// ─── REQ-005: spec-bound evidence gate on verdict='passed' ────────────────────
+
+describe("recordTaskVerification — spec-bound evidence gate (REQ-005)", () => {
+  const REQ_IDS = ["REQ-004", "REQ-005"];
+
+  /** Create a task bound to requirement ids via metadata.reqIds (spec-bound). */
+  function specBoundTask(reqIds: string[] = REQ_IDS): PlanTask {
+    const plan = makePlan();
+    const tasks = createTasksBatch(db, plan.id, [{ ...baseTaskInput(), metadata: { reqIds } }]);
+    const task = tasks[0];
+    if (task === undefined) throw new Error("specBoundTask: createTasksBatch produced no task");
+    return task;
+  }
+
+  test("AC-005-1: passed without result.redProof throws naming the missing field", () => {
+    const task = specBoundTask();
+
+    let caught: Error | null = null;
+    try {
+      recordTaskVerification(db, task.id, "passed", { checks: ["lint"] }, "inspector");
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toContain("redProof");
+    // Message must surface the binding that triggered the gate.
+    expect(caught?.message).toContain("REQ-004");
+    expect(caught?.message).toContain("REQ-005");
+    // Blocked BEFORE any write.
+    const still = getTask(db, task.id);
+    expect(still?.verificationStatus).toBe("not_required");
+    expect(still?.verificationPassedAt).toBeNull();
+    expect(still?.verifiedBy).toBeNull();
+  });
+
+  test("AC-005-1: redProof present but no testRefs throws naming testRef", () => {
+    const task = specBoundTask();
+
+    let caught: Error | null = null;
+    try {
+      recordTaskVerification(
+        db,
+        task.id,
+        "passed",
+        { redProof: "bun test src/db → red before impl" },
+        "inspector",
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toContain("testRef");
+    expect(getTask(db, task.id)?.verificationPassedAt).toBeNull();
+  });
+
+  test("AC-005-1: testRefs without any REQ-xxx tag throws", () => {
+    const task = specBoundTask();
+
+    let caught: Error | null = null;
+    try {
+      recordTaskVerification(
+        db,
+        task.id,
+        "passed",
+        { redProof: "bun test → green", testRefs: ["some.test.ts"] },
+        "inspector",
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toContain("testRef");
+    expect(getTask(db, task.id)?.verificationPassedAt).toBeNull();
+  });
+
+  test("AC-005-1: testRef tagged with a REQ outside metadata.reqIds throws", () => {
+    const task = specBoundTask();
+
+    let caught: Error | null = null;
+    try {
+      recordTaskVerification(
+        db,
+        task.id,
+        "passed",
+        { redProof: "bun test → green", testRefs: ["t.test.ts#REQ-999"] },
+        "inspector",
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toContain("testRef");
+    expect(getTask(db, task.id)?.verificationPassedAt).toBeNull();
+  });
+
+  // Regression: the gate used to read only the FIRST REQ tag in a ref, so a
+  // leading unbound tag (REQ-999) masked a later bound one and rejected
+  // otherwise-valid evidence.
+  test("AC-005-1: a leading unbound REQ tag does not mask a later bound tag", () => {
+    const task = specBoundTask();
+
+    const out = recordTaskVerification(
+      db,
+      task.id,
+      "passed",
+      {
+        redProof: "bun test → failed before impl",
+        testRefs: ["suite.test.ts: unrelated REQ-999, then REQ-004"],
+      },
+      "inspector",
+    );
+
+    expect(out.verificationStatus).toBe("passed");
+    expect(out.verificationPassedAt).toBeTypeOf("number");
+    expect(out.verifiedBy).toBe("inspector");
+  });
+
+  test("AC-005-1: a ref whose every REQ tag is unbound still throws", () => {
+    const task = specBoundTask();
+
+    let caught: Error | null = null;
+    try {
+      recordTaskVerification(
+        db,
+        task.id,
+        "passed",
+        { redProof: "bun test → green", testRefs: ["t.test.ts: REQ-999 and REQ-998"] },
+        "inspector",
+      );
+    } catch (err) {
+      caught = err as Error;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toContain("testRef");
+    expect(getTask(db, task.id)?.verificationPassedAt).toBeNull();
+  });
+
+  test("AC-005-2: redProof + testRef tagged with a task REQ records verdict='passed'", () => {
+    const task = specBoundTask();
+
+    const out = recordTaskVerification(
+      db,
+      task.id,
+      "passed",
+      {
+        redProof: "bun test src/db → failed before impl",
+        testRefs: ["src/db/plans.test.ts#AC-004-1 REQ-004"],
+      },
+      "inspector",
+    );
+
+    expect(out.verificationStatus).toBe("passed");
+    expect(out.verificationPassedAt).toBeTypeOf("number");
+    expect(out.verifiedBy).toBe("inspector");
+  });
+
+  test("AC-005-2: evidence is also accepted when result arrives as a JSON string", () => {
+    const task = specBoundTask();
+    const jsonResult = JSON.stringify({
+      redProof: "bun test src/db → red before impl",
+      testRefs: ["src/db/tasks-verification.test.ts#AC-005-1 REQ-005"],
+    });
+
+    const out = recordTaskVerification(
+      db,
+      task.id,
+      "passed",
+      // Runtime contract accepts the serialized form; the stored payload is
+      // normalized exactly as before (JSON.stringify of the caller value).
+      jsonResult as unknown as Record<string, unknown>,
+      "inspector",
+    );
+
+    expect(out.verificationStatus).toBe("passed");
+  });
+
+  test("REQ-006: task WITHOUT metadata.reqIds passes with no evidence (legacy behavior intact)", () => {
+    const plan = makePlan();
+    const task = createTasksBatch(db, plan.id, [baseTaskInput()])[0] as PlanTask;
+
+    const out = recordTaskVerification(db, task.id, "passed", undefined, "inspector");
+
+    expect(out.verificationStatus).toBe("passed");
+    expect(out.verificationResult).toBeNull();
+    expect(out.verifiedBy).toBe("inspector");
+    expect(out.verificationPassedAt).toBeTypeOf("number");
+  });
+
+  test("force + forceReason skips the evidence gate on a spec-bound task", () => {
+    const task = specBoundTask();
+
+    const out = recordTaskVerification(db, task.id, "passed", undefined, "inspector", {
+      force: true,
+      forceReason: "evidence archive purged — CI logs expired",
+    });
+
+    expect(out.verificationStatus).toBe("passed");
+    expect(out.verifiedBy).toBe("inspector");
+  });
+
+  test("verdict='failed' is exempt from the evidence gate on a spec-bound task", () => {
+    const task = specBoundTask();
+
+    const out = recordTaskVerification(db, task.id, "failed", undefined, "inspector", {
+      reason: "regression found by review",
+    });
+
+    expect(out.verificationStatus).toBe("failed");
+    expect(out.verificationPassedAt).toBeNull();
   });
 });

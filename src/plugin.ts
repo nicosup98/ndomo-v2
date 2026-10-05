@@ -118,6 +118,13 @@ import { analyzeTaskDependencies, type TaskDepInput } from "./orchestrator/jev-d
 import { classifyIntentWithJev } from "./orchestrator/jev-intent.ts";
 import { classifyCodeRiskWithJev } from "./orchestrator/jev-risk.ts";
 import { classifyTestsWithJev } from "./orchestrator/jev-tests.ts";
+import {
+  createSpec,
+  type LintContext,
+  lintSpecFile,
+  parseSpec,
+  resolveSpecPath,
+} from "./spec/index.ts";
 import { computeAgentScorecard } from "./stats/agent-scorecard.ts";
 import { computeRoutingReport } from "./stats/routing-report.ts";
 
@@ -205,6 +212,36 @@ function extractFilePath(args: unknown): string | undefined {
   const record = args as Record<string, unknown>;
   const fp = record.filePath ?? record.filepath;
   return typeof fp === "string" ? fp : undefined;
+}
+
+/**
+ * Enforce the "exactly one of `id` | `path`" contract shared by spec_get and
+ * spec_lint (SPEC-001 §7). Throws a message naming the tool and whether both
+ * or neither reference was supplied, so the caller can fix the call without
+ * reading the tool description.
+ */
+function requireSpecRef(
+  toolName: string,
+  id: string | undefined,
+  path: string | undefined,
+): string {
+  if (id !== undefined && path !== undefined) {
+    throw new Error(`ndomo: ${toolName} accepts exactly one of 'id' or 'path' (got both)`);
+  }
+  if (id !== undefined) return id;
+  if (path !== undefined) return path;
+  throw new Error(`ndomo: ${toolName} requires exactly one of 'id' or 'path' (got neither)`);
+}
+
+/**
+ * Extract `metadata.reqIds` (spec ↔ task traceability links) from a task row.
+ * TaskMetadata predates reqIds, so the value is validated at runtime instead
+ * of cast: a non-array or non-string entry degrades to "no links" rather than
+ * poisoning the linter's L6/L7 loops.
+ */
+function readTaskReqIds(metadata: TaskMetadata | undefined): string[] {
+  const raw = (metadata as Record<string, unknown> | undefined)?.reqIds;
+  return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : [];
 }
 
 /**
@@ -1583,6 +1620,7 @@ export const NdomoPlugin = Plugin.define({
         execute: async (args, ctx) => {
           return JSON.stringify(
             approvePlan(db, args.id, {
+              projectDir,
               sessionId: ctx.sessionID,
               updatedBy: ctx.agent ?? "unknown",
             }),
@@ -2512,6 +2550,95 @@ export const NdomoPlugin = Plugin.define({
             ...(args.date !== undefined && { date: args.date }),
           };
           return JSON.stringify(createDesign(projectDir, input), null, 2);
+        },
+      }),
+
+      // ── Specs (SPEC-001 §7 — file artifacts; spec_lint reads DB tasks
+      //     for traceability only when planId is supplied) ─────────────
+
+      spec_create: tool({
+        description:
+          "Create a spec skeleton at <projectDir>/.ndomo/specs/NNN-<slug>/spec.md from the canonical template (11 frontmatter keys + the 13 sections in fixed order). DB-free file artifact. slug is required; title/planId/sessionId/agent/date optional (agent defaults to the calling agent and lands in frontmatter `owner`; date must be strict YYYY-MM-DD). NNN is a monotonic 3-digit index that never reuses an existing one. Returns { id, slug, path, created, byteSize }. An existing slug throws and reports the existing path — never overwrites.",
+        args: {
+          slug: z.string(),
+          title: z.string().optional(),
+          planId: z.string().optional(),
+          sessionId: z.string().optional(),
+          agent: z.string().optional(),
+          date: z.string().optional(),
+        },
+        execute: async (args, ctx) => {
+          return JSON.stringify(
+            createSpec(projectDir, {
+              slug: args.slug,
+              title: args.title,
+              planId: args.planId,
+              sessionId: args.sessionId,
+              agent: args.agent ?? ctx.agent,
+              date: args.date,
+            }),
+            null,
+            2,
+          );
+        },
+      }),
+
+      spec_get: tool({
+        description:
+          "Read one spec from <projectDir>/.ndomo/specs/ and return its parsed document as JSON: frontmatter, sections, requirements projected to { id, type, priority, status, acs } and the section-11 traceability matrix. Exactly one of id ('SPEC-001') or path ('001-slug/spec.md') is required — passing both or neither throws. An unresolved reference throws naming the missing id/path. The raw markdown source and requirement bodies are never returned.",
+        args: {
+          id: z.string().optional(),
+          path: z.string().optional(),
+          planId: z.string().optional(),
+        },
+        execute: async (args) => {
+          const ref = requireSpecRef("spec_get", args.id, args.path);
+          const resolved = resolveSpecPath(projectDir, ref);
+          if (resolved === null) {
+            throw new Error(
+              `ndomo: spec_get: no spec found for '${ref}' under ${join(projectDir, ".ndomo", "specs")} (pass an id like 'SPEC-001' or a specs-dir relative path like '001-<slug>/spec.md')`,
+            );
+          }
+          const doc = parseSpec(readFileSync(resolved, "utf8"), { sourcePath: resolved });
+          return JSON.stringify(
+            {
+              frontmatter: doc.frontmatter,
+              sections: doc.sections,
+              requirements: doc.requirements.map((r) => ({
+                id: r.id,
+                type: r.type,
+                priority: r.priority,
+                status: r.status,
+                acs: r.acs,
+              })),
+              matrix: doc.matrix,
+            },
+            null,
+            2,
+          );
+        },
+      }),
+
+      spec_lint: tool({
+        description:
+          "Run the deterministic spec linter (rules L0–L9, SPEC-001 §7) over one spec file and return { ok, findings[{ rule, severity, line, message }], stats: { reqs, acs, orphans } }. Exactly one of id ('SPEC-001') or path ('001-slug/spec.md') is required — both or neither throws. When planId is supplied, that plan's tasks (metadata.reqIds) are injected as lint context so traceability rules L6/L7 evaluate real task coverage; without planId only matrix-based checks run. Never throws on the filesystem side: a missing file comes back as an L0 finding naming the path. Two runs over the same file are byte-identical.",
+        args: {
+          id: z.string().optional(),
+          path: z.string().optional(),
+          planId: z.string().optional(),
+        },
+        execute: async (args) => {
+          const ref = requireSpecRef("spec_lint", args.id, args.path);
+          const lintCtx: LintContext =
+            args.planId === undefined
+              ? {}
+              : {
+                  tasks: listTasksByPlan(db, args.planId).map((task) => ({
+                    id: task.id,
+                    reqIds: readTaskReqIds(task.metadata),
+                  })),
+                };
+          return JSON.stringify(lintSpecFile(projectDir, ref, lintCtx), null, 2);
         },
       }),
 
